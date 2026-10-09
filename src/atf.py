@@ -288,7 +288,12 @@ def read_template(path):
     official = first(_near(p1, "Agency or Department Name", (250, 450), (-25, 0)))
     if ", " in official:
         out["cleo.official"], out["cleo.title"] = (x.strip() for x in official.rsplit(", ", 1))
-    addr = _split_address(first(_near(p1, "Full Mailing Address", (-5, 300), (-30, 0))))
+    lines = [sp["text"].strip() for sp in _near(p1, "Full Mailing Address", (-5, 300), (-30, 0))]
+    addr = _split_address(lines[-1]) if lines else {}
+    if len(lines) > 1 and addr:  # "STREET" / "CITY ST ZIP" on separate lines: the city is the whole last-line prefix
+        addr["street"], addr["city"] = " ".join(lines[:-1]), " ".join(filter(None, [addr["street"], addr["city"]]))
+    elif lines:  # one line: split street from city at the last street suffix (best effort; the user confirms)
+        addr = _split_address(lines[0])
     out.update({f"cleo.address.{k}": v for k, v in addr.items()})
     birth = first(_near(p2, "State of Birth", (20, 250), (0, 15))).upper()
     out["responsible_persons.0.place_of_birth.state"] = next((v for v in US_STATES.values() if v.upper() == birth), "")
