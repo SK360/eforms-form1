@@ -312,6 +312,7 @@ STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
           "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
           "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
           "Washington", "West Virginia", "Wisconsin", "Wyoming"]
+DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
 RACES = ["American Indian or Alaska Native", "Asian", "Black or African American", "Native Hawaiian or Other Pacific Islander", "White"]
 
 
@@ -434,14 +435,12 @@ def settings_flow(first=False):
         cl["address"] = addr
         con.rule("Firearm (same for every suppressor)")
         fa = dict(t.get("firearm") or {})
-        fa["manufacturer_code"] = _a(questionary.text("Your eForms manufacturer code (Add Firearm > By Code):",
-                                                      default=get("firearm.manufacturer_code"), validate=_need))
         fa["model"] = _a(questionary.text("Model:", default=str(get("firearm.model", "N/A")), validate=_need))
         fa["overall_length"] = _a(questionary.text("Overall length (inches):", default=str(get("firearm.overall_length", "12")),
                                                    validate=lambda s: s.strip().replace(".", "", 1).isdigit() or "A number"))
-        if not get("firearm.description"):
-            con.print("  [dim]The description box on the firearm page, e.g. a statement about parts you do or don't possess.[/]")
-        fa["description"] = _a(questionary.text("Firearm description:", default=get("firearm.description"), validate=_need))
+        fa.pop("manufacturer_code", None)  # no longer a setting: always FMI for a Form 1 (config/mapping.yaml)
+        fa["description"] = _a(questionary.text("Firearm description (the description box on the firearm page; edit if you like):",
+                                                default=get("firearm.description", DEFAULT_DESCRIPTION), validate=_need))
         con.rule("Files")
         files = dict(t.get("files") or {})
         files["eft"] = _clean_path(_a(questionary.path("Fingerprint file (.eft):", default=get("files.eft"), validate=_file(suffixes=(".eft",)))))

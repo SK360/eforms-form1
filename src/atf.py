@@ -434,7 +434,7 @@ REQUIRED = [
     ("cleo.department", "CLEO agency"), ("cleo.official", "CLEO official's name"), ("cleo.title", "CLEO official's title"),
     ("cleo.address.street", "CLEO street"), ("cleo.address.zip", "CLEO ZIP"), ("cleo.address.city", "CLEO city"),
     ("cleo.address.county", "CLEO county"), ("cleo.address.state", "CLEO state"),
-    ("firearm.manufacturer_code", "eForms manufacturer code"), ("firearm.description", "firearm description"),
+    ("firearm.description", "firearm description"),
     ("files.trust_document", "trust document PDF"), ("files.eft", "fingerprint file (.eft)"),
     ("files.photo", "photo of you (eForms requires it for the responsible person)"),
 ]
@@ -482,7 +482,7 @@ def _row_context(trust, item):
            # dropdowns: the portal lists these uppercased
            "cleo_city": cl["address"]["city"].upper(), "cleo_county": cl["address"]["county"].upper(),
            "cleo_state": cl["address"]["state"].upper(),
-           "mfr_code": fa["manufacturer_code"], "model": str(fa.get("model") or "N/A"),
+           "model": str(fa.get("model") or "N/A"),
            "overall_length": str(fa.get("overall_length") or "12"), "description": fa["description"],
            "form_5320_path": str(out_pdf), "photo_path": f.get("photo"), "eft_path": f.get("eft"),
            "trust_doc_path": f.get("trust_document"), "trust_doc_desc": f.get("trust_document_desc") or "TRUST",

@@ -15,10 +15,9 @@ cleo:                                     # chief law enforcement officer: typed
   title: "CHIEF OF POLICE"                # must match the title on your 5320.23 template
   address: {street: "1 MAIN ST", zip: "00000", city: "EXAMPLE", county: "EXAMPLE", state: "Texas"}
 firearm:                                  # same for every suppressor
-  manufacturer_code: "ABC"                # your eForms manufacturer code (Add Firearm > By Code)
   model: "N/A"
   overall_length: "12"                    # inches
-  description: "YOUR DESCRIPTION / STATEMENT"
+  description: "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
 files:
   trust_document: "/abs/path/to/trust.pdf"
   trust_document_desc: "TRUST"

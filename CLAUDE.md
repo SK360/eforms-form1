@@ -57,7 +57,7 @@ plain CLI, kept for debugging/scripting:
 
 ## What is automated vs. manual
 Automated: applicant pages, responsible-person popup (uploads of 5320.23/photo/EFT, DOB, birth/residence,
-sex, race), CLEO page, firearm (manufacturer code, silencer, model, caliber, serial, overall length, description),
+sex, race), CLEO page, firearm (manufacturer code FMI, silencer, model, caliber, serial, overall length, description),
 supporting documents, trust document, read-back verification, verify-and-Next, certification, Sign & Submit, logging.
 
 **Always manual (by design, do not automate):** logging in/MFA; typing the **SSN** (optional; the user chooses per
@@ -106,6 +106,9 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   prints its text and clicks Ok. If it doesn't say Valid, submitting is refused (see `require`); look at it.
 - **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
   barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
+- **Manufacturer code is always `FMI`** for a Form 1 suppressor (fixed in config/mapping.yaml, not a setting).
+  The wizard's default firearm description is "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE
+  ANY PARTS UNTIL A FORM 1 IS APPROVED" (`DEFAULT_DESCRIPTION` in ui.py); users may edit it.
 - **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
 - **"validated successfully"** appears only on the Certify page, after ticking verify (`#binary`) and Next.
 - The portal shows the trust name uppercased on the summary; `expect` compares case-insensitively as a whole token

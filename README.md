@@ -14,7 +14,6 @@ Currently supports: one trust, one responsible person, suppressors (Form 1), on 
 ## Before you start
 - An eForms account, your trust document (PDF), your fingerprint file (`.eft`), and a photo of you (JPG/PNG;
   eForms requires it for the responsible person, though the 5320.23 PDF itself doesn't need one).
-- Your eForms manufacturer code (what you type under Add Firearm > By Code).
 - **One signed 5320.23 template** (see the next section).
 - Optional: supporting documents for the firearm (e.g. photos of the tools/materials you'll use).
 

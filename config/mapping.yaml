@@ -65,7 +65,7 @@ portal:
     - {action: section, value: "Firearm: manufacturer"}
     - {selector: "#addFirearm", action: click}
     - {selector: "#byCode", action: check}
-    - {selector: "#manufacturerCode", action: fill, value: "{mfr_code}"}
+    - {selector: "#manufacturerCode", action: fill, value: "FMI"}   # always FMI for a Form 1 (maker = the applicant)
     - {selector: "#verifyManufacturer", action: click}
     - {action: wait, value: "1500"}
     - {selector: "#closeVerifiedManufacturerModal", action: click}
