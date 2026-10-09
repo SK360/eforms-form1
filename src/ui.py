@@ -149,9 +149,10 @@ def _row_choice(rows, i, extra=""):
 
 
 def next_serial(serial):
-    """S009 -> S010, keeping the prefix and zero padding."""
-    m = re.match(r"^(.*?)(\d+)$", serial or "")
-    return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}" if m else ""
+    """Suggest the next serial: add 1 to the LAST group of digits, keeping everything around it and the zero padding
+    (S009 -> S010, ABC-0099 -> ABC-0100, 2026-001A -> 2026-002A). No digits -> no suggestion."""
+    m = re.match(r"^(.*?)(\d+)(\D*)$", serial or "")
+    return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}{m.group(3)}" if m else ""
 
 
 def add_flow():

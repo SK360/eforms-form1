@@ -1,6 +1,8 @@
 """The ./atf menu (src/ui.py) with scripted answers: adding, filing, resolving, and screenshot-safe output."""
 import csv
 
+import pytest
+
 from conftest import TICKED, atf, pick, queue, ui
 
 QUIT = lambda kw: "quit"  # noqa: E731
@@ -68,8 +70,12 @@ def test_home_shows_last_five_filed_and_short_numbers(configured, answers, scree
     assert "…0010" in out and "900000010" not in out
 
 
-def test_next_serial():
-    assert (ui.next_serial("S099"), ui.next_serial("A-0009"), ui.next_serial("XYZ")) == ("S100", "A-0010", "")
+@pytest.mark.parametrize("last, suggested", [
+    ("S046", "S047"), ("S099", "S100"), ("ABC-0099", "ABC-0100"), ("0012", "0013"), ("SN99", "SN100"),
+    ("MS-2026-01", "MS-2026-02"), ("2026-001A", "2026-002A"), ("abc12x", "abc13x"), ("AB 12", "AB 13"),
+    ("XYZ", ""), ("", "")])
+def test_next_serial(last, suggested):
+    assert ui.next_serial(last) == suggested
 
 
 def test_short_application_number():
