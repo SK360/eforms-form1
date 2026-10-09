@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Menu interface for the eForms Form 1 helper. Run ./atf (no arguments).
 ./atf <command> ... runs the plain CLI in atf.py instead (fill-form1, fill-5320, inspect, fields)."""
+import os
 import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")  # some terminals (e.g. IDE panes) can't answer cursor queries; skip the warning
 import questionary
 import yaml
 from rich import box
@@ -302,10 +304,10 @@ def refile_flow():
 
 # ---------- Settings (first-run wizard, and Settings in the menu) ----------
 GENERATOR_URL = "https://jakepro716.github.io/atf-5320-generator/"
-DISCLAIMER = ("This is an unofficial helper, provided as-is with no warranty, and not affiliated with or endorsed by ATF.\n"
-              "You are solely responsible for every application it files for you: each submission is YOUR certification\n"
-              "under penalty of perjury. Review what it fills, check ATF's eForms terms of use, and stop if anything looks wrong.\n"
-              "It never asks for, stores or types your password, SSN, emailed code or PIN.")
+DISCLAIMER = ("This is an unofficial helper, provided as-is with no warranty, and not affiliated with or endorsed by ATF. "
+              "You are solely responsible for every application it files for you: each submission is YOUR certification "
+              "under penalty of perjury. Review what it fills, check ATF's eForms terms of use, and stop if anything looks wrong.\n\n"
+              "It never asks for, stores or types your password, SSN, emailed code or PIN.")  # no hard wraps: the panel wraps it
 STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "District of Columbia",
           "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
           "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
