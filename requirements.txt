@@ -1,0 +1,6 @@
+pypdf
+pyyaml
+playwright
+pymupdf
+rich
+questionary

@@ -1,0 +1,13 @@
+# Personal data: NEVER commit or share these (trust documents, fingerprints, 5320.23s, logged-in browser session)
+data/
+out/
+forms/
+.browser-profile/
+CLAUDE.local.md
+
+# Environment / OS noise
+.venv/
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store

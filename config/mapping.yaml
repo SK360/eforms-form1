@@ -1,0 +1,122 @@
+# eForms Form 1 (trust, suppressor) portal steps. Shared by everyone: NO personal data in this file.
+# {placeholders} come from data/trust.yaml (your settings) and the suppressor row (see _row_context in src/atf.py).
+# Selectors were captured from the live portal on 2026-10-08/09; if ATF changes the site, re-capture with
+# ./atf > Advanced > Capture portal pages (see CLAUDE.md "When the portal changes").
+#
+# actions: fill | select | check | click | upload | expect | dismiss_dialog | pause | press | wait | wait_for
+#          | section (progress marker shown in the ./atf menu) | repeat (run `steps` once per item in a list setting)
+# options: optional: true (click only if present) | skip_if_disabled: true
+#          | tag: ssn (left out unless you choose to type your SSN) | label / private on expect steps
+portal:
+  steps:
+    # --- applicant-type ---
+    - {action: section, value: "Applicant type"}
+    - {selector: "#Trust", action: check}
+    - {selector: "#nextBtn", action: click}
+    # --- intended-use ---
+    - {action: section, value: "Intended use"}
+    - {selector: "#nextBtn", action: click}
+    # --- application ---
+    - {action: section, value: "Application"}
+    - {selector: "#taxPaid", action: check}
+    - {selector: "#nextBtn", action: click}
+    # --- applicant ---
+    - {action: section, value: "Applicant"}
+    - {selector: "#noFFL", action: check}            # confirm: trust has no FFL
+    # address/phone/email come pre-filled from the eForms account; nothing to do
+    - {selector: "#tradeName", action: fill, value: "{trust_name}"}
+    - {selector: "#titleOfTheSubmitter", action: fill, value: "{rp_title}"}
+    - {selector: "#nextBtn", action: click}
+    # --- responsible-persons: edit popup (first responsible person only) ---
+    - {action: section, value: "Responsible person"}
+    - {selector: "[id='0Edit']", action: click}
+    - {selector: "#citizenType", action: select, value: "U.S.CITIZEN"}   # country autofills
+    - {selector: "#formFile", action: upload, value: "{form_5320_path}"}  # generated per suppressor
+    - {selector: "#photoFile", action: upload, value: "{photo_path}"}   # required by eForms (not needed on the 5320.23 PDF)
+    - {selector: "#eftFile", action: upload, value: "{eft_path}"}
+    - {action: dismiss_dialog, value: "1500", require: "Valid EBTS Package"}   # popup after the fingerprint attaches; anything but Valid blocks submitting
+    - {action: pause, tag: ssn, note: "Type your SSN into the SSN field yourself (script never enters it)"}
+    - {selector: "#dateOfBirth", action: fill, value: "{rp_dob}"}
+    - {selector: "#birthCountry", action: select, value: "UNITED STATES OF AMERICA"}
+    - {action: wait, value: "800"}   # birthState is disabled until country is chosen
+    - {selector: "#birthState", action: select, value: "{rp_birth_state}"}
+    - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
+    - {selector: "#sex", action: select, value: "{rp_sex}"}
+    # race/ethnicity: PrimeNG multiselect, option panel is an overlay (your race setting must match the option text)
+    - {selector: "#raceEthnicity .ui-multiselect", action: click}
+    - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
+    - {action: press, value: "Escape"}
+    - {selector: "#finishButton", action: click}
+    - {selector: "#nextBtn", action: click}
+    # --- cleo ---
+    - {action: section, value: "CLEO"}
+    - {selector: "#cleoAgencyOrDepartmentName", action: fill, value: "{cleo_department}"}
+    - {selector: "#cleonameOfAgencyOfficial", action: fill, value: "{cleo_official}"}
+    - {selector: "#cleoTitleOfAgencyOfficial", action: fill, value: "{cleo_title}"}
+    # #cleoAddress-country is locked (prefilled); nothing to do
+    - {selector: "#cleoAddress-addressLine1", action: fill, value: "{cleo_street}"}
+    - {selector: "#cleoAddress-zipCode", action: fill, value: "{cleo_zip}"}
+    - {action: wait, value: "1500"}   # city/county/state dropdowns populate from zip
+    - {selector: "#cleoAddress-city", action: select, value: "{cleo_city}"}
+    - {selector: "#cleoAddress-county", action: select, value: "{cleo_county}"}
+    - {selector: "#cleoAddress-state", action: select, value: "{cleo_state}"}
+    - {selector: "#nextBtn", action: click}
+    # --- line-item: add firearm, popup 1 (manufacturer) ---
+    - {action: section, value: "Firearm: manufacturer"}
+    - {selector: "#addFirearm", action: click}
+    - {selector: "#byCode", action: check}
+    - {selector: "#manufacturerCode", action: fill, value: "{mfr_code}"}
+    - {selector: "#verifyManufacturer", action: click}
+    - {action: wait, value: "1500"}
+    - {selector: "#closeVerifiedManufacturerModal", action: click}
+    - {selector: "#country", action: select, value: "UNITED STATES", skip_if_disabled: true}   # skipped if locked/prefilled
+    - {selector: "#nextButton", action: click}
+    # --- firearm popup 2 ---
+    - {action: section, value: "Firearm: details"}
+    - {selector: "#productType", action: select, value: "SILENCER"}
+    - {action: wait, value: "500"}          # form re-renders (caliber becomes free text, barrel length hidden)
+    - {selector: "#weaponModel", action: fill, value: "{model}"}
+    - {selector: "#weaponCaliber", action: fill, value: "{caliber}"}
+    - {selector: "#serialNumber", action: fill, value: "{serial_number}"}
+    - {selector: "#unitOfMeasure", action: select, value: "CALIBER"}
+    - {selector: "#overallLength", action: fill, value: "{overall_length}"}
+    - {selector: "#description", action: fill, value: "{description}"}
+    # #descriptionNotListed stays unchecked
+    - {selector: "#nextButton", action: click}
+    # --- firearm popup 3: supporting documentation (each entry under docs: in your settings) ---
+    - {action: section, value: "Firearm: supporting documents"}
+    - action: repeat
+      over: docs
+      steps:
+        - {selector: "#file-upload", action: upload, value: "{doc_path}"}
+        - {selector: "#description", action: fill, value: "{doc_desc}"}
+        - {selector: "#addDocument", action: click}
+        - {action: wait, value: "1000"}
+    - {selector: "#finishButton", action: click}
+    - {action: wait, value: "1500"}
+    - {selector: "#nextBtn", action: click}   # line-item page -> next
+    # --- attachments: trust document ---
+    - {action: section, value: "Trust document"}
+    - {selector: "#file-upload", action: upload, value: "{trust_doc_path}"}
+    - {selector: "#documentType", action: select, value: "CORPORATION/TRUST/OTHER LEGAL ENTITY"}
+    - {selector: "#description", action: fill, value: "{trust_doc_desc}"}
+    - {selector: "#addDocument", action: click}
+    - {action: wait, value: "1500"}
+    - {selector: "#nextBtn", action: click}
+    # --- verify page: read back what the portal will certify (read-only) ---
+    - {action: section, value: "Read-back check"}
+    - {action: wait, value: "1500"}
+    - {selector: "#serialNumberMessage", action: expect, label: "Serial number", value: "{serial_number}"}
+    - {selector: "#model", action: expect, label: "Model", value: "{model}"}
+    - {selector: "#weaponType", action: expect, label: "Type", value: "SILENCER"}
+    - {selector: "#caliber", action: expect, label: "Caliber", value: "{caliber}"}
+    - {selector: "#overallLength", action: expect, label: "Overall length", value: "{overall_length}"}
+    - {selector: "#businessName >> nth=0", action: expect, label: "Trust name", private: true, value: "{trust_name}"}
+    # Submitting (verify box, Certify page, Sign & Submit) is in _submit() in src/atf.py, gated on these checks.
+  # --- start a NEW Form 1 from the home page (first row and between rows) ---
+  # After a submission the portal is on the home page; the confirmation Ok is normally already clicked.
+  # If any of these fail, the script falls back to asking you to do it by hand.
+  new_form_steps:
+    - {selector: "#OkBtn", action: click, optional: true}       # leftover confirmation popup, if still open
+    - {selector: "#FORM53201LinkId", action: click}             # "ATF Form 1 (5320.1)" link (href /home/form/FORM53201)
+    - {selector: "#Trust", action: wait_for, value: "30000"}    # applicant-type page has loaded

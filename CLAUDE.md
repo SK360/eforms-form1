@@ -1,0 +1,134 @@
+# ATF eForms Form 1 automation (suppressors, filed by a trust)
+
+Fills and submits ATF Form 1s in the eForms portal (https://eforms.atf.gov) for suppressors made by the user's trust,
+and stamps the 5320.23 Responsible Person Questionnaire required with each submission. Run `./atf` (menu,
+`src/ui.py`); the engine and plain CLI is `src/atf.py`. Python 3.9+ (developed on 3.14), Playwright, PyMuPDF, PyYAML,
+rich + questionary. Built interactively 2026-10-08/09. Personal status for a given checkout is in `CLAUDE.local.md`
+(gitignored) if present.
+
+## How a user runs it
+- **Setup:** `./install.sh` (Mac: finds Python 3.9+, makes `.venv`, installs requirements + Chromium), then `./atf`.
+  First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files) -> `data/trust.yaml`.
+- **Normal use:** `./atf` -> Add suppressors -> File N queued. The menu stamps the 5320.23s (dated today), asks once
+  per batch whether to pause for the SSN, shows one confirmation (= "I affirm" + authorization to Sign & Submit),
+  opens the browser, the user logs in, then per row: open a new Form 1 (home page `#FORM53201LinkId`), fill, read back,
+  certify, sign, wait for the user's emailed code + PIN, record the application number. Pending rows are resolved
+  from the menu. Settings and Advanced (preview steps, re-date a 5320.23, re-file, capture portal pages) are in the menu.
+- **5320.23 template:** the user makes ONE signed 5320.23 with https://jakepro716.github.io/atf-5320-generator/
+  (Form 1, their details, the CLEO, signature, placeholder serial `TEMPLATE` and caliber `00`); the wizard copies it to
+  `forms/5320.23.pdf` and test-stamps it. Stamping relies on that generator's layout (text in Nimbus fonts, values
+  below the 4d/4e labels, the CLEO line matched by the CLEO title from settings). ATF's own fillable PDF was rejected:
+  digital-signature field (refilling after signing breaks it), image field for the photo, hybrid XFA form.
+
+## Commands
+`./atf` with no arguments opens the menu. `./atf <command> ...` (= `.venv/bin/python src/atf.py <command> ...`) is the
+plain CLI, kept for debugging/scripting:
+
+| Command | What it does |
+|---|---|
+| `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`. No row = all unfiled rows. |
+| `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. The menu's "File" = `--auto-affirm --submit` (+ `--skip-ssn` unless the user chose to type the SSN). |
+| `inspect` | Dumps controls + visible text + dialog text of the page you're on, to map new/changed steps. |
+| `fields <pdf>` | Lists AcroForm fields (only for a fresh fillable PDF; generator output is flattened). |
+
+## Code structure
+- `config/mapping.yaml` (tracked, shared, NO personal data): portal steps with `{placeholders}` filled from settings by
+  `_row_context()`; placeholders work in selectors too (e.g. `:has-text('{rp_race}')`). Step options: `section`
+  (progress marker), `repeat` over a list setting (docs), `optional`,
+  `skip_if_disabled`, `tag: ssn`, `label`/`private` on `expect`. `new_form_steps` opens a Form 1 from the home page.
+- `data/trust.yaml` (personal): see `examples/trust.example.yaml`. `REQUIRED` + `settings_problems()` in atf.py list
+  what must be set; filing refuses to start until it's complete.
+- `src/atf.py` engine: `stamp_5320(row, when, out_dir)`, `file_rows(rows, todo, opts)` (prechecks, browser, per-row
+  `_start_form` + `_file_one` + `_submit`, logout in `finally`), `_run_steps` (mapping interpreter), `log_submission`.
+  All user-facing output goes through `emit(kind, text, **data)` and prompts through `ask(prompt)`; the CLI prints,
+  the menu (`src/ui.py` `Progress`) renders them (page ticks from `section`, read-back table from `expect` events, a
+  code/PIN panel on `banner`).
+- `src/ui.py` menu: home table, `file_flow`, `add_flow`, `resolve_flow`, `settings_flow` (wizard), `advanced_flow`.
+- questionary gotcha: `Choice(title, None)` returns the TITLE as the value; menu items use explicit string values.
+- Keep code Python 3.9-compatible (stock macOS python3): no `X | Y` types, no backslashes inside f-string expressions.
+- **Screenshot-safe menu (users share screenshots):** no trust name anywhere in `ui.py`; application numbers shown as
+  last 4 digits (`short()`); `expect` steps with `private: true` (the trust name) show only matches/differs.
+  Full values stay in the CSVs and the plain CLI output. Keep it that way when adding screens.
+- Tests were run from a session scratchpad against a mock portal, not kept in the repo.
+
+## What is automated vs. manual
+Automated: applicant pages, responsible-person popup (uploads of 5320.23/photo/EFT, DOB, birth/residence,
+sex, race), CLEO page, firearm (manufacturer code, silencer, model, caliber, serial, overall length, description),
+supporting documents, trust document, read-back verification, verify-and-Next, certification, Sign & Submit, logging.
+
+**Always manual (by design, do not automate):** logging in/MFA; typing the **SSN** (optional; the user chooses per
+batch whether to pause for it); the **6-digit emailed verification code**; the **eForms PIN**. Credentials, SSN, codes
+and PINs must never be read, stored, or typed by Claude or the script. (A user once asked for the script to type the
+SSN from a file; declined, same as passwords/codes/PINs.)
+
+## Safety design (keep these)
+- Submitting is opt-in (CLI `--submit`, or the menu's confirmation) and gated: it verifies the on-page summary against
+  the intended values (`expect` steps), ticks verify, goes to Certify, requires "validated successfully" on the page,
+  only then ticks the certification and clicks Sign & Submit. Any mismatch or missing validation = does not submit.
+- Auto-affirm is opt-in (CLI `--auto-affirm`, or the menu's confirmation, which lists each serial and says so): the
+  "I affirm" popup is the user's per-application legal affirmation.
+- A row is marked `pending` (saved to the CSV) just before Sign & Submit is clicked, and `filed` only after the
+  portal's confirmation popup is read. Pending rows are skipped by every command until resolved (menu: Resolve a
+  pending row; `--force` overrides): **check the dashboard** to avoid duplicate filings.
+- Before opening the browser: settings must be complete, and every queued row's 5320.23 must have the serial on page 1
+  and today's signature date (the menu regenerates them each time). The newest PDF for a serial is used.
+- The fingerprint `dismiss_dialog` step has `require: "Valid EBTS Package"`: any other dialog text counts as a
+  mismatch and blocks submitting.
+- Step failures leave the browser open and log out cleanly (eForms allows ONE session; a crash without logout locks
+  the account until the old session times out, ~15-30 min). The session is wrapped in `try/finally`, and the browser
+  is launched with `handle_sigint=False` so **Ctrl-C also logs out** (by default Playwright kills Chromium on Ctrl-C).
+- Claude never clicks Sign & Submit / enters credentials itself; the user runs the commands. Claude watches the terminal
+  and fixes the script.
+- First run shows a disclaimer the user must accept (unofficial, as-is, user responsible for every filing).
+
+## Layout
+- `atf` launcher, `install.sh` installer, `src/ui.py` menu, `src/atf.py` engine + CLI, `config/mapping.yaml` portal steps,
+  `examples/` sanitized samples, `requirements.txt`.
+- Personal, gitignored, never shared: `data/` (trust.yaml, suppressors.csv queue, trust PDF, .eft, photos),
+  `forms/5320.23.pdf` (signed template), `out/` (stamped 5320.23s, submissions.csv log, capture_*.jsonl),
+  `.browser-profile/` (logged-in eForms session cookies), `CLAUDE.local.md`. Never zip/copy the folder to share it:
+  share the git repo.
+
+## Gotchas learned (read before debugging)
+- **Selectors:** IDs starting with a digit are invalid CSS: use `[id='0Edit']`, not `#0Edit`.
+- **Hidden checkboxes:** the portal hides real inputs behind styled labels; `_tick()` falls back to the label/DOM click.
+  The `check` action uses it. Playwright's plain `.check()` times out here.
+- **Locked/prefilled fields** hang `select`/`fill` for 30s: use `skip_if_disabled: true` (done for the firearm popup
+  country); the CLEO country is locked so its step was removed. Applicant address/phone/email are prefilled.
+- **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay). Only the
+  "White" option text has been verified live; other races in the wizard list are the standard category names.
+- **Photo:** eForms requires a photo for the responsible person (`#photoFile`); the 5320.23 PDF itself doesn't need one.
+- **Fingerprint popup:** attaching the EFT opens an info dialog ("Valid EBTS Package", Ok); the `dismiss_dialog` step
+  prints its text and clicks Ok. If it doesn't say Valid, submitting is refused (see `require`); look at it.
+- **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
+  barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
+- **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
+- **"validated successfully"** appears only on the Certify page, after ticking verify (`#binary`) and Next.
+- The portal shows the trust name uppercased on the summary; `expect` compares case-insensitively as a whole token
+  (`22` matches `22`/`CAL 22` but not `223`; `S101` not `S1015`). Note `12` would still match `12.5`.
+- **5320.23 stamping:** the template is flattened (no form fields). `stamp_5320` redacts the old typed text and inserts
+  new text at the same spot (located by label/known text). Photo and signature image are untouched. The signature
+  date is just stamped text (a pre-existing signature image stays); each signer decides whether that's acceptable.
+- `fill-form1` finds the PDF by **serial** (`out/5320.23_<serial>.pdf`, or the older `5320.23_<row>_<serial>.pdf`,
+  newest if several). `stamp_5320` re-reads each PDF it writes and flags any value not found.
+- **CLEO details** live only in `data/trust.yaml`, but the CLEO title must also match the one on the 5320.23 template
+  (the stamper finds the CLEO line by it). If the CLEO changes: update Settings, and remake the template if the title changed.
+- Responsible person fields (name, title, street, zip) are prefilled from the user's eForms account.
+
+## When the portal changes
+Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page,
+paste the output to Claude; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
+prints steps without a browser. `--capture` records screens after the automated part into `out/capture_*.jsonl`
+(includes page text, may contain PII; do not share).
+
+## Open items / known caveats
+- 5320.23 template revision: the generator (and ATF's PDF it embeds) was the Jan 2023 revision (OMB expiry
+  12/31/2025) when checked; ATF had a revision pending. If the generator updates, re-check stamping on a new template.
+- Early test drafts may remain in the eForms dashboard (auto-delete after 90 days); not submissions.
+- One responsible person only (first entry in trust.yaml); additional RPs need new steps captured live (`[id='1Edit']`?).
+- Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
+- Mac install script only; Windows untested.
+- Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);
+  reusing eForms "Saved Line items".
+- Legal: each submission is a certification under 18 U.S.C. 924 / 26 U.S.C. 5861 by the user. Check ATF's eForms
+  terms of service on automation; the tool does not bypass CAPTCHAs or bot checks and the user stays in the loop.

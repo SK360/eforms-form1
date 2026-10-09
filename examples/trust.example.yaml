@@ -1,0 +1,28 @@
+# Example of data/trust.yaml. You normally don't write this by hand: ./atf asks for it on first run (Settings).
+# data/ is never shared or committed (it holds personal data).
+trust:
+  name: "Example Family Trust"            # exactly as on the trust document
+responsible_persons:                      # only the first entry is used
+  - title: "Trustee"                      # your title in the trust (typed into eForms as "title of the submitter")
+    dob: "MM/DD/YYYY"
+    sex: "Male"                           # as the eForms dropdown lists it: Male / Female
+    race: "White"                         # must match the eForms race option text
+    place_of_birth: {country: "United States of America", state: "Texas"}
+    home_address: {state: "Texas"}        # state of residence
+cleo:                                     # chief law enforcement officer: typed into eForms and stamped on the 5320.23
+  department: "EXAMPLE POLICE DEPARTMENT"
+  official: "FIRST LAST"
+  title: "CHIEF OF POLICE"                # must match the title on your 5320.23 template
+  address: {street: "1 MAIN ST", zip: "00000", city: "EXAMPLE", county: "EXAMPLE", state: "Texas"}
+firearm:                                  # same for every suppressor
+  manufacturer_code: "ABC"                # your eForms manufacturer code (Add Firearm > By Code)
+  model: "N/A"
+  overall_length: "12"                    # inches
+  description: "YOUR DESCRIPTION / STATEMENT"
+files:
+  trust_document: "/abs/path/to/trust.pdf"
+  trust_document_desc: "TRUST"
+  eft: "/abs/path/to/fingerprints.eft"
+  photo: "/abs/path/to/photo.jpg"         # required by eForms for the responsible person (not needed on the 5320.23)
+docs:                                     # supporting documents uploaded with each firearm (any number)
+  - {path: "/abs/path/to/printer.jpg", description: "3D PRINTER"}

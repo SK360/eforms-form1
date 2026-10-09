@@ -1,0 +1,4 @@
+#!/bin/sh
+# eForms Form 1 helper. ./atf opens the menu; ./atf <command> ... runs the plain CLI (see src/atf.py).
+cd "$(dirname "$0")" || exit 1
+exec .venv/bin/python src/ui.py "$@"
