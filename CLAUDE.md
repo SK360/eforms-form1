@@ -16,8 +16,12 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
   from the menu. Settings and Advanced (preview steps, re-date a 5320.23, re-file, capture portal pages) are in the menu.
 - **5320.23 template:** the user makes ONE signed 5320.23 with https://jakepro716.github.io/atf-5320-generator/
   (Form 1, their details, the CLEO, signature, placeholder serial `TEMPLATE` and caliber `00`); the wizard copies it to
-  `forms/5320.23.pdf` and test-stamps it. Stamping relies on that generator's layout (text in Nimbus fonts, values
-  below the 4d/4e labels, the CLEO line matched by the CLEO title from settings). ATF's own fillable PDF was rejected:
+  `forms/5320.23.pdf` and test-stamps it. The wizard asks for the template FIRST and `read_template()` pre-fills
+  trust name, DOB, residence/birth state, CLEO (agency, official, title, street/city/state/ZIP) and model from it
+  (never the SSN: not read, and SSN-shaped values are dropped). A newly chosen template's values win over saved
+  settings; a kept one only fills gaps; the template is copied in only on save. Stamping and reading rely on that
+  generator's layout: typed text in Nimbus fonts, positioned relative to readable printed labels (`_near()`; some
+  labels are font-garbled), the item-5 CLEO "NAME, TITLE" line found by position right of the agency name. ATF's own fillable PDF was rejected:
   digital-signature field (refilling after signing breaks it), image field for the photo, hybrid XFA form.
 
 ## Commands
@@ -111,8 +115,9 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   date is just stamped text (a pre-existing signature image stays); each signer decides whether that's acceptable.
 - `fill-form1` finds the PDF by **serial** (`out/5320.23_<serial>.pdf`, or the older `5320.23_<row>_<serial>.pdf`,
   newest if several). `stamp_5320` re-reads each PDF it writes and flags any value not found.
-- **CLEO details** live only in `data/trust.yaml`, but the CLEO title must also match the one on the 5320.23 template
-  (the stamper finds the CLEO line by it). If the CLEO changes: update Settings, and remake the template if the title changed.
+- **CLEO details** live only in `data/trust.yaml`. The stamper replaces the template's item-5 official line with
+  `official, title` from settings on every copy (found by position), so a new official needs only Settings; a new
+  agency/address needs a new template (agency and address lines are not restamped).
 - Responsible person fields (name, title, street, zip) are prefilled from the user's eForms account.
 
 ## When the portal changes

@@ -31,20 +31,20 @@ At https://jakepro716.github.io/atf-5320-generator/ fill in a **single form** (n
 4. **Photo:** skip it; it isn't needed on the PDF (your photo is uploaded to eForms separately).
 5. **Firearm:** type silencer; maker = your trust's name and address; model as you'll set it in the helper (e.g. N/A);
    **caliber `00`** and **serial `TEMPLATE`**. Fill these in; don't leave them blank, the helper looks for them.
-6. **CLEO:** agency, official's name, address, and the **official's title exactly as you'll type it in the helper**
-   (e.g. `CHIEF OF POLICE` or `SHERIFF`); the helper finds that line by its title.
+6. **CLEO:** agency, official's name and title, and the agency's full mailing address.
 7. **Questions, citizenship, place of birth:** answer them truthfully; they carry into every filing unchanged.
 8. **Sign, date it, download** the **ATF copy** (the 2-page questionnaire, not the CLEO copy).
 
-On the first run of `./atf`, drag that PDF into the window when asked. The helper test-stamps it: "✔ your 5320.23
-template stamps correctly" means you're set. "Could not find the CLEO line" usually means the CLEO title in your
-settings doesn't match the PDF; fix one or the other. Before your first filing, look at one result: Advanced >
-Regenerate a 5320.23 writes it to `out/`.
+On the first run of `./atf`, the helper asks for this PDF first (drag it into the window) and reads your answers
+from it: trust name, date of birth, states, CLEO details and model come pre-filled, so you mostly press Enter (it
+never reads the SSN). It also test-stamps the template: "✔ your 5320.23 template stamps correctly" means you're
+set. Before your first filing, look at one result: Advanced > Regenerate a 5320.23 writes it to `out/`.
 
 - Each filing re-stamps the signature date next to the signature you made once. If you'd rather sign fresh, remake
   the template in the generator before a batch (a couple of minutes), then in `./atf` choose Settings and answer
   **No** to "Keep your current 5320.23 template?".
-- Remake it whenever something on it changes: your CLEO, your address, the model.
+- Remake it whenever something on it changes: your address, the model, the CLEO agency or address. (A new official
+  at the same agency only needs Settings: the helper stamps the current official's name on every copy.)
 
 ## Install (once)
 ```bash

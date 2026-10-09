@@ -170,7 +170,7 @@ def stamp_5320(row, when, out_dir=None):
     doc = pymupdf.open(FORMS / "5320.23.pdf")
     boxes = {}
     for pg, k in targets:
-        boxes[k] = _find_value_box(doc[pg], k, cl["title"])
+        boxes[k] = _find_value_box(doc[pg], k)
         doc[pg].add_redact_annot(pymupdf.Rect(boxes[k]) + (-1, -1, 30, 1), fill=(1, 1, 1))
     for pg in (0, 1):
         doc[pg].apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
@@ -200,17 +200,15 @@ def cmd_fill_5320(args):
     print("Verify each PDF visually before use.")
 
 
-def _find_value_box(page, key, cleo_title=""):
+def _find_value_box(page, key):
     """Bbox of the existing typed value: below the 4d/4e label, or above the signature 'Date' label.
     Works on templates made with the 5320.23 generator (its text is in Nimbus fonts); see CLAUDE.md."""
-    if key == "cleo":  # label isn't in the text layer; find the existing "NAME, TITLE" official line itself
-        for blk in page.get_text("dict")["blocks"]:
-            for ln in blk.get("lines", []):
-                for sp in ln["spans"]:
-                    if "Nimbus" in sp["font"] and cleo_title.strip() and cleo_title.strip().upper() in sp["text"].upper():
-                        return sp["bbox"]
-        sys.exit(f"Could not find the CLEO line ('..., {cleo_title}') on forms/5320.23.pdf. The CLEO title in your settings "
-                 "must match the one on your 5320.23 template.")
+    if key == "cleo":  # item 5 "NAME, TITLE" line: right of the agency name, above its (garbled-font) label
+        official = _near(page, "Agency or Department Name", (250, 450), (-25, 0))
+        if official:
+            return official[0]["bbox"]
+        sys.exit("Could not find the CLEO official's name/title (item 5) on forms/5320.23.pdf. "
+                 "Was it made with the 5320.23 generator?")
     word = {"4d": "Caliber", "4e": "Serial Number", "date": "Date", "cleo": "Title of Official"}[key]
     hits = page.search_for(word)
     if not hits:
@@ -229,6 +227,72 @@ def _find_value_box(page, key, cleo_title=""):
     if not best:
         sys.exit(f"could not locate existing value for {key}")
     return best[1]
+
+
+US_STATES = {"AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
+             "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+             "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+             "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+             "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+             "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+             "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+             "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+             "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming"}
+STREET_SUFFIXES = {"ST", "STREET", "RD", "ROAD", "AVE", "AVENUE", "AV", "DR", "DRIVE", "BLVD", "LN", "LANE", "WAY", "CT", "COURT",
+                   "CIR", "CIRCLE", "PL", "PLACE", "HWY", "HIGHWAY", "PIKE", "PKWY", "PARKWAY", "TER", "TERRACE", "TRL",
+                   "TRAIL", "SQ", "LOOP", "RUN", "ROW", "XING", "EXT"}
+
+
+def _near(page, label, dx, dy):
+    """Typed values (generator text: Nimbus fonts) whose top-left lies within dx/dy points of a printed label,
+    top to bottom. The form's own labels are in other fonts; some are font-garbled, so anchor on readable ones."""
+    hits = page.search_for(label)
+    if not hits:
+        return []
+    lab = hits[0]
+    vals = [sp for blk in page.get_text("dict")["blocks"] for ln in blk.get("lines", []) for sp in ln["spans"]
+            if "Nimbus" in sp["font"] and sp["text"].strip()
+            and dx[0] <= sp["bbox"][0] - lab.x0 <= dx[1] and dy[0] <= sp["bbox"][1] - lab.y0 <= dy[1]]
+    return sorted(vals, key=lambda sp: (sp["bbox"][1], sp["bbox"][0]))
+
+
+def _split_address(line):
+    """'1 MAIN ST SPRINGFIELD OH 12345' -> street, city, state name, zip (best effort; the user confirms)."""
+    m = re.match(r"^(.*?)\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?\s*$", line.strip().upper())
+    if not m:
+        return {}
+    rest, st, zp = m.groups()
+    words = rest.split()
+    cut = max((i for i, w in enumerate(words) if w.strip(".,") in STREET_SUFFIXES), default=None)
+    street, city = (" ".join(words[:cut + 1]), " ".join(words[cut + 1:])) if cut is not None else (rest, "")
+    return {"street": street.strip(" ,"), "city": city.strip(" ,"), "state": US_STATES.get(st, ""), "zip": zp}
+
+
+def read_template(path):
+    """Answers the generator printed on a signed 5320.23, as {settings path: value}, to prefill Settings.
+    Reads only what the settings need. Never the SSN/UPIN (item 3f): it isn't read, and anything SSN-shaped is dropped."""
+    import pymupdf
+    doc = pymupdf.open(path)
+    p1, p2 = doc[0], doc[1]
+    first = lambda spans: spans[0]["text"].strip() if spans else ""  # noqa: E731
+    out = {}
+    applicant = _near(p1, "Full Legal Name and Address of Applicant", (-30, 260), (8, 45))
+    out["trust.name"] = first(applicant)
+    rp = _near(p1, "3b.", (-300, -10), (8, 45))  # item 3a (its label is font-garbled): left of 3b, same rows
+    if rp:
+        out["responsible_persons.0.home_address.state"] = _split_address(rp[-1]["text"]).get("state", "")
+    out["responsible_persons.0.dob"] = first([sp for sp in _near(p1, "3g.", (-5, 60), (0, 25))
+                                              if re.fullmatch(r"\d{2}/\d{2}/\d{4}", sp["text"].strip())])
+    out["firearm.model"] = first(_near(p1, "4c.", (-5, 100), (5, 25)))
+    out["cleo.department"] = first(_near(p1, "Agency or Department Name", (-5, 250), (-25, 0)))
+    official = first(_near(p1, "Agency or Department Name", (250, 450), (-25, 0)))
+    if ", " in official:
+        out["cleo.official"], out["cleo.title"] = (x.strip() for x in official.rsplit(", ", 1))
+    addr = _split_address(first(_near(p1, "Full Mailing Address", (-5, 300), (-30, 0))))
+    out.update({f"cleo.address.{k}": v for k, v in addr.items()})
+    birth = first(_near(p2, "State of Birth", (20, 250), (0, 15))).upper()
+    out["responsible_persons.0.place_of_birth.state"] = next((v for v in US_STATES.values() if v.upper() == birth), "")
+    return {k: v for k, v in out.items() if v and not re.search(r"\d{3}-?\d{2}-?\d{4}", v)}
 
 
 # ---------- Browser ----------

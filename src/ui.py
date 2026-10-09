@@ -363,7 +363,7 @@ def _state(msg, cur):
     return cur if str(cur or "").upper() == v.strip().upper() else upper[v.strip().upper()]  # unchanged: keep as saved
 
 
-def _check_template(cleo):
+def _check_template():
     """Test-stamp forms/5320.23.pdf with a dummy serial; returns a list of problems (empty = OK)."""
     import tempfile
     try:
@@ -383,8 +383,27 @@ def settings_flow(first=False):
                         + escape(DISCLAIMER), title="eForms Form 1 helper", border_style="cyan", expand=False))
         if not questionary.confirm("I understand and accept", default=False).ask():
             sys.exit("Setup not completed.")
-    get = lambda p, d="": atf._get(t, p) or d  # noqa: E731
     try:
+        con.rule("Your 5320.23 template")
+        tpl, new_tpl = atf.FORMS / "5320.23.pdf", None
+        if not tpl.exists() or not _a(questionary.confirm("Keep your current 5320.23 template?", default=True)):
+            con.print(f"  Make it once at [cyan]{GENERATOR_URL}[/]: Form 1, your details, your CLEO, sign it,\n"
+                      "  and use serial [bold]TEMPLATE[/] and caliber [bold]00[/] (they get replaced for each suppressor).\n"
+                      "  Download the ATF copy. Step by step: README.md, \"Making your 5320.23 template\".")
+            new_tpl = Path(_clean_path(_a(questionary.path("5320.23 PDF (drag it here):", validate=_file(suffixes=(".pdf",))))))
+        try:
+            pre = atf.read_template(new_tpl or tpl)
+        except Exception:
+            pre = {}
+        if pre:
+            con.print(f"  [green]✔[/] Read {len(pre)} answers from it (never the SSN). Press Enter to accept each, or type a correction.")
+        else:
+            con.print("  [yellow]⚠ Couldn't read answers from it (was it made with the generator?); you'll type them in.[/]")
+        # A newly chosen template wins over saved settings (e.g. a new chief); a kept one only fills gaps.
+        if new_tpl:
+            get = lambda p, d="": pre.get(p) or atf._get(t, p) or d  # noqa: E731
+        else:
+            get = lambda p, d="": atf._get(t, p) or pre.get(p) or d  # noqa: E731
         con.rule("Trust")
         trust = dict(t.get("trust") or {})
         trust["name"] = _a(questionary.text("Trust name (exactly as on the trust document):", default=get("trust.name"), validate=_need))
@@ -404,7 +423,7 @@ def settings_flow(first=False):
         cl = dict(t.get("cleo") or {})
         cl["department"] = _a(questionary.text("Agency / department:", default=get("cleo.department"), validate=_need))
         cl["official"] = _a(questionary.text("Official's name:", default=get("cleo.official"), validate=_need))
-        cl["title"] = _a(questionary.text("Official's title (exactly as on your 5320.23):", default=get("cleo.title", "CHIEF OF POLICE"), validate=_need))
+        cl["title"] = _a(questionary.text("Official's title:", default=get("cleo.title", "CHIEF OF POLICE"), validate=_need))
         addr = dict(cl.get("address") or {})
         addr["street"] = _a(questionary.text("Agency street address:", default=get("cleo.address.street"), validate=_need))
         z = _a(questionary.text("Agency ZIP:", default=str(get("cleo.address.zip")), validate=_need))
@@ -424,14 +443,6 @@ def settings_flow(first=False):
             con.print("  [dim]The description box on the firearm page, e.g. a statement about parts you do or don't possess.[/]")
         fa["description"] = _a(questionary.text("Firearm description:", default=get("firearm.description"), validate=_need))
         con.rule("Files")
-        tpl = atf.FORMS / "5320.23.pdf"
-        if not tpl.exists() or not _a(questionary.confirm("Keep your current 5320.23 template?", default=True)):
-            con.print(f"  Make it once at [cyan]{GENERATOR_URL}[/]: Form 1, your details, the CLEO above, sign it,\n"
-                      "  and use serial [bold]TEMPLATE[/] and caliber [bold]00[/] (they get replaced for each suppressor).\n"
-                      "  Download the ATF copy. Step by step: README.md, \"Making your 5320.23 template\".")
-            src = _clean_path(_a(questionary.path("5320.23 PDF (drag it here):", validate=_file(suffixes=(".pdf",)))))
-            atf.FORMS.mkdir(exist_ok=True)
-            tpl.write_bytes(Path(src).read_bytes())
         files = dict(t.get("files") or {})
         files["eft"] = _clean_path(_a(questionary.path("Fingerprint file (.eft):", default=get("files.eft"), validate=_file(suffixes=(".eft",)))))
         files["photo"] = _clean_path(_a(questionary.path("Photo of you (eForms requires it; not needed on the 5320.23):",
@@ -457,11 +468,14 @@ def settings_flow(first=False):
     if first:
         t["accepted_disclaimer"] = date.today().isoformat()
     atf.DATA.mkdir(exist_ok=True)
+    if new_tpl:  # only now, so cancelling never replaces the old template
+        atf.FORMS.mkdir(exist_ok=True)
+        tpl.write_bytes(new_tpl.read_bytes())
     path.write_text("# Your settings (personal; data/ is never shared). Edit via ./atf > Settings.\n"
                     + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200))
     if not atf.SUPP.exists():
         atf.save_rows([])
-    probs = atf.settings_problems(t) + _check_template(cl)
+    probs = atf.settings_problems(t) + _check_template()
     if probs:
         con.print(Panel("\n".join(f"• {escape(x)}" for x in probs), title="Saved, but fix these before filing",
                         border_style="red", expand=False))
