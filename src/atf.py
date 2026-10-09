@@ -47,14 +47,14 @@ def ask(prompt):
 
 
 def load_trust():
-    return yaml.safe_load((DATA / "trust.yaml").read_text())
+    return yaml.safe_load((DATA / "trust.yaml").read_text(encoding="utf-8-sig"))
 
 
 MAPPING = ROOT / "config" / "mapping.yaml"  # shared portal steps (tracked); personal values live in data/trust.yaml
 
 
 def load_mapping():
-    return yaml.safe_load(MAPPING.read_text())
+    return yaml.safe_load(MAPPING.read_text(encoding="utf-8-sig"))
 
 
 # ---------- Queue ----------
@@ -63,7 +63,8 @@ COLS = ["caliber", "serial_number", "status", "application_number"]
 
 
 def load_rows():
-    rows = list(csv.DictReader(SUPP.open()))
+    with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
+        rows = list(csv.DictReader(f))
     for r in rows:
         r["status"] = (r.get("status") or "").strip().lower()
         r["application_number"] = r.get("application_number") or ""
@@ -72,7 +73,7 @@ def load_rows():
 
 def save_rows(rows):
     tmp = SUPP.with_suffix(".csv.tmp")  # write-then-rename so a crash can't leave a half-written queue
-    with tmp.open("w", newline="") as f:
+    with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -84,7 +85,7 @@ def log_submission(item, num):
     OUT.mkdir(exist_ok=True)
     log = OUT / "submissions.csv"
     new = not log.exists()
-    with log.open("a", newline="") as f:
+    with log.open("a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if new:
             w.writerow(["timestamp", "serial_number", "caliber", "application_number"])
@@ -209,24 +210,24 @@ def _find_value_box(page, key):
             return official[0]["bbox"]
         sys.exit("Could not find the CLEO official's name/title (item 5) on forms/5320.23.pdf. "
                  "Was it made with the 5320.23 generator?")
-    word = {"4d": "Caliber", "4e": "Serial Number", "date": "Date", "cleo": "Title of Official"}[key]
+    word = {"4d": "Caliber", "4e": "Serial Number", "date": "Date"}[key]
     hits = page.search_for(word)
     if not hits:
         sys.exit(f"label for {key} not found")
-    label = hits[-1] if key in ("date", "cleo") else hits[0]
-    best = None
-    for blk in page.get_text("dict")["blocks"]:
-        for ln in blk.get("lines", []):
-            for sp in ln["spans"]:
-                r = sp["bbox"]
-                if "Nimbus" not in sp["font"] or not sp["text"].strip() or abs(r[0] - label.x0) > (40 if key != "cleo" else 80):
-                    continue
-                dy = (label.y0 - r[3]) if key in ("date", "cleo") else (r[1] - label.y1)
-                if 0 <= dy < 30 and (best is None or dy < best[0]):
-                    best = (dy, r)
-    if not best:
-        sys.exit(f"could not locate existing value for {key}")
-    return best[1]
+    spans = [sp for blk in page.get_text("dict")["blocks"] for ln in blk.get("lines", []) for sp in ln["spans"]
+             if "Nimbus" in sp["font"] and sp["text"].strip()]
+    for label in hits:  # a label can occur more than once (the blank form has a 2nd "Date"): use the one with a value
+        best = None
+        for sp in spans:
+            r = sp["bbox"]
+            if abs(r[0] - label.x0) > 40:
+                continue
+            dy = (label.y0 - r[3]) if key == "date" else (r[1] - label.y1)  # date sits above its label, 4d/4e below
+            if 0 <= dy < 30 and (best is None or dy < best[0]):
+                best = (dy, r)
+        if best:
+            return best[1]
+    sys.exit(f"could not locate existing value for {key}")
 
 
 US_STATES = {"AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
@@ -341,7 +342,7 @@ def _capture_loop(page, save_to=None):
         d = _dump_page(page)
         print(json.dumps(d, indent=1))
         if save_to:
-            with open(save_to, "a") as f:
+            with open(save_to, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"ts": datetime.now().isoformat(), **d}) + "\n")
 
 

@@ -3,8 +3,9 @@
 set -e
 cd "$(dirname "$0")"
 
-PY=""
-for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+# ATF_PYTHON (optional) picks a specific Python, e.g. for testing; otherwise the newest 3.9+ is used
+PY="${ATF_PYTHON:-}"
+[ -n "$PY" ] || for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
   if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
     PY="$c"; break
   fi

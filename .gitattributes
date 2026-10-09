@@ -1,0 +1,7 @@
+# Each launcher keeps the line endings its platform needs, whatever OS checks it out.
+*.cmd     text eol=crlf
+*.sh      text eol=lf
+atf       text eol=lf
+*.py      text eol=lf
+*.yaml    text eol=lf
+*.pdf     binary

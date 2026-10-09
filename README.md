@@ -9,7 +9,7 @@ your PIN for every submission.
 > Review what it fills, check ATF's eForms terms of use, and stop if anything looks wrong. It never asks for, stores or
 > types your password, SSN, emailed code or PIN.
 
-Currently supports: one trust, one responsible person, suppressors (Form 1), on a Mac.
+Currently supports: one trust, one responsible person, suppressors (Form 1), on a Mac or Windows PC.
 
 ## Before you start
 - An eForms account, your trust document (PDF), your fingerprint file (`.eft`), and a photo of you (JPG/PNG;
@@ -45,16 +45,29 @@ set. Before your first filing, look at one result: Advanced > Regenerate a 5320.
 - Remake it whenever something on it changes: your address, the model, the CLEO agency or address. (A new official
   at the same agency only needs Settings: the helper stamps the current official's name on every copy.)
 
+## Get it
+- **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):
+  `git clone https://github.com/SK360/eforms-form1.git` and later `git pull` (in that folder) to update.
+- **Without Git:** on the repository page (you need to be added as a collaborator and logged in to GitHub):
+  Code > Download ZIP, then unzip it. To update, download it again and copy your `data`, `forms` and `out`
+  folders into the new copy.
+
 ## Install (once)
+It needs Python 3.9 or newer.
+
+**Mac** (Terminal, in the folder; macOS offers to install Python the first time if needed):
 ```bash
 ./install.sh
 ```
-It needs Python 3.9 or newer (macOS offers to install it the first time; otherwise https://www.python.org/downloads/).
+**Windows** (in the folder, right-click > Open in Terminal). First install Python from
+https://www.python.org/downloads/ and tick **"Add python.exe to PATH"**. Then:
+```
+.\install.cmd
+```
 
 ## Use
-```bash
-./atf
-```
+Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
+
 The first run asks for your trust, CLEO and file details (Settings; change them any time). Then:
 
 - **Add suppressors**: suggests the next serial and your last caliber; Enter accepts.
@@ -76,4 +89,5 @@ never committed. **Never zip or copy this folder to share it**; share the git re
 - "Another user is logged in": a previous run didn't log out; wait ~15-30 min or log out in the other browser.
 - A step fails: the browser stays open on that page; press Enter to log out. Check the eForms dashboard before filing
   that serial again. If ATF changed the site, the selectors in `config/mapping.yaml` need updating (see CLAUDE.md).
-- The plain command line is still underneath: `./atf fill-form1 --help`.
+- The plain command line is still underneath: `./atf fill-form1 --help` (Windows: `.\atf.cmd fill-form1 --help`).
+- Windows: if a step says a file is in use, close `suppressors.csv` in Excel and try again.

@@ -7,7 +7,9 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
 (gitignored) if present.
 
 ## How a user runs it
-- **Setup:** `./install.sh` (Mac: finds Python 3.9+, makes `.venv`, installs requirements + Chromium), then `./atf`.
+- **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd` (find Python 3.9+ or use `ATF_PYTHON`, make `.venv`,
+  install requirements + Chromium); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
+  open the extensionless `atf` shell script as a document).
   First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files) -> `data/trust.yaml`.
 - **Normal use:** `./atf` -> Add suppressors -> File N queued. The menu stamps the 5320.23s (dated today), asks once
   per batch whether to pause for the SSN, shows one confirmation (= "I affirm" + authorization to Sign & Submit),
@@ -53,7 +55,13 @@ plain CLI, kept for debugging/scripting:
 - **Screenshot-safe menu (users share screenshots):** no trust name anywhere in `ui.py`; application numbers shown as
   last 4 digits (`short()`); `expect` steps with `private: true` (the trust name) show only matches/differs.
   Full values stay in the CSVs and the plain CLI output. Keep it that way when adding screens.
-- Tests were run from a session scratchpad against a mock portal, not kept in the repo.
+- **Tests:** `tests/` (pytest), all on FAKE data: sandboxed folders, `tests/fixtures/fake_5320.pdf` (ATF's blank form
+  + made-up answers in the generator's font/positions, incl. a fake SSN that must never be read; rebuild with
+  `tests/fixtures/make_fake_5320.py`), a fake portal page in headless Chromium, scripted questionary answers.
+  Run `.venv/bin/python -m pytest -q` (pip install pytest). CI: `.github/workflows/tests.yml` installs via
+  install.cmd/install.sh and runs them on Windows (Python 3.9 + 3.13) and Linux on every push to main.
+- Cross-platform: all text files are read/written as UTF-8 (reads tolerate Excel's BOM); `_clean_path` unescapes
+  `\ ` only off Windows; `.gitattributes` keeps `.cmd` CRLF and shell scripts LF.
 
 ## What is automated vs. manual
 Automated: applicant pages, responsible-person popup (uploads of 5320.23/photo/EFT, DOB, birth/residence,
@@ -116,6 +124,8 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 - **5320.23 stamping:** the template is flattened (no form fields). `stamp_5320` redacts the old typed text and inserts
   new text at the same spot (located by label/known text). Photo and signature image are untouched. The signature
   date is just stamped text (a pre-existing signature image stays); each signer decides whether that's acceptable.
+- **Signature-date spot:** the blank form has a second "Date" label lower on page 2; the stamper tries each "Date"
+  label and uses the one with a typed date just above it (generator output may only have one).
 - `fill-form1` finds the PDF by **serial** (`out/5320.23_<serial>.pdf`, or the older `5320.23_<row>_<serial>.pdf`,
   newest if several). `stamp_5320` re-reads each PDF it writes and flags any value not found.
 - **CLEO details** live only in `data/trust.yaml`. The stamper replaces the template's item-5 official line with
@@ -135,7 +145,8 @@ prints steps without a browser. `--capture` records screens after the automated 
 - Early test drafts may remain in the eForms dashboard (auto-delete after 90 days); not submissions.
 - One responsible person only (first entry in trust.yaml); additional RPs need new steps captured live (`[id='1Edit']`?).
 - Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
-- Mac install script only; Windows untested.
+- Windows: install/launcher/tests verified on GitHub's Windows runners; not yet used on a real Windows PC against the
+  live portal. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
 - Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);
   reusing eForms "Saved Line items".
 - Legal: each submission is a certification under 18 U.S.C. 924 / 26 U.S.C. 5861 by the user. Check ATF's eForms

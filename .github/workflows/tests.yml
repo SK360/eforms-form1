@@ -1,0 +1,59 @@
+# Installs the helper the way a user would and runs the test suite (fake data + a fake portal; never eforms.atf.gov).
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, python: "3.9"}    # oldest supported
+          - {os: windows-latest, python: "3.13"}
+          - {os: ubuntu-latest, python: "3.13"}
+    env:
+      ATF_PYTHON: python   # make the installer use the matrix Python (users don't need this)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install (Windows, as a user would)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: install.cmd
+      - name: Launcher works from Command Prompt and PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmd /c "atf.cmd fill-form1 --help"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\atf.cmd fill-form1 --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\.venv\Scripts\python.exe --version
+      - name: Tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip install --quiet pytest
+          .\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+
+      - name: Install (Linux)
+        if: runner.os != 'Windows'
+        run: |
+          ./install.sh
+          .venv/bin/python -m playwright install-deps chromium
+          ./atf fill-form1 --help
+      - name: Tests (Linux)
+        if: runner.os != 'Windows'
+        run: |
+          .venv/bin/python -m pip install --quiet pytest
+          .venv/bin/python -m pytest -q -p no:cacheprovider

@@ -343,8 +343,10 @@ def _date(s):
 
 
 def _clean_path(s):
-    """Paths dragged into Terminal arrive quoted or with escaped spaces."""
-    s = s.strip().strip("'\"").replace("\\ ", " ")
+    """Paths dragged into a terminal arrive quoted (both OSes) or with escaped spaces (macOS/Linux)."""
+    s = s.strip().strip("'\"")
+    if os.name != "nt":  # on Windows a backslash is a path separator, never an escape
+        s = s.replace("\\ ", " ")
     return str(Path(s).expanduser()) if s else ""
 
 
@@ -380,7 +382,7 @@ def _check_template():
 
 def settings_flow(first=False):
     path = atf.DATA / "trust.yaml"
-    t = yaml.safe_load(path.read_text()) if path.exists() else {}
+    t = yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     if first:
         con.print(Panel("[bold]Welcome.[/] This sets up your trust's details once; you can change them later in Settings.\n\n"
                         + escape(DISCLAIMER), title="eForms Form 1 helper", border_style="cyan", expand=False))
@@ -473,7 +475,7 @@ def settings_flow(first=False):
         atf.FORMS.mkdir(exist_ok=True)
         tpl.write_bytes(new_tpl.read_bytes())
     path.write_text("# Your settings (personal; data/ is never shared). Edit via ./atf > Settings.\n"
-                    + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200))
+                    + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200), encoding="utf-8")
     if not atf.SUPP.exists():
         atf.save_rows([])
     probs = atf.settings_problems(t) + _check_template()
