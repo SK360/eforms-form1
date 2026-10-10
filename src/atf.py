@@ -540,7 +540,36 @@ def _logout(page):
         page.wait_for_timeout(1500)
         emit("info", "Logged out of eForms.")
     except Exception:
-        emit("warn", "Could not find a Log Out link; log out manually in the browser before closing it.")
+        if _on_login_page(page):
+            emit("info", "Not logged in to eForms, so there was nothing to log out of.")
+        else:
+            emit("warn", "Could not find a Log Out link; log out manually in the browser before closing it.")
+
+
+def _on_login_page(page):
+    try:
+        return "/adfs/" in page.url.lower() or "login" in page.url.lower()
+    except Exception:
+        return False
+
+
+def _wait_for_login(page, prompt):
+    """Ask the user to log in and press Enter; go on only once the browser shows a logged-in eForms page (one with a
+    Log Out link). Pressing Enter while still on the ATF login page used to end in a 30 s timeout and a traceback.
+    Another tab of the same browser that is logged in is used instead. Returns the page to use; q stops."""
+    while True:
+        if ask(prompt).strip().lower() == "q":
+            raise SystemExit("Stopped before anything was done on eForms.")
+        for tab in [page] + [t for t in page.context.pages if t is not page]:
+            try:
+                tab.get_by_text("Log Out", exact=False).first.wait_for(state="attached", timeout=5000 if tab is page else 500)
+                if tab is not page:
+                    tab.bring_to_front()
+                return tab
+            except Exception:
+                pass
+        emit("warn", "The browser isn't logged in to eForms yet" + (" (it's still on the ATF login page)" if _on_login_page(page) else "")
+             + ". Finish logging in, MFA included, until your eForms home page shows, then press Enter (or type q to stop).")
 
 
 def _tick(page, selector):
@@ -562,7 +591,7 @@ def _tick(page, selector):
 def _submit(page, item, bad, rows, idx, length=""):
     """Opt-in: tick the certification and click Sign & Submit. You still enter the emailed code and your PIN."""
     if bad:
-        emit("error", "*** NOT submitting: read-back mismatches above. ***"); return
+        emit("error", "*** NOT submitting: see the problem(s) above. ***"); return
     # Read-back above was clean: tick the verify box and move to the Certify page, where validation is reported.
     emit("section", "--- Certify ---", name="Certify")
     _tick(page, "#binary")
@@ -811,7 +840,7 @@ def fetch_approved():
     found, problems = [], []
     pw, ctx, page = _browser()
     try:
-        ask("Log in (MFA included) and wait for the eForms home page, then press Enter. From here the script only reads... ")
+        page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter. From here the script only reads... ")
         emit("section", "--- Searching approved Form 1s ---", name="Searching approved Form 1s")
         total, rows = _approved_results(page)
         pages = -(-total // max(len(rows), 1))
@@ -1085,24 +1114,41 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
                  label=s.get("label", sel), want=val, got=got, ok=ok, private=s.get("private", False))
             if not ok:
                 bad.append((sel, val, got))
-        elif act == "dismiss_dialog":  # print any open dialog's text (so warnings stay visible), then click its OK
-            page.wait_for_timeout(int(val or 1500))
-            dlgs = _dump_page(page).get("dialogs", [])
-            if not dlgs:
-                emit("info", "    (no dialog appeared)")
-            for t in dlgs:
-                emit("info", f"    DIALOG: {t[:400]}")
+        elif act == "dismiss_dialog":  # print the dialog's text (so warnings stay visible), then click its OK
             need = s.get("require")  # e.g. "Valid EBTS Package": anything else blocks --submit
-            if need and not any(_token_match(need, t) for t in dlgs):
-                emit("error", f"    !! no dialog says {need!r}: this application will NOT be submitted")
-                bad.append(("dialog", need, " | ".join(t[:120] for t in dlgs) or "(no dialog)"))
+            limit = int(val or 1500)
+            if need:
+                # Wait (up to `value` ms) for a dialog saying it. The fingerprint check can take a while (slow
+                # connection, a cloud-only OneDrive file); 1.5 s once wasn't enough. Other open dialogs, such as the
+                # responsible-person form itself, are not this message and are left alone.
+                waited = 0
+                while True:
+                    dlgs = _dump_page(page).get("dialogs", [])
+                    hit = [t for t in dlgs if _token_match(need, t)]
+                    if hit or waited >= limit:
+                        break
+                    page.wait_for_timeout(250)
+                    waited += 250
+                hint = s.get("about", "")  # e.g. "EBTS": also show dialogs mentioning it (an Invalid message)
+                shown = hit or [t for t in dlgs if hint and hint.lower() in t.lower()]
+            else:
+                page.wait_for_timeout(limit)
+                dlgs = shown = hit = _dump_page(page).get("dialogs", [])
+            for t in shown:
+                emit("info", f"    DIALOG: {t[:400]}")
+            if need and not hit:
+                emit("error", f"    !! no dialog said {need!r}" + ("" if shown else f" within {limit // 1000} s")
+                     + ": this application will NOT be submitted")
+                bad.append(("dialog", need, " | ".join(t[:120] for t in shown) or "(no such dialog)"))
+            elif not dlgs:
+                emit("info", "    (no dialog appeared)")
             btn = page.locator(".modal button:visible, [role=dialog] button:visible").filter(
                 has_text=re.compile(r"^\s*(ok|okay)\s*$", re.I))
-            if dlgs and btn.count():
+            if shown and btn.count():
                 btn.first.click()
                 emit("step", "    clicked OK")
-            elif dlgs:
-                emit("warn", "    !! dialog has no OK button I recognise; click it yourself")
+            elif shown:
+                emit("warn", "    !! that message has no OK button I recognise; close just that message yourself")
                 ask("    press Enter when closed... ")
         elif act == "press": page.keyboard.press(val)
         elif act == "wait": page.wait_for_timeout(int(val or 1000))
@@ -1147,7 +1193,7 @@ def _file_one(page, args, trust, steps, rows, idx):
         ask("Browser left open on the failing page. Look at it, then press Enter to log out and close... ")
         sys.exit(1)
     if bad:
-        emit("error", f"\n*** {len(bad)} MISMATCH(ES) (above): DO NOT tick the verification box. ***")
+        emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")
     if args.submit:
         try:
             _submit(page, item, bad, rows, idx, ctx_vals["overall_length"])
@@ -1220,9 +1266,9 @@ def file_rows(rows, todo, args):
     pw, ctx, page = _browser()
     try:
         if portal.get("new_form_steps"):
-            ask("Log in (MFA included) and wait for the eForms home page, then press Enter (the script opens the Form 1)... ")
+            page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter (the script opens the Form 1)... ")
         else:
-            ask("Log in (MFA included), open a NEW Form 1 and stop on the applicant-type page (Trust/Individual choice). Without --auto-affirm, click the \"I affirm\" popup yourself. Then press Enter... ")
+            page = _wait_for_login(page, "Log in (MFA included), open a NEW Form 1 and stop on the applicant-type page (Trust/Individual choice). Without --auto-affirm, click the \"I affirm\" popup yourself. Then press Enter... ")
         for n, idx in enumerate(todo):
             if not _start_form(page, portal, args, rows[idx]["serial_number"], first=not n):
                 break

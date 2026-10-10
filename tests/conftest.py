@@ -5,6 +5,7 @@ Run:  .venv/bin/python -m pytest -q        (Windows: .venv\\Scripts\\python -m p
 """
 import builtins
 import io
+import re
 import shutil
 import sys
 from datetime import date
@@ -153,7 +154,7 @@ FORM = """<div class="modal" id="aff"><button id="closeModalBtn" onclick="this.p
 PORTAL_STEPS = [  # a miniature of config/mapping.yaml's steps, for the fake portal
     {"action": "section", "value": "Applicant type"}, {"selector": "#Trust", "action": "check"},
     {"action": "section", "value": "Responsible person"},
-    {"action": "dismiss_dialog", "value": "300", "require": "Valid EBTS Package"},
+    {"action": "dismiss_dialog", "value": "3000", "require": "Valid EBTS Package", "about": "EBTS"},
     {"action": "section", "value": "Read-back check"},
     {"selector": "#serialNumberMessage", "action": "expect", "label": "Serial number", "value": "{serial_number}"},
     {"selector": "#caliber", "action": "expect", "label": "Caliber", "value": "{caliber}"},
@@ -174,13 +175,24 @@ def portal(monkeypatch):
     logout = atf._logout
 
     def tracked_logout(page):
+        state["rp_clicked"] = page.evaluate("window.rpClicked || 0")  # read before the browser closes
         logout(page)
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(serials, ebts="Valid EBTS Package", shown_caliber=None, confirm=True, link=True, start_home=True):
+    def configure(serials, ebts="Valid EBTS Package", shown_caliber=None, confirm=True, link=True, start_home=True,
+                  ebts_delay=0, rp_form=False):
+        """ebts=None: no fingerprint message at all; ebts_delay: ms before it shows; rp_form: the responsible-person
+        form (Save & Close / Cancel) is open as a dialog too, like the real portal."""
         confirm_js = "setTimeout(()=>document.getElementById('done').style.display='block',200)" if confirm else ""
-        form = FORM.replace("EBTS", ebts).replace("CONFIRM", confirm_js)
+        form = FORM.replace("CONFIRM", confirm_js)
+        if ebts is None:
+            form = re.sub(r'<div class="modal" id="ebts">.*?</div>\n', "", form)
+        else:
+            form = form.replace("EBTS", ebts)
+        if rp_form:
+            form = ('<div class="modal" id="rp">Add Responsible Person *Citizenship *First Name *Form 5320.23 '
+                    '<button onclick="window.rpClicked=1">Save &amp; Close</button><button onclick="window.rpClicked=1">Cancel</button></div>\n' + form)
 
         def browser():
             pw = sync_playwright().start()
@@ -189,14 +201,16 @@ def portal(monkeypatch):
             ctx.set_default_timeout(3000)  # the fake portal is instant; a missing element should fail fast
             page = ctx.new_page()
             page.set_content("<a href='#' onclick=\"document.title='LOGGEDOUT'\">Log Out</a><div id=app></div>")
-            page.evaluate("""([form, serials, cal, link, startHome]) => {
+            page.evaluate("""([form, serials, cal, link, startHome, delay]) => {
               window.forms = 0;
               window.home = () => { document.getElementById('app').innerHTML = link ?
                   '<a id="FORM53201LinkId" href="#" onclick="newForm();return false">ATF Form 1 (5320.1)</a>' : '<p>home</p>'; };
               window.newForm = () => { const s = serials[window.forms++];
                   document.getElementById('app').innerHTML = form.replace('SERIAL', s[0]).replace('CAL', cal || s[1])
-                      .replace('APPNO', '90000000' + window.forms); };
-              startHome ? home() : newForm(); }""", [form, [list(s) for s in serials], shown_caliber, link, start_home])
+                      .replace('APPNO', '90000000' + window.forms);
+                  const e = document.getElementById('ebts');
+                  if (e && delay) { e.style.display = 'none'; setTimeout(() => e.style.display = 'block', delay); } };
+              startHome ? home() : newForm(); }""", [form, [list(s) for s in serials], shown_caliber, link, start_home, ebts_delay])
             state["page"] = page
             return pw, ctx, page
         monkeypatch.setattr(atf, "_browser", browser)

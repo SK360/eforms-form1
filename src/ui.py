@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -800,6 +801,18 @@ def menu():
         except KeyboardInterrupt:
             P.finish()
             con.print("\n  [yellow]Stopped.[/]")
+            pause()
+        except Exception as e:  # anything unexpected: a short message, the details in a file, and back to the menu
+            P.finish()
+            log = atf.OUT / "last_error.txt"
+            try:
+                atf.OUT.mkdir(parents=True, exist_ok=True)
+                log.write_text(f"{datetime.now():%Y-%m-%d %H:%M:%S}\n{traceback.format_exc()}", encoding="utf-8")
+                where = f" Details: {log} (it can contain your serials; share it only with someone helping you)."
+            except Exception:
+                where = ""
+            con.print(f"  [bold red]✖ Something went wrong: {escape(str(e).splitlines()[0] if str(e) else type(e).__name__)}[/]")
+            con.print(f"  [dim]Any browser it opened has been closed; the lines above say whether it logged out.{escape(where)}[/]")
             pause()
 
 

@@ -36,6 +36,28 @@ def test_check_failure_blocks_submit(configured, portal, kind, kw):
     assert rows[0]["status"] == "" and state["logged_out"], kind
 
 
+def test_waits_for_a_slow_fingerprint_check(configured, portal, monkeypatch):
+    """The 'Valid EBTS Package' message can take seconds to show (it once missed a fixed 1.5 s wait). The
+    responsible-person form, open as a dialog too, is not that message: nothing in it is clicked, nothing is asked."""
+    queue(("S1", "9"))
+    state = portal([("S1", "9")], ebts_delay=1500, rp_form=True)
+    prompts = []
+    monkeypatch.setattr(builtins, "input", lambda msg="": prompts.append(msg) or "")
+    rows = file_all()
+    assert rows[0]["status"] == "filed" and state["logged_out"] and not state["rp_clicked"]
+    assert not any("closed" in p for p in prompts)
+
+
+def test_no_fingerprint_message_blocks_submit(configured, portal, monkeypatch):
+    queue(("S1", "9"))
+    state = portal([("S1", "9")], ebts=None, rp_form=True)
+    prompts = []
+    monkeypatch.setattr(builtins, "input", lambda msg="": prompts.append(msg) or "")
+    assert file_all()[0]["status"] == "" and state["logged_out"]
+    assert not any("closed" in p for p in prompts)                 # never told to close the responsible-person form
+    assert not state["rp_clicked"]
+
+
 def test_missing_confirmation_leaves_row_pending(configured, portal):
     queue(("S1", "9"))
     state = portal([("S1", "9")], confirm=False)

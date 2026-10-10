@@ -147,6 +147,10 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   share the git repo.
 
 ## Gotchas learned (read before debugging)
+- **Login wait:** after "log in, then press Enter", `_wait_for_login()` only goes on once a tab shows a Log Out link
+  (eForms logs in through app.atf.gov/adfs; pressing Enter there used to time out on `#form-type-search` with a
+  traceback). It warns and asks again; q stops. The menu turns any unexpected error into one red line plus
+  `out/last_error.txt` (traceback) and returns to the menu.
 - **Selectors:** IDs starting with a digit are invalid CSS: use `[id='0Edit']`, not `#0Edit`.
 - **Hidden checkboxes:** the portal hides real inputs behind styled labels; `_tick()` falls back to the label/DOM click.
   The `check` action uses it. Playwright's plain `.check()` times out here.
@@ -156,7 +160,11 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   "White" option text has been verified live; other races in the wizard list are the standard category names.
 - **Photo:** eForms requires a photo for the responsible person (`#photoFile`); the 5320.23 PDF itself doesn't need one.
 - **Fingerprint popup:** attaching the EFT opens an info dialog ("Valid EBTS Package", Ok); the `dismiss_dialog` step
-  prints its text and clicks Ok. If it doesn't say Valid, submitting is refused (see `require`); look at it.
+  WAITS (up to 60 s, `value`) for a dialog matching `require`, prints it and clicks Ok. It used to wait a fixed 1.5 s:
+  on the friend's first live run (Windows, folder in OneDrive) the message hadn't appeared yet, the only dialog was the
+  responsible-person form itself (Save & Close / Cancel) and the user was told to "click it yourself". Other dialogs
+  are now ignored (only ones mentioning `about: EBTS` are shown) and the user is never asked to close the RP form.
+  If no Valid message appears, submitting is refused (see `require`); look at it.
 - **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
   barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
 - **Manufacturer code is always `FMI`** for a Form 1 suppressor (fixed in config/mapping.yaml, not a setting).

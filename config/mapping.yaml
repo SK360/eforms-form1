@@ -34,7 +34,8 @@ portal:
     - {selector: "#formFile", action: upload, value: "{form_5320_path}"}  # generated per suppressor
     - {selector: "#photoFile", action: upload, value: "{photo_path}"}   # required by eForms (not needed on the 5320.23 PDF)
     - {selector: "#eftFile", action: upload, value: "{eft_path}"}
-    - {action: dismiss_dialog, value: "1500", require: "Valid EBTS Package"}   # popup after the fingerprint attaches; anything but Valid blocks submitting
+    # popup after the fingerprint attaches: waits up to 60 s for "Valid EBTS Package"; anything else blocks submitting
+    - {action: dismiss_dialog, value: "60000", require: "Valid EBTS Package", about: "EBTS"}
     - {action: pause, tag: ssn, note: "Type your SSN into the SSN field yourself (script never enters it)"}
     - {selector: "#dateOfBirth", action: fill, value: "{rp_dob}"}
     - {selector: "#birthCountry", action: select, value: "UNITED STATES OF AMERICA"}

@@ -148,7 +148,7 @@ def dashboard(monkeypatch):
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(forms):
+    def configure(forms, start="/home"):
         pdfs = {f[0]: f[2] for f in forms}
         html = DASHBOARD % json.dumps([{"id": f[0], "fin": f[1]} for f in forms])
 
@@ -160,6 +160,8 @@ def dashboard(monkeypatch):
             if path.startswith("/clicked/"):
                 state["bad_clicks"].append(path)
                 return r.fulfill(body="")
+            if path.startswith("/adfs/"):  # the ATF login page: no Log Out link, no search form
+                return r.fulfill(body="<h1>Sign in</h1><input id=user><input id=pass type=password>", content_type="text/html")
             return r.fulfill(body=html, content_type="text/html")
 
         def browser():
@@ -168,7 +170,8 @@ def dashboard(monkeypatch):
             ctx.set_default_timeout(5000)
             ctx.route("https://fake.test/**", route)
             page = ctx.new_page()
-            page.goto("https://fake.test/home")
+            page.goto("https://fake.test" + start)
+            state["page"] = page
             return pw, ctx, page
         monkeypatch.setattr(atf, "_browser", browser)
         return state
@@ -221,6 +224,45 @@ def test_check_approvals_end_to_end(configured, dashboard):
     state["pdf_hits"] = 0
     found, problems = atf.fetch_approved()
     assert len(found) == 12 and state["pdf_hits"] == 0 and problems == []
+
+
+def test_waits_until_logged_in(configured, dashboard, monkeypatch):
+    """Enter pressed while still on the ATF login page: warn and ask again (it used to time out with a traceback)."""
+    state = dashboard(FORMS[:1], start="/adfs/ls?SAMLRequest=x")
+    said, prompts = [], []
+    monkeypatch.setattr(atf, "emit", lambda kind, text, **d: said.append((kind, text)))
+
+    def user(prompt):
+        prompts.append(prompt)
+        if len(prompts) == 2:  # the user finishes logging in after the warning
+            state["page"].goto("https://fake.test/home")
+        return ""
+    monkeypatch.setattr(atf, "ask", user)
+    found, problems = atf.fetch_approved()
+    assert len(prompts) == 2 and len(found) == 1 and problems == [] and state["logged_out"]
+    assert any(k == "warn" and "still on the ATF login page" in t for k, t in said)
+
+
+def test_q_at_login_stops_cleanly(configured, dashboard, monkeypatch):
+    dashboard(FORMS[:1], start="/adfs/ls?SAMLRequest=x")
+    said, answers_ = [], iter(["", "q"])
+    monkeypatch.setattr(atf, "emit", lambda kind, text, **d: said.append((kind, text)))
+    monkeypatch.setattr(atf, "ask", lambda prompt: next(answers_))
+    with pytest.raises(SystemExit, match="Stopped before anything was done"):
+        atf.fetch_approved()
+    assert ("info", "Not logged in to eForms, so there was nothing to log out of.") in said
+    assert not any("log out manually" in t for _, t in said)
+
+
+def test_menu_survives_an_unexpected_error(configured, answers, screen, monkeypatch):
+    def boom():
+        raise RuntimeError("Locator.select_option: Timeout 30000ms exceeded.\nCall log: ...")
+    monkeypatch.setattr(atf, "fetch_approved", boom)
+    answers(pick("Check approvals"), True, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert "Something went wrong: Locator.select_option: Timeout 30000ms exceeded." in out and "Traceback" not in out
+    assert "RuntimeError" in (atf.OUT / "last_error.txt").read_text(encoding="utf-8")
 
 
 def test_pending_row_is_resolved_by_an_approval(configured, tmp_path):
