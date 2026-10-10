@@ -53,14 +53,17 @@ set. Before your first filing, look at one result: Advanced > Regenerate a 5320.
   folders into the new copy.
 
 ## Install (once)
-It needs Python 3.9 or newer.
+It needs Python 3.9 to 3.14 (3.13 recommended). A brand-new Python such as 3.15 doesn't have ready-built copies
+of all the packages yet; the installer skips it and asks you to add 3.13 next to it.
 
 **Mac** (Terminal, in the folder; macOS offers to install Python the first time if needed):
 ```bash
 ./install.sh
 ```
-**Windows** (in the folder, right-click > Open in Terminal). First install Python from
-https://www.python.org/downloads/ and tick **"Add python.exe to PATH"**. Then:
+**Windows** (in the folder, right-click > Open in Terminal). First install Python 3.13: run `py install 3.13`
+if you have the Python install manager, or download 3.13 from https://www.python.org/downloads/windows/ and tick
+**"Add python.exe to PATH"**. Keep the folder outside OneDrive/Dropbox (e.g. `C:\Users\<you>\eforms-form1`): it holds
+your personal records and a large browser profile that shouldn't sync. Then:
 ```
 .\install.cmd
 ```

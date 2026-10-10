@@ -7,7 +7,9 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
 (gitignored) if present.
 
 ## How a user runs it
-- **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd` (find Python 3.9+ or use `ATF_PYTHON`, make `.venv`,
+- **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd` (pick Python 3.9-3.14, preferring 3.13, or `ATF_PYTHON`; a
+  brand-new Python like 3.15 is refused because PyYAML etc. had no Windows wheels yet and pip wanted a C++ compiler;
+  a `.venv` from another Python is rebuilt; make `.venv`,
   install requirements + Chromium); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
   open the extensionless `atf` shell script as a document).
   First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files) -> `data/trust.yaml`.

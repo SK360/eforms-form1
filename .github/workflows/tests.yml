@@ -17,6 +17,7 @@ jobs:
         include:
           - {os: windows-latest, python: "3.9"}    # oldest supported
           - {os: windows-latest, python: "3.13"}
+          - {os: windows-latest, python: "3.14"}   # newest supported
           - {os: ubuntu-latest, python: "3.13"}
     env:
       ATF_PYTHON: python   # make the installer use the matrix Python (users don't need this)
@@ -39,6 +40,17 @@ jobs:
           .\atf.cmd fill-form1 --help
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\.venv\Scripts\python.exe --version
+      - name: Installer picks a supported Python by itself (no ATF_PYTHON), rebuilding a .venv from another one
+        if: runner.os == 'Windows' && matrix.python == '3.13'
+        shell: cmd
+        run: |
+          set ATF_PYTHON=
+          py -0
+          git clone -q . "%RUNNER_TEMP%\pick" || exit /b 1
+          cd /d "%RUNNER_TEMP%\pick"
+          python -m venv .venv || exit /b 1
+          call install.cmd || exit /b 1
+          .venv\Scripts\python.exe -c "import sys, yaml, fitz, playwright; print(sys.version); sys.exit(0 if (3, 9) <= sys.version_info[:2] <= (3, 14) else 1)"
       - name: Tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
