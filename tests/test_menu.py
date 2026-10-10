@@ -218,7 +218,7 @@ def _sbrs():
     atf.save_sbrs([{"serial_number": "R2", "caliber": "5.56", "model": "X15", "barrel_length": "10.5", "overall_length": "26",
                     "approved_date": "09/13/2026", "eform_id": "1000020", "control_number": "", "conditions": ""},
                    {"serial_number": "R10", "caliber": "300", "model": "Y9", "barrel_length": "8", "overall_length": "24",
-                    "approved_date": "09/14/2026", "eform_id": "1000021", "control_number": "", "conditions": ""}])
+                    "approved_date": "09/14/2026", "eform_id": "1000021", "control_number": "", "conditions": "MARK IT"}])
 
 
 def test_sbr_inventory_view_and_summary(configured, answers, screen):
@@ -228,8 +228,11 @@ def test_sbr_inventory_view_and_summary(configured, answers, screen):
     ui.menu()
     out = screen.getvalue()
     view = out.split("Inventory · SBRs (2)")[1].split("eForms Form 1")[0]
-    assert view.index("R2") < view.index("R10") and "10.5" in view and "X15" in view and "…0021" in view
+    assert view.index("R2") < view.index("R10") and "10.5" in view and "X15" in view and "eForm …0021" in view
     assert "T11" not in view                                                                    # suppressors not in this view
+    assert view.count("✔ approved") == 2 and "2 SBRs · 2 approved" in view                     # same look as suppressors
+    assert "suppressors ·" not in view                                                          # its own summary line
+    assert "⚠ approved with conditions: R10" in view and "data/sbrs.csv" in view
     assert "· 2 SBRs" in out
 
 

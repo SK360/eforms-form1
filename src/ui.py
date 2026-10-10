@@ -177,14 +177,21 @@ def inventory_table(rows, title):
 
 
 def sbr_table(rows, title):
-    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="magenta")
-    for col in ("Serial", "Caliber", "Model", "Barrel", "Overall", "Approved", "eForm"):
+    """Same look as the suppressor inventory; SBRs add Model and Barrel. They come only from approvals (always approved,
+    no filed date), so there is no Filed or waiting column."""
+    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
+    for col in ("Serial", "Caliber", "Model", "Barrel", "Length", "Status", "Approved", "eForm"):
         t.add_column(col)
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
         t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["model"]), escape(r["barrel_length"]),
-                  escape(r["overall_length"]), escape(r["approved_date"]) + (" [yellow]⚠ conditions[/]" if r["conditions"] else ""),
-                  escape(short(r["eform_id"])))
+                  escape(r["overall_length"]), STATUS["approved"],
+                  escape(r["approved_date"]) + (" [yellow]⚠ conditions[/]" if r["conditions"] else ""),
+                  f"eForm {escape(short(r['eform_id']))}" if r["eform_id"] else "")
     return t
+
+
+def sbr_summary(sbrs):
+    return f"[bold]{len(sbrs)}[/] SBR{'s' if len(sbrs) != 1 else ''} · [green]{len(sbrs)} approved[/]"
 
 
 def inventory_flow():
@@ -197,15 +204,17 @@ def inventory_flow():
         if view == "sbrs":
             sbrs = atf.load_sbrs()
             con.print(sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
-            shown = []
+            con.print(f"  {sbr_summary(sbrs)}")
+            cond, where = [r["serial_number"] for r in sbrs if r["conditions"]], "data/sbrs.csv"
         else:
             name, keep = filters[view]
             shown = [r for r in rows if keep(r)]
             con.print(inventory_table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
-        con.print(f"  {summary(rows)}")
-        cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
+            con.print(f"  {summary(rows)}")
+            cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
+            where = "data/suppressors.csv"
         if cond:
-            con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in data/suppressors.csv)[/]")
+            con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in {where})[/]")
         choices = [questionary.Choice(f"Show {label.lower()}", key) for key, (label, _) in filters.items() if key != view]
         if view != "sbrs" and atf.load_sbrs():
             choices.append(questionary.Choice("Show SBRs", "sbrs"))
