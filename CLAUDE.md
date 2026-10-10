@@ -51,6 +51,12 @@ plain CLI, kept for debugging/scripting:
   one), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
   order); sorting happens ONLY there (never during filing: file_rows holds row indices). out/submissions.csv stays a
   write-only filing log. There is no approved.csv any more.
+- **`data/sbrs.csv` = SBR inventory** (`SBR_COLS`): approved short-barreled rifles (type contains RIFLE), filled by
+  `record_sbrs()` from Check approvals (keyed by eForm ID; no duplicates); never filed or queued by this tool.
+  Path via `_sbrs_path()` (resolved at call time so tests' sandbox redirects it). Inventory > Show SBRs, Excel sheet.
+- **Tests must never touch the real `data/`:** the `sandbox` fixture asserts the real data/ folder is unchanged after
+  each test (a module-level path once leaked fake rows into data/sbrs.csv). New paths under DATA/OUT/FORMS must be
+  looked up at call time or patched in conftest.
 - `data/trust.yaml` (personal): see `examples/trust.example.yaml`. `REQUIRED` + `settings_problems()` in atf.py list
   what must be set; filing refuses to start until it's complete.
 - `src/atf.py` engine: `stamp_5320(row, when, out_dir)`, `file_rows(rows, todo, opts)` (prechecks, browser, per-row

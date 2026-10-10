@@ -211,7 +211,11 @@ def test_check_approvals_end_to_end(configured, dashboard):
     assert updated == [] and sorted(added) == sorted(f"OLD{n}" for n in range(6, 13))
     order = [r["serial_number"] for r in atf.load_rows()]
     assert order == [f"OLD{n}" for n in range(6, 13)] + ["T201", "T202", "T203", "T204", "T205"]   # natural serial order
-    assert not any(s.startswith("R") for s in order)                                               # SBRs not inventoried
+    assert not any(s.startswith("R") for s in order)                                               # SBRs not in suppressors.csv
+    assert atf.record_sbrs(records) == 2 and atf.record_sbrs(records) == 0                         # SBR inventory, no duplicates
+    sbrs = atf.load_sbrs()
+    assert [(r["serial_number"], r["caliber"], r["barrel_length"], r["overall_length"], r["approved_date"]) for r in sbrs] == [
+        ("R1", "5.56", "10.5", "26", "08/15/2026"), ("R2", "5.56", "10.5", "26", "08/15/2026")]
 
     # second run: everything is already saved, nothing is downloaded again
     state["pdf_hits"] = 0
@@ -241,7 +245,7 @@ def test_menu_shows_the_report(configured, dashboard, answers, screen):
     ui.menu()
     out = screen.getvalue()
     assert "Inventory updated: 1 approval(s) recorded, 2 suppressor(s) added" in out
-    for shown in ("5 approved Form 1s", "3 suppressor(s)", "2 short barreled rifle", "Approved, matches your records (1)",
+    for shown in ("5 approved Form 1s", "3 suppressor(s), 2 SBR(s)", "SBR inventory: 2 added", "Approved, matches your records (1)",
                   "Approved, NOT in your records (2)", "Filed, not approved yet: 1", "T204"):
         assert shown in out, shown
     assert "DOE" not in out.upper()

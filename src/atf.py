@@ -163,6 +163,66 @@ def _token_match(want, got):
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(str(want).strip())}(?![A-Za-z0-9])", got or "", re.I) is not None
 
 
+# ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
+def _sbrs_path():  # looked up when used (not at import), so it always follows DATA
+    return DATA / "sbrs.csv"
+
+
+SBR_COLS = ["serial_number", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
+            "control_number", "conditions"]
+
+
+def is_sbr(record):
+    return "RIFLE" in (record.get("type") or "").upper()
+
+
+def load_sbrs():
+    if not _sbrs_path().exists():
+        return []
+    with _sbrs_path().open(newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        for c in SBR_COLS:
+            r[c] = (r.get(c) or "").strip()
+    return rows
+
+
+def save_sbrs(rows):
+    tmp = _sbrs_path().with_suffix(".csv.tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=SBR_COLS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(sorted(rows, key=lambda r: serial_key(r["serial_number"])))
+    tmp.replace(_sbrs_path())
+
+
+def record_sbrs(records):
+    """Add/refresh approved SBRs in data/sbrs.csv (keyed by eForm ID, else serial). Returns how many were added."""
+    rows = load_sbrs()
+    key = lambda r: r["eform_id"] or r["serial_number"].upper()  # noqa: E731
+    by = {key(r): r for r in rows}
+    added, changed = 0, False
+    for rec in records:
+        if not is_sbr(rec) or not rec["approved"] or not rec["serial"].strip():
+            continue
+        new = {"serial_number": rec["serial"].strip(), "caliber": rec["caliber"], "model": rec["model"],
+               "barrel_length": rec["barrel_length"], "overall_length": rec["overall_length"],
+               "approved_date": rec["approval_date"], "eform_id": rec["eform_id"],
+               "control_number": rec.get("control_number", ""), "conditions": rec.get("conditions", "")}
+        old = by.get(key(new))
+        if old is None:
+            rows.append(new)
+            by[key(new)] = new
+            added += 1
+            changed = True
+        elif any(v and old.get(k) != v for k, v in new.items()):
+            old.update({k: v for k, v in new.items() if v})
+            changed = True
+    if changed:
+        save_sbrs(rows)
+    return added
+
+
 def approved_pdf_for(row):
     """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None."""
     folder = OUT / "approved"
@@ -198,6 +258,22 @@ def export_inventory(dest=None):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
+    sbrs = load_sbrs()
+    if sbrs:
+        cols = [("Serial", "serial_number", 10), ("Caliber", "caliber", 9), ("Model", "model", 14), ("Barrel (in)", "barrel_length", 11),
+                ("Overall (in)", "overall_length", 11), ("Approved", "approved_date", 11), ("Conditions", "conditions", 60),
+                ("eForm ID", "eform_id", 11), ("Control #", "control_number", 14)]
+        ws2 = wb.create_sheet("SBRs")
+        ws2.append([c[0] for c in cols])
+        for row in sorted(sbrs, key=lambda r: serial_key(r["serial_number"])):
+            ws2.append([float(row[c[1]]) if c[1].endswith("length") and re.fullmatch(r"\d+(\.\d+)?", row[c[1]]) else row[c[1]]
+                        for c in cols])
+        for cell in ws2[1]:
+            cell.font = Font(bold=True)
+        for i, (_, _, width) in enumerate(cols, 1):
+            ws2.column_dimensions[ws2.cell(row=1, column=i).column_letter].width = width
+        ws2.freeze_panes = "A2"
+        ws2.auto_filter.ref = ws2.dimensions
     wb.save(dest)
     return dest
 
@@ -863,7 +939,8 @@ def cmd_check_approved(_):
     records, more = read_approved(found)
     rep = approval_report(records, load_rows(), load_trust())
     updated, added = apply_approvals(records, import_unknown=getattr(_, "import_unknown", False))
-    print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s).")
+    print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s); "
+          f"{record_sbrs(records)} new SBR(s) in data/sbrs.csv.")
     print(f"\n{len(records)} approved Form 1(s); suppressors: {sum(1 for r in records if 'SILENCER' in r['type'].upper())}; "
           f"skipped: {dict(rep['skipped']) or 'none'}")
     for title, key in (("Approved and in your records", "matched"), ("Approved, but check these", "differs"),

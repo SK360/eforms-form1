@@ -40,10 +40,15 @@ def sandbox(tmp_path, monkeypatch):
     for name, sub in (("DATA", "data"), ("OUT", "out"), ("FORMS", "forms")):
         monkeypatch.setattr(atf, name, tmp_path / sub)
     monkeypatch.setattr(atf, "SUPP", tmp_path / "data" / "suppressors.csv")
+    real_data = ROOT / "data"
+    before = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     monkeypatch.setattr(atf, "emit", atf.emit)
     monkeypatch.setattr(atf, "ask", atf.ask)
     monkeypatch.setattr(builtins, "input", lambda *a: "")
-    return tmp_path
+    yield tmp_path
+    # guard: a test must never touch the real data/ folder (personal records)
+    after = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
+    assert after == before, f"a test changed the real data/ folder: {sorted(set(after.items()) ^ set(before.items()))}"
 
 
 def fake_settings(root):

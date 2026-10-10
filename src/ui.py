@@ -141,7 +141,8 @@ def summary(rows):
     n = lambda *st: sum(1 for r in rows if r["status"] in st)  # noqa: E731
     parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]", f"[blue]{n(*IN_PROGRESS)} in progress[/]",
              f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
-    return " · ".join(parts)
+    sbrs = len(atf.load_sbrs())
+    return " · ".join(parts + ([f"[magenta]{sbrs} SBR{'s' if sbrs != 1 else ''}[/]"] if sbrs else []))
 
 
 def home(rows):
@@ -174,6 +175,17 @@ def inventory_table(rows, title):
     return t
 
 
+def sbr_table(rows, title):
+    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="magenta")
+    for col in ("Serial", "Caliber", "Model", "Barrel", "Overall", "Approved", "eForm"):
+        t.add_column(col)
+    for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
+        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["model"]), escape(r["barrel_length"]),
+                  escape(r["overall_length"]), escape(r["approved_date"]) + (" [yellow]⚠ conditions[/]" if r["conditions"] else ""),
+                  escape(short(r["eform_id"])))
+    return t
+
+
 def inventory_flow():
     view = "all"
     filters = {"all": ("All", lambda r: True), "approved": ("Approved", lambda r: r["status"] == "approved"),
@@ -181,14 +193,21 @@ def inventory_flow():
     while True:
         rows = atf.load_rows()
         con.clear()
-        name, keep = filters[view]
-        shown = [r for r in rows if keep(r)]
-        con.print(inventory_table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
+        if view == "sbrs":
+            sbrs = atf.load_sbrs()
+            con.print(sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
+            shown = []
+        else:
+            name, keep = filters[view]
+            shown = [r for r in rows if keep(r)]
+            con.print(inventory_table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
         con.print(f"  {summary(rows)}")
         cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
         if cond:
             con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in data/suppressors.csv)[/]")
         choices = [questionary.Choice(f"Show {label.lower()}", key) for key, (label, _) in filters.items() if key != view]
+        if view != "sbrs" and atf.load_sbrs():
+            choices.append(questionary.Choice("Show SBRs", "sbrs"))
         if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
@@ -254,8 +273,10 @@ def edit_queued_flow():
 
 
 def open_approved_flow():
-    rows = sorted((r for r in atf.load_rows() if r["status"] == "approved"), key=lambda r: atf.serial_key(r["serial_number"]))
-    choices = [questionary.Choice(f"{r['serial_number']}  (approved {r['approved_date']})", n) for n, r in enumerate(rows)]
+    rows = sorted([r for r in atf.load_rows() if r["status"] == "approved"] + [{**r, "_sbr": True} for r in atf.load_sbrs()],
+                  key=lambda r: atf.serial_key(r["serial_number"]))
+    choices = [questionary.Choice(f"{r['serial_number']}  ({'SBR, ' if r.get('_sbr') else ''}approved {r['approved_date']})", n)
+               for n, r in enumerate(rows)]
     n = questionary.select("Open which approved Form 1?", choices=choices + [questionary.Choice("Back", "back")]).ask()
     if n in (None, "back"):
         return
@@ -694,8 +715,10 @@ def approvals_flow():
     records, more = atf.read_approved(found)
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
-    skipped = ", ".join(f"{n} {escape(k.lower())}" for k, n in rep["skipped"].items()) or "none"
-    con.print(f"\n  [bold]{len(records)}[/] approved Form 1s: [bold]{sup}[/] suppressor(s); skipped: {skipped}\n")
+    sbr = sum(1 for r in records if atf.is_sbr(r))
+    other = ", ".join(f"{n} {escape(k.lower())}" for k, n in rep["skipped"].items() if "RIFLE" not in k.upper())
+    con.print(f"\n  [bold]{len(records)}[/] approved Form 1s: [bold]{sup}[/] suppressor(s), [bold]{sbr}[/] SBR(s)"
+              + (f"; other types skipped: {other}" if other else "") + "\n")
     if rep["matched"]:
         con.print(_approved_table(rep["matched"], f"[bold]Approved, matches your records ({len(rep['matched'])})[/]", "green"))
     if rep["differs"]:
@@ -715,8 +738,11 @@ def approvals_flow():
                                default=True).ask():
             more_updated, added = atf.apply_approvals(records, import_unknown=True)
             updated += more_updated
+    new_sbrs = atf.record_sbrs(records)
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
+    if new_sbrs:
+        con.print(f"  [green]✔[/] SBR inventory: {new_sbrs} added (Inventory > Show SBRs).")
     con.print("  [dim]PDFs: out/approved/[/]")
     pause()
 

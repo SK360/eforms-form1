@@ -211,3 +211,42 @@ def test_serial_run():
     assert ui.serial_run("A-0098", 3) == ["A-0098", "A-0099", "A-0100"]
     assert ui.serial_run("2026-009A", 2) == ["2026-009A", "2026-010A"]
     assert ui.serial_run("XYZ", 2) == [] and ui.serial_run("XYZ", 1) == ["XYZ"]
+
+
+
+def _sbrs():
+    atf.save_sbrs([{"serial_number": "R2", "caliber": "5.56", "model": "X15", "barrel_length": "10.5", "overall_length": "26",
+                    "approved_date": "09/13/2026", "eform_id": "1000020", "control_number": "", "conditions": ""},
+                   {"serial_number": "R10", "caliber": "300", "model": "Y9", "barrel_length": "8", "overall_length": "24",
+                    "approved_date": "09/14/2026", "eform_id": "1000021", "control_number": "", "conditions": ""}])
+
+
+def test_sbr_inventory_view_and_summary(configured, answers, screen):
+    _inventory_rows()
+    _sbrs()
+    answers(pick("Inventory"), "sbrs", "back", QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    view = out.split("Inventory · SBRs (2)")[1].split("eForms Form 1")[0]
+    assert view.index("R2") < view.index("R10") and "10.5" in view and "X15" in view and "…0021" in view
+    assert "T11" not in view                                                                    # suppressors not in this view
+    assert "· 2 SBRs" in out
+
+
+def test_open_sbr_pdf_and_export_sheet(configured, answers, screen, monkeypatch):
+    from openpyxl import load_workbook
+    _inventory_rows()
+    _sbrs()
+    folder = atf.OUT / "approved"
+    folder.mkdir()
+    (folder / "R2.pdf").write_bytes(b"%PDF")
+    (folder / "index.csv").write_text("eform_id,file\n1000020,R2.pdf\n", encoding="utf-8")
+    opened = []
+    monkeypatch.setattr(ui, "open_file", lambda p: opened.append(p))
+    answers(pick("Inventory"), pick("Open an approved PDF"), lambda kw: next(c.value for c in kw["choices"] if c.title.startswith("R2")),
+            "back", QUIT)
+    ui.menu()
+    assert opened == [folder / "R2.pdf"]
+    wb = load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx"))
+    rows = list(wb["SBRs"].iter_rows(values_only=True))
+    assert wb.sheetnames == ["Inventory", "SBRs"] and [r[0] for r in rows[1:]] == ["R2", "R10"] and rows[1][3] == 10.5
