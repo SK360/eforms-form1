@@ -70,10 +70,15 @@ Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
 
 The first run asks for your trust, CLEO and file details (Settings; change them any time). Then:
 
-- **Add suppressors**: suggests the next serial, your last caliber and overall length; Enter accepts.
+- **Add suppressors**: asks how many (Enter = 1), then the (first) serial, caliber and overall length, suggesting the
+  next serial and your last caliber and length. For several, it numbers them in sequence (e.g. A101 … A110) with the same
+  caliber and length, shows the range to confirm, and adds nothing if any of those serials already exist.
+- **Edit or remove a queued suppressor**: fix a serial, caliber or length, or take it out of the queue. Filed and
+  approved ones are your record of what was submitted, so they can't be changed here.
 - **Inventory**: every suppressor in serial order (S001, S002 … S010) with caliber, length, status (queued, filed,
   approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. Filter by Approved /
-  In progress / Queued. The home screen shows a one-line summary.
+  In progress / Queued. From there you can also open a suppressor's approved Form 1 PDF and **export the inventory
+  to Excel** (`out/inventory_<date>.xlsx`). The home screen shows a one-line summary.
 - **File N queued suppressors**: pick the rows, say whether you want to type your SSN on each form, confirm (this is
   your "I affirm" and your OK to Sign & Submit each one once every check passes). A browser opens: log in, wait for
   the eForms home page, press Enter. For each suppressor it fills the form, shows each page ticked off and a read-back

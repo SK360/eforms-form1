@@ -163,6 +163,45 @@ def _token_match(want, got):
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(str(want).strip())}(?![A-Za-z0-9])", got or "", re.I) is not None
 
 
+def approved_pdf_for(row):
+    """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None."""
+    folder = OUT / "approved"
+    name = _approved_index(folder).get(row.get("eform_id", "")) if folder.exists() else None
+    for candidate in filter(None, [name, f"{row['serial_number']}.pdf"]):
+        if (folder / candidate).is_file():
+            return folder / candidate
+    return None
+
+
+EXPORT_COLS = [("Serial", "serial_number", 10), ("Caliber", "caliber", 9), ("Length (in)", "overall_length", 11),
+               ("Status", "status", 11), ("Filed", "filed_date", 11), ("Approved", "approved_date", 11),
+               ("Conditions", "conditions", 60), ("Application #", "application_number", 14), ("eForm ID", "eform_id", 11),
+               ("Control #", "control_number", 14)]
+
+
+def export_inventory(dest=None):
+    """Write the inventory to an .xlsx (serial order, bold frozen header, filters). Returns the path."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    dest = Path(dest or OUT / f"inventory_{datetime.now():%Y-%m-%d}.xlsx")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Inventory"
+    ws.append([c[0] for c in EXPORT_COLS])
+    for row in sorted(load_rows(), key=lambda r: serial_key(r["serial_number"])):
+        vals = [row[c[1]] or ("queued" if c[1] == "status" else "") for c in EXPORT_COLS]
+        ws.append([float(v) if c[1] == "overall_length" and re.fullmatch(r"\d+(\.\d+)?", v) else v for c, v in zip(EXPORT_COLS, vals)])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for i, (_, _, width) in enumerate(EXPORT_COLS, 1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    wb.save(dest)
+    return dest
+
+
 # ---------- 5320.23 PDF ----------
 def _find_5320(serial, warn=False):
     """Newest generated 5320.23 for a serial (5320.23_<serial>.pdf, or the older 5320.23_<row>_<serial>.pdf)."""
@@ -1146,6 +1185,7 @@ def main():
     p = sub.add_parser("fields"); p.add_argument("pdf"); p.set_defaults(fn=cmd_fields)
     p = sub.add_parser("fill-5320"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--date"); p.set_defaults(fn=cmd_fill_5320)
     p = sub.add_parser("inspect"); p.set_defaults(fn=cmd_inspect)
+    p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
     p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
     p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.set_defaults(fn=cmd_fill_form1)
     a = ap.parse_args(); a.fn(a)

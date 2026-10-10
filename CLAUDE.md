@@ -58,8 +58,11 @@ plain CLI, kept for debugging/scripting:
   All user-facing output goes through `emit(kind, text, **data)` and prompts through `ask(prompt)`; the CLI prints,
   the menu (`src/ui.py` `Progress`) renders them (page ticks from `section`, read-back table from `expect` events, a
   code/PIN panel on `banner`).
-- `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters), `file_flow`, `add_flow` (serial,
-  caliber, length), `resolve_flow`, `approvals_flow`, `settings_flow` (wizard), `advanced_flow`.
+- `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters; `open_approved_flow` via
+  `atf.approved_pdf_for`, `export_flow` -> `atf.export_inventory()` .xlsx (openpyxl), `edit_queued_flow`: queued rows
+  only; filed/approved are locked), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
+  counts up the last digit group; any clash = nothing added), `resolve_flow`, `approvals_flow`, `settings_flow`
+  (wizard), `advanced_flow`. `open_file()` uses open / os.startfile / xdg-open.
 - **Check approvals** (`fetch_approved` -> `read_approved` -> `approval_report`; CLI `check-approved`), READ-ONLY:
   home page search `#form-type-search` = "ATF Form 1 (5320.1)", `#form-status-search` = APPROVED, `#queryBtn`; results
   rows (`tr` with a "View Form" button; cells: eForm ID, Permit/Control #, ICN, Created By, Created, Submitted,

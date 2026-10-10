@@ -3,6 +3,7 @@
 ./atf <command> ... runs the plain CLI in atf.py instead (fill-form1, fill-5320, inspect, fields)."""
 import os
 import re
+import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -188,9 +189,88 @@ def inventory_flow():
         if cond:
             con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in data/suppressors.csv)[/]")
         choices = [questionary.Choice(f"Show {label.lower()}", key) for key, (label, _) in filters.items() if key != view]
-        view = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
-        if view in (None, "back"):
+        if any(r["status"] == "" for r in rows):
+            choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
+        if any(r["status"] == "approved" for r in rows):
+            choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
+        choices.append(questionary.Choice("Export to Excel", export_flow))
+        what = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
+        if what in (None, "back"):
             return
+        if callable(what):
+            what()
+        else:
+            view = what
+
+
+def open_file(path):
+    """Open a file in the OS default app (PDF viewer, Excel)."""
+    if sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    elif os.name == "nt":
+        os.startfile(str(path))  # noqa: S606 (Windows only)
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
+
+
+def edit_queued_flow():
+    """Change or remove a QUEUED row. Filed/approved rows are the record of what was submitted, so they stay locked."""
+    rows = atf.load_rows()
+    queued = sorted((i for i, r in enumerate(rows) if r["status"] == ""), key=lambda i: atf.serial_key(rows[i]["serial_number"]))
+    if not queued:
+        con.print("  Nothing is queued.")
+        return pause()
+    choices = [questionary.Choice(f"{rows[i]['serial_number']}  (caliber {rows[i]['caliber']}, {rows[i]['overall_length'] or '?'}\")", i)
+               for i in queued]
+    i = questionary.select("Which queued suppressor?", choices=choices + [questionary.Choice("Back", "back")]).ask()
+    if i in (None, "back"):
+        return
+    r = rows[i]
+    what = questionary.select(f"{r['serial_number']}:", choices=[
+        questionary.Choice("Change the serial", "serial_number"), questionary.Choice("Change the caliber", "caliber"),
+        questionary.Choice("Change the overall length", "overall_length"), questionary.Choice("Remove it from the queue", "remove"),
+        questionary.Choice("Back", "back")]).ask()
+    if what in (None, "back"):
+        return
+    if what == "remove":
+        if questionary.confirm(f"Remove {r['serial_number']} from the queue?", default=False).ask():
+            del rows[i]
+            atf.save_rows(rows)
+            con.print(f"  [green]✔[/] Removed {escape(r['serial_number'])}")
+            pause()
+        return
+    others = {x["serial_number"].upper() for j, x in enumerate(rows) if j != i}
+    check = {"serial_number": lambda v: (bool(v.strip()) or "Enter a serial number") if v.strip().upper() not in others
+             else "That serial is already in the list",
+             "caliber": lambda v: bool(v.strip()) or "Enter a caliber", "overall_length": _inches}[what]
+    label = {"serial_number": "Serial number:", "caliber": "Caliber:", "overall_length": "Overall length (inches):"}[what]
+    v = questionary.text(label, default=r[what], validate=check).ask()
+    if v is None:
+        return
+    r[what] = v.strip()
+    atf.save_rows(rows)
+    con.print(f"  [green]✔[/] Updated {escape(r['serial_number'])}")
+    pause()
+
+
+def open_approved_flow():
+    rows = sorted((r for r in atf.load_rows() if r["status"] == "approved"), key=lambda r: atf.serial_key(r["serial_number"]))
+    choices = [questionary.Choice(f"{r['serial_number']}  (approved {r['approved_date']})", n) for n, r in enumerate(rows)]
+    n = questionary.select("Open which approved Form 1?", choices=choices + [questionary.Choice("Back", "back")]).ask()
+    if n in (None, "back"):
+        return
+    path = atf.approved_pdf_for(rows[n])
+    if path is None:
+        con.print(f"  [yellow]No saved PDF for {escape(rows[n]['serial_number'])} yet: run Check approvals on eForms.[/]")
+        return pause()
+    open_file(path)
+
+
+def export_flow():
+    path = atf.export_inventory()
+    con.print(f"  [green]✔[/] Wrote {escape(str(path))}")
+    if questionary.confirm("Open it now?", default=True).ask():
+        open_file(path)
 
 
 def pause():
@@ -209,30 +289,59 @@ def next_serial(serial):
     return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}{m.group(3)}" if m else ""
 
 
+def serial_run(first, count):
+    """[first, next, ...] count serials, counting up the last group of digits (A055 -> A055..A064). [] if it can't count."""
+    run = [first]
+    while len(run) < count:
+        nxt = next_serial(run[-1])
+        if not nxt:
+            return []
+        run.append(nxt)
+    return run
+
+
 def add_flow():
+    """Add one suppressor, or a run of N with consecutive serials sharing a caliber and length."""
     rows = atf.load_rows()
     while True:
         last = rows[-1] if rows else {"serial_number": "", "caliber": ""}
         taken = {r["serial_number"].upper() for r in rows}
+        count = questionary.text("How many suppressors to add?", default="1",
+                                 validate=lambda v: (v.strip().isdigit() and 1 <= int(v) <= 100) or "A number from 1 to 100").ask()
+        if count is None:
+            return
+        n = int(count)
 
-        def valid(s):
-            if not s.strip():
+        def valid(v):
+            if not v.strip():
                 return "Enter a serial number"
-            return s.strip().upper() not in taken or "That serial is already in the list"
-        serial = questionary.text("Serial number:", default=next_serial(last["serial_number"]), validate=valid).ask()
+            if v.strip().upper() in taken:
+                return "That serial is already in the list"
+            return n == 1 or bool(next_serial(v.strip())) or "To add several, the serial needs a number to count up from"
+        serial = questionary.text("Serial number:" if n == 1 else f"First of the {n} serial numbers:",
+                                  default=next_serial(last["serial_number"]), validate=valid).ask()
         if serial is None:
             return
-        cal = questionary.text("Caliber:", default=last["caliber"], validate=lambda s: bool(s.strip()) or "Enter a caliber").ask()
+        cal = questionary.text("Caliber:", default=last["caliber"], validate=lambda v: bool(v.strip()) or "Enter a caliber").ask()
         if cal is None:
             return
         default_len = last.get("overall_length") or str((_settings().get("firearm") or {}).get("overall_length") or "12")
         length = questionary.text("Overall length (inches):", default=default_len, validate=_inches).ask()
         if length is None:
             return
-        rows.append({"caliber": cal.strip(), "serial_number": serial.strip(), "overall_length": length.strip(), "status": ""})
+        serials = serial_run(serial.strip(), n)
+        clash = [x for x in serials if x.upper() in taken]
+        if clash:
+            con.print(f"  [bold red]✖ Already in your list: {escape(', '.join(clash))}. Nothing added.[/]")
+            continue
+        what = f"{escape(serials[0])}" if n == 1 else f"{escape(serials[0])} – {escape(serials[-1])} ({n} suppressors)"
+        if n > 1 and not questionary.confirm(f"Add {serials[0]} – {serials[-1]} ({n} suppressors), caliber {cal.strip()}, "
+                                             f"{length.strip()}\"?", default=True).ask():
+            continue
+        rows += [{"caliber": cal.strip(), "serial_number": x, "overall_length": length.strip(), "status": ""} for x in serials]
         atf.save_rows(rows)
-        con.print(f"  [green]✔[/] Added {escape(serial.strip())} (caliber {escape(cal.strip())}, {escape(length.strip())}\")")
-        if not questionary.confirm("Add another?", default=True).ask():
+        con.print(f"  [green]✔[/] Added {what}, caliber {escape(cal.strip())}, {escape(length.strip())}\"")
+        if not questionary.confirm("Add more?", default=False).ask():
             return
 
 
@@ -644,7 +753,10 @@ def menu():
         if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
-        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow),
+        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
+        if queued:
+            choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
+        choices += [
                     questionary.Choice("Check approvals on eForms", approvals_flow),
                     questionary.Choice("Settings", settings_flow),
                     questionary.Choice("Advanced…", advanced_flow),

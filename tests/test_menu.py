@@ -16,7 +16,7 @@ def test_add_then_file_two(configured, portal, answers, screen):
     def serial(kw):
         checks["dup"], checks["blank"] = kw["validate"]("t102"), kw["validate"]("  ")
         return kw["default"]
-    answers(pick("Add suppressors"), serial, lambda kw: kw["default"], "6.5", True, lambda kw: kw["default"], "22",
+    answers(pick("Add suppressors"), "1", serial, lambda kw: kw["default"], "6.5", True, "1", lambda kw: kw["default"], "22",
             lambda kw: (checks.setdefault("len_default", kw["default"]), kw["default"])[1], False,
             pick("File 2 queued"), TICKED, False, True, QUIT)
     ui.menu()
@@ -120,3 +120,94 @@ def test_inventory_screen(configured, answers, screen):
     assert "4 suppressors · 2 approved · 1 in progress · 1 queued" in out
     approved = out.split("Inventory · Approved (2)")[1].split("eForms Form 1")[0]                # just that view, not the home screen after
     assert "T9" in approved and "T11" not in approved and "T12" not in approved
+
+
+def _inventory_rows():
+    atf.save_rows([
+        {"serial_number": "T2", "caliber": "22", "overall_length": "12", "status": "approved", "approved_date": "08/15/2026",
+         "eform_id": "1000002", "control_number": "20260000002"},
+        {"serial_number": "T10", "caliber": "9", "overall_length": "12", "status": "filed", "filed_date": "10/08/2026",
+         "application_number": "900000010"},
+        {"serial_number": "T11", "caliber": "9", "overall_length": "12", "status": ""},
+        {"serial_number": "T12", "caliber": "9", "overall_length": "6.5", "status": ""}])
+
+
+def test_edit_and_remove_queued(configured, answers, screen):
+    _inventory_rows()
+    offered = {}
+
+    def which(kw):
+        offered["rows"] = [c.title for c in kw["choices"]]
+        return kw["choices"][0].value                                  # T11
+    dup = {}
+
+    def new_serial(kw):
+        dup["msg"] = kw["validate"]("t12")
+        return "T13"
+    answers(pick("Edit or remove"), which, "serial_number", new_serial,
+            pick("Edit or remove"), lambda kw: kw["choices"][1].value, "overall_length", "7.25",   # T13 is 2nd now
+            pick("Edit or remove"), lambda kw: kw["choices"][0].value, "remove", True,              # remove T12
+            QUIT)
+    ui.menu()
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert offered["rows"][0].startswith("T11") and len(offered["rows"]) == 3 and not any("T2 " in t or "T10" in t for t in offered["rows"])
+    assert dup["msg"] == "That serial is already in the list"
+    assert set(rows) == {"T2", "T10", "T13"} and rows["T13"]["overall_length"] == "7.25"
+    assert rows["T2"]["status"] == "approved" and rows["T10"]["status"] == "filed"              # locked rows untouched
+
+
+def test_open_approved_pdf(configured, answers, screen, monkeypatch):
+    _inventory_rows()
+    folder = atf.OUT / "approved"
+    folder.mkdir()
+    (folder / "T2.pdf").write_bytes(b"%PDF")
+    (folder / "index.csv").write_text("eform_id,file\n1000002,T2.pdf\n", encoding="utf-8")
+    opened = []
+    monkeypatch.setattr(ui, "open_file", lambda p: opened.append(p))
+    answers(pick("Inventory"), pick("Open an approved PDF"), lambda kw: kw["choices"][0].value, "back", QUIT)
+    ui.menu()
+    assert opened == [folder / "T2.pdf"]
+
+
+def test_export_inventory(configured):
+    from openpyxl import load_workbook
+    _inventory_rows()
+    path = atf.export_inventory(atf.OUT / "inv.xlsx")
+    ws = load_workbook(path).active
+    rows = list(ws.iter_rows(values_only=True))
+    assert rows[0][:4] == ("Serial", "Caliber", "Length (in)", "Status")
+    assert [r[0] for r in rows[1:]] == ["T2", "T10", "T11", "T12"]                             # serial order
+    assert rows[4][2] == 6.5 and rows[3][3] == "queued" and ws.freeze_panes == "A2"
+    assert rows[1][9] == "20260000002"                                                         # full numbers in the file
+
+
+def test_add_a_run_of_serials(configured, answers, screen):
+    queue(("T054", "9", "filed", "900000054"))
+    seen = {}
+
+    def first(kw):
+        seen["default"], seen["letters"] = kw["default"], kw["validate"]("ABC")
+        return kw["default"]
+    answers(pick("Add suppressors"), "10", first, "9", "12", True, False, QUIT)
+    ui.menu()
+    rows = atf.load_rows()
+    assert seen == {"default": "T055", "letters": "To add several, the serial needs a number to count up from"}
+    assert [r["serial_number"] for r in rows[1:]] == [f"T0{n}" for n in range(55, 65)]
+    assert {(r["caliber"], r["overall_length"], r["status"]) for r in rows[1:]} == {("9", "12", "")}
+    assert "Added T055 – T064 (10 suppressors)" in screen.getvalue()
+
+
+def test_a_run_that_would_clash_adds_nothing(configured, answers, screen):
+    queue(("T054", "9", "filed"), ("T057", "9"))
+    answers(pick("Add suppressors"), "5", "T055", "9", "12",          # T055..T059 would include T057
+            "3", "T058", "9", "12", True, False, QUIT)                  # then a custom count that fits: T058..T060
+    ui.menu()
+    serials = [r["serial_number"] for r in atf.load_rows()]
+    assert "Already in your list: T057. Nothing added." in screen.getvalue()
+    assert serials == ["T054", "T057", "T058", "T059", "T060"]
+
+
+def test_serial_run():
+    assert ui.serial_run("A-0098", 3) == ["A-0098", "A-0099", "A-0100"]
+    assert ui.serial_run("2026-009A", 2) == ["2026-009A", "2026-010A"]
+    assert ui.serial_run("XYZ", 2) == [] and ui.serial_run("XYZ", 1) == ["XYZ"]
