@@ -22,6 +22,7 @@ def test_files_and_logs_out(configured, portal):
     state = portal([("S1", "9")])
     rows = file_all()
     assert (rows[0]["status"], rows[0]["application_number"]) == ("filed", "900000001")
+    assert rows[0]["overall_length"] == "12" and rows[0]["filed_date"]          # what was filed is recorded
     assert state["logged_out"]
     assert "S1" in (atf.OUT / "submissions.csv").read_text(encoding="utf-8")
 

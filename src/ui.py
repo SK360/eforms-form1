@@ -21,7 +21,9 @@ from rich.table import Table
 import atf
 
 con = Console(highlight=False)
-STATUS = {"filed": "[green]✔ filed[/]", "pending": "[bold yellow]⚠ pending[/]", "": "[cyan]○ queued[/]"}
+STATUS = {"approved": "[green]✔ approved[/]", "filed": "[blue]● filed[/]", "pending": "[bold yellow]⚠ pending[/]",
+          "": "[cyan]○ queued[/]", "disapproved": "[bold red]✖ disapproved[/]"}
+IN_PROGRESS = ("filed", "pending")
 SHOW_FILED = 5  # most recent filed rows shown on the home screen
 
 
@@ -118,25 +120,77 @@ P = Progress()
 # ---------- Screens ----------
 def queue_table(rows, only=None, title=None):
     t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
-    for col in ("Serial", "Caliber", "Status", "Application #"):
+    for col in ("Serial", "Caliber", "Length", "Status", "Application #"):
         t.add_column(col)
     idx = range(len(rows)) if only is None else only
     if only is None:
-        filed = [i for i in idx if rows[i]["status"] == "filed"]
-        hidden = set(filed[:-SHOW_FILED])
+        done = [i for i in idx if rows[i]["status"] not in ("", "pending")]
+        hidden = set(done[:-SHOW_FILED])
         if hidden:
-            t.add_row(f"[dim]… {len(hidden)} earlier[/]", "", "[dim]✔ filed[/]", "")
+            t.add_row(f"[dim]… {len(hidden)} earlier[/]", "", "", "[dim](Inventory)[/]", "")
         idx = [i for i in idx if i not in hidden]
     for i in idx:
         r = rows[i]
-        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), STATUS.get(r["status"], escape(r["status"])),
+        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
                   escape(short(r["application_number"])))
     return t
+
+
+def summary(rows):
+    n = lambda *st: sum(1 for r in rows if r["status"] in st)  # noqa: E731
+    parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]", f"[blue]{n(*IN_PROGRESS)} in progress[/]",
+             f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
+    return " · ".join(parts)
 
 
 def home(rows):
     con.clear()
     con.print(queue_table(rows, title="[bold]eForms Form 1[/]"))  # no trust name: the screen gets shared
+    con.print(f"  {summary(rows)}")
+
+
+def _days(date_str):
+    try:
+        return (date.today() - datetime.strptime(date_str, "%m/%d/%Y").date()).days
+    except ValueError:
+        return None
+
+
+def inventory_table(rows, title):
+    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
+    for col in ("Serial", "Caliber", "Length", "Status", "Filed", "Approved / waiting", "App # / eForm"):
+        t.add_column(col)
+    for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
+        if r["status"] == "approved":
+            when = r["approved_date"] + (" [yellow]⚠ conditions[/]" if r["conditions"] else "")
+        elif r["status"] in IN_PROGRESS and _days(r["filed_date"]) is not None:
+            when = f"[dim]waiting {_days(r['filed_date'])} day(s)[/]"
+        else:
+            when = ""
+        ident = short(r["application_number"]) or (f"eForm {short(r['eform_id'])}" if r["eform_id"] else "")
+        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
+                  escape(r["filed_date"]), when, escape(ident))
+    return t
+
+
+def inventory_flow():
+    view = "all"
+    filters = {"all": ("All", lambda r: True), "approved": ("Approved", lambda r: r["status"] == "approved"),
+               "progress": ("In progress", lambda r: r["status"] in IN_PROGRESS), "queued": ("Queued", lambda r: r["status"] == "")}
+    while True:
+        rows = atf.load_rows()
+        con.clear()
+        name, keep = filters[view]
+        shown = [r for r in rows if keep(r)]
+        con.print(inventory_table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
+        con.print(f"  {summary(rows)}")
+        cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
+        if cond:
+            con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in data/suppressors.csv)[/]")
+        choices = [questionary.Choice(f"Show {label.lower()}", key) for key, (label, _) in filters.items() if key != view]
+        view = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
+        if view in (None, "back"):
+            return
 
 
 def pause():
@@ -150,7 +204,7 @@ def _row_choice(rows, i, extra=""):
 
 def next_serial(serial):
     """Suggest the next serial: add 1 to the LAST group of digits, keeping everything around it and the zero padding
-    (S009 -> S010, ABC-0099 -> ABC-0100, 2026-001A -> 2026-002A). No digits -> no suggestion."""
+    (A009 -> A010, ABC-0099 -> ABC-0100, 2026-001A -> 2026-002A). No digits -> no suggestion."""
     m = re.match(r"^(.*?)(\d+)(\D*)$", serial or "")
     return f"{m.group(1)}{int(m.group(2)) + 1:0{len(m.group(2))}d}{m.group(3)}" if m else ""
 
@@ -171,11 +225,26 @@ def add_flow():
         cal = questionary.text("Caliber:", default=last["caliber"], validate=lambda s: bool(s.strip()) or "Enter a caliber").ask()
         if cal is None:
             return
-        rows.append({"caliber": cal.strip(), "serial_number": serial.strip(), "status": "", "application_number": ""})
+        default_len = last.get("overall_length") or str((_settings().get("firearm") or {}).get("overall_length") or "12")
+        length = questionary.text("Overall length (inches):", default=default_len, validate=_inches).ask()
+        if length is None:
+            return
+        rows.append({"caliber": cal.strip(), "serial_number": serial.strip(), "overall_length": length.strip(), "status": ""})
         atf.save_rows(rows)
-        con.print(f"  [green]✔[/] Added {escape(serial.strip())} (caliber {escape(cal.strip())})")
+        con.print(f"  [green]✔[/] Added {escape(serial.strip())} (caliber {escape(cal.strip())}, {escape(length.strip())}\")")
         if not questionary.confirm("Add another?", default=True).ask():
             return
+
+
+def _inches(s):
+    return s.strip().replace(".", "", 1).isdigit() or "A number of inches, e.g. 12 or 6.5"
+
+
+def _settings():
+    try:
+        return atf.load_trust() or {}
+    except Exception:
+        return {}
 
 
 def resolve_flow():
@@ -195,6 +264,7 @@ def resolve_flow():
         if num is None:
             return
         rows[i]["status"], rows[i]["application_number"] = "filed", num.strip()
+        rows[i]["filed_date"] = rows[i]["filed_date"] or date.today().strftime("%m/%d/%Y")
         atf.log_submission(rows[i], num.strip())
         atf.save_rows(rows)
         con.print(f"  [green]✔[/] {escape(rows[i]['serial_number'])} marked filed (#{escape(short(num.strip()))})")
@@ -231,7 +301,9 @@ def file_flow(indices=None):
             con.print(f"  [bold red]✖ 5320.23 for {escape(rows[i]['serial_number'])}: {escape(', '.join(probs))}[/]")
             return pause()
     con.print(f"  [green]✔[/] 5320.23s generated, dated {today}")
-    lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}" for i in indices)
+    deflen = str((_settings().get("firearm") or {}).get("overall_length") or "12")
+    lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}, "
+                      f"{escape(rows[i]['overall_length'] or deflen)}\" overall" for i in indices)
     con.print(Panel(
         f"[bold]File {len(indices)} Form 1{'s' if len(indices) > 1 else ''}:[/]\n{lines}\n\n"
         f"SSN: {'you type it on each form' if ssn else 'left blank'}\n\n"
@@ -441,7 +513,7 @@ def settings_flow(first=False):
         con.rule("Firearm (same for every suppressor)")
         fa = dict(t.get("firearm") or {})
         fa["model"] = _a(questionary.text("Model:", default=str(get("firearm.model", "N/A")), validate=_need))
-        fa["overall_length"] = _a(questionary.text("Overall length (inches):", default=str(get("firearm.overall_length", "12")),
+        fa["overall_length"] = _a(questionary.text("Default overall length for new suppressors (inches):", default=str(get("firearm.overall_length", "12")),
                                                    validate=lambda s: s.strip().replace(".", "", 1).isdigit() or "A number"))
         fa.pop("manufacturer_code", None)  # no longer a setting: always FMI for a Form 1 (config/mapping.yaml)
         fa["description"] = _a(questionary.text("Firearm description (the description box on the firearm page; edit if you like):",
@@ -488,6 +560,58 @@ def settings_flow(first=False):
     pause()
 
 
+def _approved_table(items, title, style):
+    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style=style)
+    for col in ("Serial", "Caliber", "Length", "Approved", "Notes"):
+        t.add_column(col)
+    for r, notes in items:
+        t.add_row(escape(r["serial"] or "?"), escape(r["caliber"]), escape(r["overall_length"]), escape(r["approval_date"]),
+                  escape("; ".join(notes)) if notes else "[green]✔[/]")
+    return t
+
+
+def approvals_flow():
+    con.print(Panel("Reads your [bold]approved[/] Form 1s on eForms. Read-only: it only clicks Search, View Form, View PDF\n"
+                    "and Go Home. Each PDF is saved to out/approved/, and suppressors are checked against your records by\n"
+                    "serial (caliber, overall length). SBRs and other types are only counted. The first run fetches every\n"
+                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals.",
+                    title="Check approvals", border_style="cyan", expand=False))
+    if not questionary.confirm("Open the browser?", default=True).ask():
+        return
+    try:
+        found, problems = atf.fetch_approved()
+    finally:
+        P.finish()
+    records, more = atf.read_approved(found)
+    rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
+    sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
+    skipped = ", ".join(f"{n} {escape(k.lower())}" for k, n in rep["skipped"].items()) or "none"
+    con.print(f"\n  [bold]{len(records)}[/] approved Form 1s: [bold]{sup}[/] suppressor(s); skipped: {skipped}\n")
+    if rep["matched"]:
+        con.print(_approved_table(rep["matched"], f"[bold]Approved, matches your records ({len(rep['matched'])})[/]", "green"))
+    if rep["differs"]:
+        con.print(_approved_table(rep["differs"], f"[bold]Approved, check these ({len(rep['differs'])})[/]", "yellow"))
+    if rep["unknown"]:
+        con.print(_approved_table(rep["unknown"], f"[bold]Approved, NOT in your records ({len(rep['unknown'])})[/]", "cyan"))
+    waiting = [r["serial_number"] for r in rep["waiting"]]
+    con.print(f"  Filed, not approved yet: [bold]{len(waiting)}[/]" + (f"  ({escape(', '.join(waiting[:12]))}{', …' if len(waiting) > 12 else ''})" if waiting else ""))
+    alerts = [f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]] + problems + more
+    if alerts:
+        con.print(Panel("\n".join(f"• {escape(a)}" for a in alerts), title="Look at these", border_style="red", expand=False))
+    updated, added = atf.apply_approvals(records)
+    if rep["unknown"]:
+        serials = [r["serial"] for r, _ in rep["unknown"]]
+        names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
+        if questionary.confirm(f"Add the {len(serials)} approved suppressor(s) that aren't in your records ({names}) to your inventory?",
+                               default=True).ask():
+            more_updated, added = atf.apply_approvals(records, import_unknown=True)
+            updated += more_updated
+    if updated or added:
+        con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
+    con.print("  [dim]PDFs: out/approved/[/]")
+    pause()
+
+
 def advanced_flow():
     what = questionary.select("Advanced:", choices=[
         questionary.Choice("Preview the steps for a row (no browser)", preview_flow),
@@ -505,6 +629,7 @@ def menu():
         settings_flow(first=True)
     if not atf.SUPP.exists():
         atf.save_rows([])
+    atf.backfill_filed_dates()
     while True:
         rows = atf.load_rows()
         home(rows)
@@ -519,7 +644,9 @@ def menu():
         if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
-        choices += [questionary.Choice("Add suppressors", add_flow), questionary.Choice("Settings", settings_flow),
+        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow),
+                    questionary.Choice("Check approvals on eForms", approvals_flow),
+                    questionary.Choice("Settings", settings_flow),
                     questionary.Choice("Advanced…", advanced_flow),
                     questionary.Choice("Quit", "quit")]
         what = questionary.select("What next?", choices=choices).ask()

@@ -122,3 +122,12 @@ def test_shared_mapping_has_no_personal_values():
                "CORPORATION/TRUST/OTHER LEGAL ENTITY", "Escape", "Valid EBTS Package"}
     sections = set(re.findall(r'action: section, value: "([^"]*)"', text))
     assert [v for v in values if v not in allowed | sections and not v.isdigit()] == []
+
+
+def test_row_length_overrides_the_settings_default(configured):
+    queue(("ABC123", "9"))
+    rows = atf.load_rows()
+    rows[0]["overall_length"] = "7.25"
+    atf.save_rows(rows)
+    steps = _dry_steps()
+    assert "fill #overallLength 7.25" in steps and "fill #overallLength 12" not in steps

@@ -42,6 +42,15 @@ plain CLI, kept for debugging/scripting:
   `_row_context()`; placeholders work in selectors too (e.g. `:has-text('{rp_race}')`). Step options: `section`
   (progress marker), `repeat` over a list setting (docs), `optional`,
   `skip_if_disabled`, `tag: ssn`, `label`/`private` on `expect`. `new_form_steps` opens a Form 1 from the home page.
+- **`data/suppressors.csv` = the inventory** (single source of truth; `COLS` in atf.py): caliber, serial_number,
+  overall_length (per suppressor; empty = settings default, recorded at filing), status ("" queued | pending | filed |
+  approved | disapproved; `SKIP` = never (re)filed without --force), application_number (from the filing confirmation),
+  filed_date (set at Sign & Submit; `backfill_filed_dates()` from out/submissions.csv), approved_date, eform_id,
+  control_number, conditions (from approvals). `load_rows()` tolerates older files with fewer columns.
+  `apply_approvals(records, import_unknown)` records approvals (fills an empty length from the PDF, never overwrites
+  one), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
+  order); sorting happens ONLY there (never during filing: file_rows holds row indices). out/submissions.csv stays a
+  write-only filing log. There is no approved.csv any more.
 - `data/trust.yaml` (personal): see `examples/trust.example.yaml`. `REQUIRED` + `settings_problems()` in atf.py list
   what must be set; filing refuses to start until it's complete.
 - `src/atf.py` engine: `stamp_5320(row, when, out_dir)`, `file_rows(rows, todo, opts)` (prechecks, browser, per-row
@@ -49,7 +58,27 @@ plain CLI, kept for debugging/scripting:
   All user-facing output goes through `emit(kind, text, **data)` and prompts through `ask(prompt)`; the CLI prints,
   the menu (`src/ui.py` `Progress`) renders them (page ticks from `section`, read-back table from `expect` events, a
   code/PIN panel on `banner`).
-- `src/ui.py` menu: home table, `file_flow`, `add_flow`, `resolve_flow`, `settings_flow` (wizard), `advanced_flow`.
+- `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters), `file_flow`, `add_flow` (serial,
+  caliber, length), `resolve_flow`, `approvals_flow`, `settings_flow` (wizard), `advanced_flow`.
+- **Check approvals** (`fetch_approved` -> `read_approved` -> `approval_report`; CLI `check-approved`), READ-ONLY:
+  home page search `#form-type-search` = "ATF Form 1 (5320.1)", `#form-status-search` = APPROVED, `#queryBtn`; results
+  rows (`tr` with a "View Form" button; cells: eForm ID, Permit/Control #, ICN, Created By, Created, Submitted,
+  Finalized), 10 per page, "Total Rows: N", page links by number. Per new row: View Form -> form page `#viewFormBtn`
+  ("View PDF": the portal builds a Blob and opens it in a new tab; `_HOOK_JS` wraps URL.createObjectURL to keep the
+  Blob, `_READ_BLOB_JS` reads it) -> `out/approved/<eForm ID>.pdf` -> `#goHomeBtn` -> search again. Saved PDFs are
+  skipped on later runs. `read_approved_pdf()` reads item 4 (type, serial, caliber, model, barrel/overall length) and
+  ATF's decision block (Approved checkbox = ZapfDingbats glyph left of the "Approved" label ON the "Disapproved" line:
+  older approvals also carry a banner "APPROVED WITH CONDITIONS - SEE CONDITIONS ON THE LAST PAGE OF PDF" that a plain
+  search finds first; conditions = last-page text above its "Approval Conditions" heading; approval date under the
+  "Date" label below the decision line)
+  by position relative to labels, ignoring the label font. Report = SUPPRESSORS (type contains SILENCER) matched to
+  suppressors.csv by serial; other types (SBRs) only counted. eForm IDs (7-8 digits) and control numbers (11) do NOT
+  equal the 9-digit application numbers recorded at filing, hence matching by serial. Report only; nothing imported.
+  Results-table rows are found from each VISIBLE "View Form" button (the page has hidden duplicates whose innerText
+  still reads "View Form"), climbing to the smallest ancestor with one such button and a 7+ digit ID; buttons are
+  tagged data-atf-row so the click hits that row. The home page shows "Total Rows: 0" before any search: wait for rows.
+  Overall length is compared with the row's recorded length (else the settings default) only for suppressors in your
+  records (older builds differ). Older control numbers are 10 digits (newer 11); also read from the PDF's last page.
 - questionary gotcha: `Choice(title, None)` returns the TITLE as the value; menu items use explicit string values.
 - Keep code Python 3.9-compatible (stock macOS python3): no `X | Y` types, no backslashes inside f-string expressions.
 - **Screenshot-safe menu (users share screenshots):** no trust name anywhere in `ui.py`; application numbers shown as
@@ -89,6 +118,9 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 - Step failures leave the browser open and log out cleanly (eForms allows ONE session; a crash without logout locks
   the account until the old session times out, ~15-30 min). The session is wrapped in `try/finally`, and the browser
   is launched with `handle_sigint=False` so **Ctrl-C also logs out** (by default Playwright kills Chromium on Ctrl-C).
+- **Dashboard rows have a "Submit Void" button and form pages have "Save"/"Cancel"/"Next".** Read-only browsing goes
+  through `_safe_click(loc, expected)`: clicks only if the visible text is exactly the expected one and matches none of
+  `UNSAFE` (void/withdraw/delete/save/submit/sign/cancel/amend/copy/edit/abandon). Never click by position alone.
 - Claude never clicks Sign & Submit / enters credentials itself; the user runs the commands. Claude watches the terminal
   and fixes the script.
 - First run shows a disclaimer the user must accept (unofficial, as-is, user responsible for every filing).
@@ -134,8 +166,8 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 - Responsible person fields (name, title, street, zip) are prefilled from the user's eForms account.
 
 ## When the portal changes
-Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page,
-paste the output to Claude; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
+Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page (it
+records the newest tab to `out/capture_*.jsonl` and saves any PDF the portal sends to `out/captures/`); Claude reads those; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
 prints steps without a browser. `--capture` records screens after the automated part into `out/capture_*.jsonl`
 (includes page text, may contain PII; do not share).
 

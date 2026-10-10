@@ -70,16 +70,29 @@ Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
 
 The first run asks for your trust, CLEO and file details (Settings; change them any time). Then:
 
-- **Add suppressors**: suggests the next serial and your last caliber; Enter accepts.
+- **Add suppressors**: suggests the next serial, your last caliber and overall length; Enter accepts.
+- **Inventory**: every suppressor in serial order (S001, S002 … S010) with caliber, length, status (queued, filed,
+  approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. Filter by Approved /
+  In progress / Queued. The home screen shows a one-line summary.
 - **File N queued suppressors**: pick the rows, say whether you want to type your SSN on each form, confirm (this is
   your "I affirm" and your OK to Sign & Submit each one once every check passes). A browser opens: log in, wait for
   the eForms home page, press Enter. For each suppressor it fills the form, shows each page ticked off and a read-back
   table, then a yellow **"Your turn in the browser"** box: enter the emailed code, Verify, enter your PIN, Submit.
+- **Check approvals on eForms**: read-only. After you log in it lists your approved Form 1s, saves each one's PDF to
+  `out/approved/` (only new ones on later runs), reads the serial, caliber and overall length from each, and reports
+  your suppressors: matching your records, differing (caliber/length), approved but not in your records, and filed
+  but not approved yet. SBRs and other types are only counted. Approvals are recorded in your inventory, and it
+  offers to add approved suppressors that aren't in it yet (e.g. ones you filed before using this tool).
 - **⚠ Resolve a pending row**: only if a confirmation was missed. Check the eForms dashboard, then say whether it was filed.
 - **Advanced**: preview the steps without a browser, regenerate a 5320.23 with another date, re-file, capture portal
   pages if ATF changes the site.
 
 Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one session at a time).
+
+## Your records
+`data/suppressors.csv` is your inventory, one row per suppressor: caliber, serial, overall length, status, application
+number, filed date, approval date, eForm ID, control number and any approval conditions. The app keeps it up to date;
+you can also open it in Excel (close it again before filing). `out/submissions.csv` is a log of every filing.
 
 ## Your data stays local
 Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (your logged-in session), which are
