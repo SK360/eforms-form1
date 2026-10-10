@@ -639,11 +639,60 @@ def _go_home(page):
         page.locator("#form-type-search").wait_for(timeout=30000)
 
 
+# out/approved/: PDFs named by serial (S029.pdf); index.csv maps eForm ID -> file, because the results list only shows
+# eForm IDs and that is how a later run knows which forms it already has.
+def _approved_index(folder):
+    idx = folder / "index.csv"
+    if not idx.exists():
+        return {}
+    with idx.open(newline="", encoding="utf-8-sig") as f:
+        return {r["eform_id"]: r["file"] for r in csv.DictReader(f)}
+
+
+def _save_approved_index(folder, index):
+    with (folder / "index.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["eform_id", "file"])
+        w.writerows(sorted(index.items(), key=lambda kv: serial_key(kv[1])))
+
+
+def _file_by_serial(folder, index, eform_id, pdf):
+    """Rename a downloaded approval PDF to <serial>.pdf (S029.pdf; S029_2.pdf if that serial already has another
+    form; eForm-<id>.pdf if the serial can't be read) and record it in the index. Returns the new path."""
+    try:
+        serial = read_approved_pdf(pdf)["serial"].strip()
+    except Exception:
+        serial = ""
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", serial) if serial else f"eForm-{eform_id}"
+    taken = {v for k, v in index.items() if k != eform_id}
+    name, n = f"{base}.pdf", 2
+    while name in taken:
+        name, n = f"{base}_{n}.pdf", n + 1
+    dest = folder / name
+    if Path(pdf) != dest:
+        Path(pdf).replace(dest)
+    index[eform_id] = name
+    return dest
+
+
+def _migrate_approved_names(folder):
+    """Older runs saved <eForm ID>.pdf: rename those to serials and index them."""
+    index = _approved_index(folder)
+    legacy = sorted((f for f in folder.glob("*.pdf") if re.fullmatch(r"\d{6,9}", f.stem) and f.stem not in index),
+                    key=lambda f: int(f.stem))  # deterministic: the older form keeps the plain name
+    for f in legacy:
+        _file_by_serial(folder, index, f.stem, f)
+    if legacy:
+        _save_approved_index(folder, index)
+    return index
+
+
 def fetch_approved():
-    """READ-ONLY: list approved Form 1s on eForms and save each one's PDF to out/approved/<eForm ID>.pdf (already
+    """READ-ONLY: list approved Form 1s on eForms and save each one's PDF to out/approved/<serial>.pdf (already
     saved ones are skipped). Returns (results rows found, problems). Logs out at the end, whatever happens."""
     folder = OUT / "approved"
     folder.mkdir(parents=True, exist_ok=True)
+    index = _migrate_approved_names(folder)
     found, problems = [], []
     pw, ctx, page = _browser()
     try:
@@ -657,15 +706,18 @@ def fetch_approved():
                 emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
                 _, rows = _approved_results(page, n)
             for row in rows:
-                dest = folder / f"{row['eform_id']}.pdf"
-                if dest.exists() and dest.stat().st_size > 1000:  # saved on an earlier run
-                    found.append({**row, "pdf": str(dest)})
+                known = index.get(row["eform_id"])
+                if known and (folder / known).exists():  # saved on an earlier run
+                    found.append({**row, "pdf": str(folder / known)})
                     continue
                 emit("step", f"downloading eForm …{row['eform_id'][-4:]}")
                 try:
-                    _fetch_form_pdf(page, ctx, row, dest)
+                    tmp = folder / f".{row['eform_id']}.part.pdf"
+                    _fetch_form_pdf(page, ctx, row, tmp)
+                    dest = _file_by_serial(folder, index, row["eform_id"], tmp)
+                    _save_approved_index(folder, index)
                     found.append({**row, "pdf": str(dest)})
-                    emit("info", f"saved eForm …{row['eform_id'][-4:]}")
+                    emit("info", f"saved {dest.name}")
                 except Exception as e:
                     problems.append(f"eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
                     emit("warn", f"could not get the PDF for eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
@@ -680,8 +732,10 @@ def read_approved(found=None):
     """Read approved-Form-1 PDFs (`found` from fetch_approved; default: every PDF already in out/approved/).
     Returns (records, problems)."""
     if found is None:
-        found = [{"eform_id": f.stem, "control_number": "", "finalized": "", "pdf": str(f)}
-                 for f in sorted((OUT / "approved").glob("*.pdf"))]
+        folder = OUT / "approved"
+        index = _migrate_approved_names(folder) if folder.exists() else {}
+        found = [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
+                 for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1])) if (folder / name).exists()]
     records, problems = [], []
     for row in found:
         try:

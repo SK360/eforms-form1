@@ -191,7 +191,9 @@ def test_check_approvals_end_to_end(configured, dashboard):
     records, more = atf.read_approved(found)
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     assert problems == [] and more == [] and state["logged_out"] and state["bad_clicks"] == []   # read-only
-    assert len(records) == 12 and state["pdf_hits"] == 12 and len(list((atf.OUT / "approved").glob("*.pdf"))) == 12
+    assert len(records) == 12 and state["pdf_hits"] == 12
+    names = sorted(f.name for f in (atf.OUT / "approved").glob("*.pdf"))
+    assert names == sorted(["T201.pdf", "T202.pdf", "T203.pdf", "R1.pdf", "R2.pdf"] + [f"OLD{n}.pdf" for n in range(6, 13)])  # by serial
     assert [r["serial"] for r, _ in rep["matched"]] == ["T201"]
     assert {r["serial"]: n for r, n in rep["differs"]} == {"T202": ["caliber 22 (records: 9)"], "T203": ["overall length 13 (settings: 12)"]}
     assert sorted(r["serial"] for r, _ in rep["unknown"]) == [f"OLD{n}" for n in range(10, 13)] + [f"OLD{n}" for n in range(6, 10)]
@@ -261,3 +263,16 @@ def test_lengths_are_filled_and_checked(configured, tmp_path):
     atf.apply_approvals(records, import_unknown=True)
     lengths = {r["serial_number"]: r["overall_length"] for r in atf.load_rows()}
     assert lengths == {"T1": "12", "T2": "6.5", "T3": "4.7"}   # gap filled from the PDF; a recorded length is never overwritten
+
+
+def test_old_id_named_pdfs_are_renamed_by_serial(configured):
+    folder = atf.OUT / "approved"
+    folder.mkdir()
+    (folder / "1234567.pdf").write_bytes(approved_pdf(serial="T301"))
+    (folder / "1234568.pdf").write_bytes(approved_pdf(serial="T301"))             # same serial twice: kept, not overwritten
+    (folder / "1234569.pdf").write_bytes(b"%PDF-1.4 unreadable")
+    records, problems = atf.read_approved()
+    assert sorted(f.name for f in folder.glob("*.pdf")) == ["T301.pdf", "T301_2.pdf", "eForm-1234569.pdf"]
+    assert sorted(r["eform_id"] for r in records) == ["1234567", "1234568"] and len(problems) == 1
+    index = (folder / "index.csv").read_text(encoding="utf-8")
+    assert "1234567,T301.pdf" in index and "1234568,T301_2.pdf" in index

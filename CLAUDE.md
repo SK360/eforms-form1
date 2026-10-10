@@ -65,8 +65,10 @@ plain CLI, kept for debugging/scripting:
   rows (`tr` with a "View Form" button; cells: eForm ID, Permit/Control #, ICN, Created By, Created, Submitted,
   Finalized), 10 per page, "Total Rows: N", page links by number. Per new row: View Form -> form page `#viewFormBtn`
   ("View PDF": the portal builds a Blob and opens it in a new tab; `_HOOK_JS` wraps URL.createObjectURL to keep the
-  Blob, `_READ_BLOB_JS` reads it) -> `out/approved/<eForm ID>.pdf` -> `#goHomeBtn` -> search again. Saved PDFs are
-  skipped on later runs. `read_approved_pdf()` reads item 4 (type, serial, caliber, model, barrel/overall length) and
+  Blob, `_READ_BLOB_JS` reads it) -> saved as `out/approved/<serial>.pdf` (`_file_by_serial`; `<serial>_2.pdf` for a
+  repeated serial, `eForm-<id>.pdf` if unreadable) with `out/approved/index.csv` mapping eForm ID -> file (the results
+  list shows only eForm IDs, so that is how later runs skip forms already saved) -> `#goHomeBtn` -> search again.
+  Older `<eForm ID>.pdf` files are renamed by `_migrate_approved_names`. `read_approved_pdf()` reads item 4 (type, serial, caliber, model, barrel/overall length) and
   ATF's decision block (Approved checkbox = ZapfDingbats glyph left of the "Approved" label ON the "Disapproved" line:
   older approvals also carry a banner "APPROVED WITH CONDITIONS - SEE CONDITIONS ON THE LAST PAGE OF PDF" that a plain
   search finds first; conditions = last-page text above its "Approval Conditions" heading; approval date under the
