@@ -509,6 +509,35 @@ def preview_flow():
     pause()
 
 
+def practice_flow():
+    """Fill one queued row in eForms and stop before signing: nothing is submitted (submit=False)."""
+    probs = atf.settings_problems()
+    if probs:
+        con.print(Panel("\n".join(f"• {escape(x)}" for x in probs), title="Fix these in Settings first", border_style="red", expand=False))
+        return pause()
+    rows = atf.load_rows()
+    queued = [i for i, r in enumerate(rows) if r["status"] not in atf.SKIP]
+    if not queued:
+        con.print("  Nothing queued: add a suppressor first (a test serial is fine; it is never submitted).")
+        return pause()
+    i = questionary.select("Practice with which row?", choices=[_row_choice(rows, i) for i in queued]).ask()
+    if i is None:
+        return
+    con.print(Panel("Fills this Form 1 in eForms the same way as filing, including the read-back check, then STOPS:\n"
+                    "it never ticks the certification or clicks Sign & Submit. The row stays queued; the draft stays in\n"
+                    "your eForms dashboard (delete it there, or it's deleted after 90 days). It clicks \"I affirm\" for you.",
+                    title="Practice run (nothing is submitted)", border_style="green", expand=False))
+    if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
+        return
+    if atf.applicant_type(_settings()) == "trust":
+        atf.stamp_5320(rows[i], date.today().strftime("%m/%d/%Y"))
+    try:
+        atf.file_rows(rows, [i], SimpleNamespace(dry=False, submit=False, auto_affirm=True, skip_ssn=True, capture=False))
+    finally:
+        P.finish()
+    pause()
+
+
 def redate_flow():
     rows = atf.load_rows()
     i = questionary.select("Regenerate the 5320.23 for which row?", choices=[_row_choice(rows, i) for i in range(len(rows))][::-1]).ask()
@@ -830,7 +859,8 @@ def approvals_flow():
 def advanced_flow():
     trust_filing = atf.applicant_type(_settings()) == "trust"
     what = questionary.select("Advanced:", choices=[
-        questionary.Choice("Preview the steps for a row (no browser)", preview_flow)] + ([
+        questionary.Choice("Preview the steps for a row (no browser)", preview_flow),
+        questionary.Choice("Practice run: fill a form without submitting", practice_flow)] + ([
         questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow)] if trust_filing else []) + [
         questionary.Choice("Re-file a row that's already filed", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),

@@ -140,7 +140,7 @@ portal:
       only: individual
       steps:
         - {selector: "[id='{q_id}'] >> nth=0", action: expect, label: "Answer {q_id}", value: "{q_answer}", exact: true}
-    - {selector: "#question17a", action: expect, label: "Citizenship", value: "US", exact: true, only: individual}
+    - {selector: "#question17a", action: expect, label: "Citizenship", value: "UNITED STATES", exact: true, only: individual}   # the verify page spells it out
     # Submitting (verify box, Certify page, Sign & Submit) is in _submit() in src/atf.py, gated on these checks.
   # --- start a NEW Form 1 from the home page (first row and between rows) ---
   # After a submission the portal is on the home page; the confirmation Ok is normally already clicked.

@@ -45,6 +45,17 @@ def test_file_as_individual_from_the_menu(configured, portal, answers, screen):
     assert atf.load_rows()[0]["status"] == "filed" and "Answer 11.A" in out
 
 
+def test_practice_run_never_submits(configured, portal, answers, screen):
+    queue(("S1", "9"))
+    state = portal([("S1", "9")])
+    answers(pick("Advanced"), pick("Practice run"), lambda kw: kw["choices"][0].value, True, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert atf.load_rows()[0]["status"] == "" and state["logged_out"]           # still queued: nothing signed
+    assert "Your turn in the browser" not in out and "Practice run (nothing is submitted)" in out
+    assert "Serial number" in out                                                # the read-back check still runs
+
+
 def test_declining_confirmation_opens_no_browser(configured, answers, screen, monkeypatch):
     queue(("S1", "9"))
     monkeypatch.setattr(atf, "_browser", lambda: (_ for _ in ()).throw(AssertionError("browser opened")))

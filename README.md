@@ -128,7 +128,8 @@ The first run asks whether you file through a trust or as an individual, then fo
   overall length, approval date); other types are only counted. Approvals are recorded in your inventory, and it
   offers to add approved suppressors that aren't in it yet (e.g. ones you filed before using this tool).
 - **⚠ Resolve a pending row**: only if a confirmation was missed. Check the eForms dashboard, then say whether it was filed.
-- **Advanced**: preview the steps without a browser, regenerate a 5320.23 with another date (trusts), re-file,
+- **Advanced**: preview the steps without a browser; a **practice run** that fills a form in eForms and stops before
+  signing (nothing is submitted; the row stays queued); regenerate a 5320.23 with another date (trusts); re-file;
   capture portal pages if ATF changes the site.
 
 Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one session at a time).
