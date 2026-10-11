@@ -168,24 +168,27 @@ def test_row_length_overrides_the_settings_default(configured):
     assert "fill #overallLength 7.25" in steps and "fill #overallLength 12" not in steps
 
 
-def test_select_is_confirmed_and_retried():
-    """A dropdown answer the page wipes once is picked again; one it keeps wiping stops the run (never goes on blank)."""
+def test_answers_are_checked_together_and_repicked():
+    """Answers picked in a check_picks block are read back together at the end: one the page wipes once is picked
+    again; one it keeps wiping stops the run (never goes on blank). A plain pick is checked once, right away."""
     from playwright.sync_api import sync_playwright
     said = []
     atf.emit = lambda kind, text, **d: said.append(text)
+    block = lambda sel, val: [{"action": "check_picks", "steps": [{"selector": sel, "action": "select", "value": val}]}]  # noqa: E731
     with sync_playwright() as pw:
         page = pw.chromium.launch().new_page()
         page.set_content("""<select id="q"><option value="">Select</option><option value="1: No">No</option><option value="2">Yes</option></select>
           <select id="c"><option>Select US/NON-US ...</option><option value="U">US</option><option value="N">NON-US</option></select>
           <script>let wipes = 1; document.getElementById('q').addEventListener('change', e => {
               if (wipes-- > 0) setTimeout(() => e.target.selectedIndex = 0, 100); });  // the page resets it once</script>""")
-        atf._select(page, page.locator("#q"), "No")
-        assert atf._shown_value(page.locator("#q")) == "No" and any("didn't stick" in t for t in said)
-        atf._select(page, page.locator("#c"), "US")                               # by label, not the value "U"
+        atf._run_steps(page, block("#q", "No"), {}, False, [])
+        assert atf._shown_value(page.locator("#q")) == "No" and any("didn't stick (#q)" in t for t in said)
+        atf._run_steps(page, [{"selector": "#c", "action": "select", "value": "US"}], {}, False, [])   # by label, not "U"
         assert atf._shown_value(page.locator("#c")) == "US"
         page.evaluate("wipes = 99")
-        with pytest.raises(RuntimeError, match="instead of 'Yes'"):
-            atf._select(page, page.locator("#q"), "Yes")
+        with pytest.raises(RuntimeError, match="keeps losing these answers: #q"):
+            atf._run_steps(page, block("#q", "Yes"), {}, False, [])
+        assert atf._picks is None                                                   # the block is closed even on failure
         bad = []
         page.set_content('<input id="v" value="NON-US">')
         atf._run_steps(page, [{"selector": "#v", "action": "expect", "label": "Citizenship", "value": "US", "exact": True}],

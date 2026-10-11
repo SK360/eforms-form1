@@ -165,10 +165,11 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   (eForms logs in through app.atf.gov/adfs; pressing Enter there used to time out on `#form-type-search` with a
   traceback). It warns and asks again; q stops. The menu turns any unexpected error into one red line plus
   `out/last_error.txt` (traceback) and returns to the menu.
-- **Dropdown picks are confirmed** (`_select`): pick by label (else value), then the page must keep it for 0.5 s;
-  one retry, then the step fails. First live individual run (2026-10-11): every 11.A-11.M answer and the item-16
-  citizenship (`17.Aanswer`) came out BLANK in the saved draft although the script had selected them; blank citizenship
-  made the RP popup show NON U.S.CITIZEN (locked) and `#birthCountry` then timed out. The mapping now waits for the
+- **Dropdown picks** (`_select`): by label (else value), checked once right away. Inside a `check_picks` mapping
+  block (the individual's applicant-page answers + citizenship) they're picked quickly and `_check_picks` reads them
+  all back after 1 s, re-picking lost ones (2 rounds, then the step fails). First live individual run (2026-10-11):
+  every 11.A-11.M answer and the item-16 citizenship (`17.Aanswer`) came out BLANK in the saved draft although the
+  script had selected them; blank citizenship made the RP popup show NON U.S.CITIZEN (locked) and `#birthCountry` then timed out. The mapping now waits for the
   applicant page, picks, and reads every answer back on that page (`exact: true`) before Next; the verify page checks
   `#question17a` = exactly "UNITED STATES" (second live run: everything else read back ✔; the verify page spells
   it out). Practice runs: Advanced > "Practice run" (= `fill-form1 --auto-affirm`, submit=False). The menu's

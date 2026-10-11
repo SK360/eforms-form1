@@ -1142,7 +1142,7 @@ _current_step = ""
 def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
     """Execute mapping steps. Raises on failure; read-back mismatches are appended to `bad`.
     Steps whose `tag` is in skip_tags are left out (e.g. tag: ssn with --skip-ssn). With dry, page may be None."""
-    global _current_step
+    global _current_step, _picks
     for s in steps:  # {selector, action: fill|select|check|click|upload|..., value: "{key}" or literal}
         act = s["action"]
         if s.get("only") and s["only"] != ctx_vals.get("applicant_type", "trust"):  # trust-only / individual-only
@@ -1151,6 +1151,15 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
         sel = s["selector"].format(**ctx_vals) if s.get("selector") else None  # e.g. :has-text('{rp_race}')
         if act == "section":  # progress marker only
             emit("section", f"--- {val} ---", name=val)
+            continue
+        if act == "check_picks":  # run the sub-steps picking dropdowns quickly, then check them all (_check_picks)
+            outer, _picks = _picks, []
+            try:
+                _run_steps(page, s["steps"], ctx_vals, dry, bad, skip_tags)
+                if not dry:
+                    _check_picks(page, _picks)
+            finally:
+                _picks = outer
             continue
         if act == "repeat":  # run the sub-steps once per item of a list setting (e.g. docs)
             for item in ctx_vals.get(s["over"]) or []:
@@ -1176,7 +1185,7 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
                 emit("step", "    (not present; skipping)")
             continue
         if act == "fill": loc.fill(val)
-        elif act == "select": _select(page, loc, val)
+        elif act == "select": _select(page, loc, val, sel)
         elif act == "check": _tick(page, sel)
         elif act == "click": loc.click()
         elif act == "upload": loc.set_input_files(val)
@@ -1238,28 +1247,49 @@ def _shown_value(loc):
     return (loc.evaluate(_SELECTED_JS) or "").strip()
 
 
-def _select(page, loc, val):
-    """Pick a dropdown option by its label (else its value), then confirm the page kept it. On the individual's
-    applicant page the answers were once silently lost (the page was still loading the profile and reset them):
-    retry once, then stop rather than go on with a wrong or empty answer."""
-    want = val.strip().lower()
+_picks = None  # inside a `check_picks` block: [(selector, locator, value)] picked quickly, checked together at the end
 
-    def kept():
-        return want in (_shown_value(loc).lower(), (loc.input_value() or "").strip().lower())
-    for attempt in range(2):
-        labels = loc.evaluate("e => [...e.options].map(o => o.text.trim())") or []
-        label = next((x for x in labels if x.lower() == want), None)
-        loc.select_option(label=label) if label is not None else loc.select_option(val)
-        steady = 0
-        for _ in range(10):  # kept for half a second in a row (a reset can come a moment later)
-            page.wait_for_timeout(250)
-            steady = steady + 1 if kept() else 0
-            if steady >= 2:
-                return
-        if not attempt:
-            emit("warn", f"    {val!r} didn't stick (the page shows {_shown_value(loc)!r}); trying again")
-            page.wait_for_timeout(1500)
-    raise RuntimeError(f"the page kept {_shown_value(loc)!r} instead of {val!r}")
+
+def _pick(loc, val):
+    """Choose a dropdown option by its label (else its value)."""
+    want = val.strip().lower()
+    labels = loc.evaluate("e => [...e.options].map(o => o.text.trim())") or []
+    label = next((x for x in labels if x.lower() == want), None)
+    loc.select_option(label=label) if label is not None else loc.select_option(val)
+
+
+def _kept(loc, val):
+    want = val.strip().lower()
+    return want in (_shown_value(loc).lower(), (loc.input_value() or "").strip().lower())
+
+
+def _select(page, loc, val, sel=""):
+    """Pick a dropdown option. Inside a check_picks block it is checked later with the others; elsewhere it is
+    checked once right away (a pick that didn't take at all fails the step instead of going on blank)."""
+    _pick(loc, val)
+    if _picks is not None:
+        _picks.append((sel, loc, val))
+        return
+    if not _kept(loc, val):
+        page.wait_for_timeout(500)
+        if not _kept(loc, val):
+            raise RuntimeError(f"the page shows {_shown_value(loc)!r} instead of {val!r}")
+
+
+def _check_picks(page, picks, rounds=2):
+    """Read back every answer picked in a check_picks block; re-pick the ones the page lost. On the individual's
+    applicant page the answers were once all lost (the page was still loading the profile and reset them)."""
+    for n in range(rounds + 1):
+        page.wait_for_timeout(1000)
+        lost = [(sel, loc, val) for sel, loc, val in picks if not _kept(loc, val)]
+        if not lost:
+            return
+        names = ", ".join(sel for sel, _, _ in lost)
+        if n == rounds:
+            raise RuntimeError(f"the page keeps losing these answers: {names}")
+        emit("warn", f"    {len(lost)} answer(s) didn't stick ({names}); picking them again")
+        for _, loc, val in lost:
+            _pick(loc, val)
 
 
 def _shutdown(page, ctx, pw, logout=True):
