@@ -233,8 +233,49 @@ def shot_approvals():
     ui.approvals_flow()
 
 
+def shot_individual():
+    """Filing as an individual: the confirmation (08) and the verify-page read-back (09). Same made-up data."""
+    path = atf.DATA / "trust.yaml"
+    t = yaml.safe_load(path.read_text(encoding="utf-8"))
+    t["applicant_type"] = "individual"
+    t["individual"] = {"answers": {q: "No" for q, _ in atf.QUESTIONS_11}, "upin": ""}
+    t.pop("trust", None)
+    t["files"].pop("trust_document", None)
+    path.write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
+    rows = atf.load_rows()
+    answered("What next?", menu_titles(rows)[0])
+    pick_all = lambda kw: [c.value for c in kw["choices"] if c.checked]  # noqa: E731
+    script(pick_all, False, True)
+
+    def replay(*a):
+        cut("08-individual-confirm")
+        e = ui.P.emit
+        e("row", "", serial="A113", caliber="9")
+        for name in ("CLEO", "Firearm: manufacturer", "Firearm: details", "Firearm: supporting documents", "Attachments"):
+            e("section", "", name=name)
+        ui.con.export_svg(clear=True)  # the picture starts at the verify page
+        e("section", "", name="Read-back check")
+        for label, want in (("Serial number", "A113"), ("Model", "N/A"), ("Type", "SILENCER"), ("Caliber", "9"),
+                            ("Overall length", "12")):
+            e("expect", "", label=label, want=want, got=want, ok=True)
+        for q, _ in atf.QUESTIONS_11:
+            e("expect", "", label=f"Answer {q}", want="No", got="NO", ok=True)
+        e("expect", "", label="Answer 11.M.2", want="N/A", got="N/A", ok=True)
+        e("expect", "", label="Citizenship", want="UNITED STATES", got="UNITED STATES", ok=True)
+        e("section", "", name="Certify")
+        ui.P._close()
+        cut("09-individual-readback")
+        raise Cut
+    atf.file_rows = replay
+    try:
+        ui.file_flow()
+    except Cut:
+        pass
+
+
 SHOTS = [("01-home", shot_home), ("02-add", shot_add), (None, shot_file),  # shot_file makes 03-file and 04-filing
-         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs), ("07-approvals", shot_approvals)]
+         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs), ("07-approvals", shot_approvals),
+         (None, shot_individual)]  # 08-individual-confirm, 09-individual-readback (last: it switches the settings)
 
 
 def to_png(svg, dest):

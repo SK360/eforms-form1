@@ -29,6 +29,12 @@ You enter the emailed code and your PIN.
 ![Confirming a batch](docs/screenshots/03-file.png)
 ![Filing a form](docs/screenshots/04-filing.png)
 
+**Filing as an individual:** the same, without the 5320.23 and trust document. Your answers to questions 11.A-11.M
+are shown in the confirmation, then read back on the verify page, with your citizenship, before it signs.
+
+![Confirming a batch as an individual](docs/screenshots/08-individual-confirm.png)
+![Read-back as an individual](docs/screenshots/09-individual-readback.png)
+
 **Inventory** (suppressors and SBRs) and **Check approvals**, which reads your approved Form 1s from eForms and
 compares them with your records.
 
@@ -106,7 +112,15 @@ of all the packages yet; the installer skips it and asks you to add 3.13 next to
 Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
 
 The first run asks whether you file through a trust or as an individual, then for your details, CLEO and files
-(Settings; change them any time, including switching between trust and individual). Then:
+(Settings; change them any time, including switching between trust and individual).
+
+**Before your first real batch, do a practice run:** add a suppressor (a test serial like `TEST1` is fine), then
+Advanced > **Practice run**. It fills a whole Form 1 in eForms and shows the read-back table, then stops: it never
+signs or submits. Every row should have a ✔. Afterwards remove the test row (Edit or remove a queued suppressor) and
+delete the draft in your eForms dashboard (drafts are also deleted after 90 days).
+
+Questions that open the browser or file something take **y and then Enter** (a key on its own doesn't count, so a
+stray keypress can't start anything). Then:
 
 - **Add suppressors**: asks how many (Enter = 1), then the (first) serial, caliber and overall length, suggesting the
   next serial and your last caliber and length. For several, it numbers them in sequence (e.g. A101 … A110) with the same
@@ -117,19 +131,24 @@ The first run asks whether you file through a trust or as an individual, then fo
   approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. Filter by Approved /
   In progress / Queued, or **Show SBRs** for your approved SBRs. From there you can also open any approved Form 1 PDF
   and **export to Excel** (`out/inventory_<date>.xlsx`, with an SBRs sheet). The home screen shows a one-line summary.
-- **File N queued suppressors**: pick the rows, say whether you want to type your SSN on each form, confirm (this is
-  your "I affirm" and your OK to Sign & Submit each one once every check passes). A browser opens: log in, wait for
-  the eForms home page, press Enter. For each suppressor it fills the form, shows each page ticked off and a read-back
-  table, then a yellow **"Your turn in the browser"** box: enter the emailed code, Verify, enter your PIN, Submit.
-- **Check approvals on eForms**: read-only. After you log in it lists your approved Form 1s, saves each one's PDF to
+- **File N queued suppressors**: pick the rows and say whether you want to type your SSN on each form. Trusts: it
+  makes each suppressor's 5320.23, dated today. One confirmation lists the batch and says whether you're filing as
+  your trust or as an individual (with your saved answers to questions 11.A-11.M); confirming is your "I affirm" and
+  your OK to Sign & Submit each one once every check passes. A browser opens: log in (MFA included), wait for the
+  eForms home page, press Enter; it checks you're really logged in before it starts. For each suppressor it fills the
+  form, shows each page ticked off, waits for eForms to confirm your fingerprints ("Valid EBTS Package"), and shows a
+  read-back table comparing what eForms will certify with what you meant (serial, model, type, caliber, length, and
+  the trust name or your answers and citizenship). Only if everything matches does it sign; then a yellow **"Your
+  turn in the browser"** box: enter the emailed code, Verify, enter your PIN, Submit.
+- **Check approvals on eForms**: read-only. After you log in (and press Enter) it lists your approved Form 1s, saves each one's PDF to
   `out/approved/` (only new ones on later runs), reads the serial, caliber and overall length from each, and reports
   your suppressors: matching your records, differing (caliber/length), approved but not in your records, and filed
   but not approved yet. Approved SBRs go into a separate SBR inventory (`data/sbrs.csv`: caliber, model, barrel and
   overall length, approval date); other types are only counted. Approvals are recorded in your inventory, and it
   offers to add approved suppressors that aren't in it yet (e.g. ones you filed before using this tool).
 - **⚠ Resolve a pending row**: only if a confirmation was missed. Check the eForms dashboard, then say whether it was filed.
-- **Advanced**: preview the steps without a browser; a **practice run** that fills a form in eForms and stops before
-  signing (nothing is submitted; the row stays queued); regenerate a 5320.23 with another date (trusts); re-file;
+- **Advanced**: **practice run** (fills a form in eForms and stops before signing; nothing is submitted, the row
+  stays queued); preview the steps without a browser; regenerate a 5320.23 with another date (trusts); re-file;
   capture portal pages if ATF changes the site.
 
 Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one session at a time).
@@ -144,7 +163,13 @@ Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (
 never committed. **Never zip or copy this folder to share it**; share the git repository instead.
 
 ## Troubleshooting
+- "The browser isn't logged in to eForms yet": you pressed Enter before the login (MFA included) finished. Finish
+  logging in until your eForms home page shows, then press Enter again (or type q to stop).
 - "Another user is logged in": a previous run didn't log out; wait ~15-30 min or log out in the other browser.
+- "no dialog said 'Valid EBTS Package'": eForms didn't confirm your fingerprint file within 60 seconds, so nothing is
+  submitted. Check the message in the browser; on Windows, make sure the `.eft` isn't an online-only OneDrive file.
+- A ✖ in the read-back table: eForms shows something other than what you meant, so it doesn't sign. Look at that
+  field in the browser.
 - A step fails: the browser stays open on that page; press Enter to log out. Check the eForms dashboard before filing
   that serial again. If ATF changed the site, the selectors in `config/mapping.yaml` need updating (see CLAUDE.md).
 - The plain command line is still underneath: `./atf fill-form1 --help` (Windows: `.\atf.cmd fill-form1 --help`).
