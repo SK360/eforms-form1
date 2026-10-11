@@ -291,6 +291,7 @@ def test_menu_shows_the_report(configured, dashboard, answers, screen):
                   "Approved, NOT in your records (2)", "Filed, not approved yet: 1", "T204"):
         assert shown in out, shown
     assert "DOE" not in out.upper()
+    assert answers.kw["Open the browser?"]["auto_enter"] is False   # 'y' alone doesn't start it: Enter does
 
 
 def test_lengths_are_filled_and_checked(configured, tmp_path):

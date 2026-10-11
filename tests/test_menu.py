@@ -1,5 +1,7 @@
 """The ./atf menu (src/ui.py) with scripted answers: adding, filing, resolving, and screenshot-safe output."""
 import csv
+import os
+import sys
 
 import pytest
 
@@ -37,6 +39,23 @@ def test_declining_confirmation_opens_no_browser(configured, answers, screen, mo
     answers(pick("File 1 queued"), TICKED, False, False, QUIT)
     ui.menu()
     assert atf.load_rows()[0]["status"] == ""
+    assert answers.kw["Confirm and open the browser?"]["auto_enter"] is False   # 'y' alone doesn't start it: Enter does
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses a POSIX pseudo-terminal")
+def test_keys_typed_ahead_cannot_answer_the_login_prompt(monkeypatch):
+    """An Enter pressed after 'y' on "Open the browser?" must not answer "Log in ... then press Enter"."""
+    import pty
+    import select
+    master, slave = pty.openpty()
+    tty = os.fdopen(slave, "r")
+    os.write(master, b"\n")                                        # the stray Enter, typed before the prompt
+    assert select.select([tty], [], [], 1)[0]                       # it's waiting in the terminal
+    monkeypatch.setattr(sys, "stdin", tty)
+    ui._drop_typeahead()
+    assert not select.select([tty], [], [], 0.2)[0]                 # gone
+    tty.close()
+    os.close(master)
 
 
 def test_incomplete_settings_block_filing(configured, answers, screen):

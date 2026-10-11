@@ -96,7 +96,7 @@ class Script:
     """Scripted answers for questionary prompts. An answer may be a value or f(kwargs) -> value."""
 
     def __init__(self):
-        self.answers, self.asked, self.seen = [], [], {}
+        self.answers, self.asked, self.seen, self.kw = [], [], {}, {}
 
     def __call__(self, *answers):
         self.answers[:] = list(answers)
@@ -108,6 +108,7 @@ class Script:
             def ask(self):
                 script.asked.append((kind, msg))
                 script.seen[msg] = kw.get("default")
+                script.kw[msg] = kw
                 assert script.answers, f"no scripted answer left for {kind} {msg!r}"
                 a = script.answers.pop(0)
                 a = a(kw) if callable(a) else a

@@ -35,6 +35,21 @@ def short(num):
     return f"…{num[-4:]}" if num.isdigit() and len(num) > 4 else num
 
 
+def _drop_typeahead():
+    """Throw away keys typed before a prompt appeared, so they can't answer it. E.g. an Enter pressed after 'y' on
+    "Open the browser?" used to answer "Log in ... then press Enter" at once, before the user had logged in."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+        elif sys.stdin.isatty():
+            import termios
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:  # not a console (tests, pipes): nothing to drop
+        pass
+
+
 # ---------- Live output for a filing run (replaces atf.emit / atf.ask) ----------
 class Progress:
     """Turns the engine's events into a ticked list of pages, a read-back table and a code/PIN banner."""
@@ -106,6 +121,7 @@ class Progress:
     def ask(self, prompt):
         section = self.section
         self._stop()
+        _drop_typeahead()
         try:
             return con.input(f"  [bold yellow]›[/] {escape(prompt.strip())} ")
         finally:
@@ -451,7 +467,7 @@ def file_flow(indices=None):
         "and you authorize the script to tick the certification and click Sign & Submit for each one,\n"
         "only after every read-back check and the portal's validation pass. You still enter the code and PIN.",
         title="Confirm", border_style="cyan", expand=False))
-    if not questionary.confirm("Confirm and open the browser?", default=False).ask():
+    if not questionary.confirm("Confirm and open the browser?", default=False, auto_enter=False).ask():
         return
     opts = SimpleNamespace(dry=False, submit=True, auto_affirm=True, skip_ssn=not ssn, capture=False)
     try:
@@ -511,7 +527,7 @@ def refile_flow():
         return
     con.print(Panel(f"{escape(rows[i]['serial_number'])} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
                     "Filing again creates a SECOND application for the same serial.", border_style="red", expand=False))
-    if questionary.confirm("Re-file it anyway?", default=False).ask():
+    if questionary.confirm("Re-file it anyway?", default=False, auto_enter=False).ask():
         file_flow([i])
 
 
@@ -716,7 +732,7 @@ def approvals_flow():
                     "serial (caliber, overall length). SBRs and other types are only counted. The first run fetches every\n"
                     "approved form (roughly 10-20 seconds each); later runs only fetch new approvals.",
                     title="Check approvals", border_style="cyan", expand=False))
-    if not questionary.confirm("Open the browser?", default=True).ask():
+    if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
         return
     try:
         found, problems = atf.fetch_approved()

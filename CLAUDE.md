@@ -136,6 +136,10 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   `UNSAFE` (void/withdraw/delete/save/submit/sign/cancel/amend/copy/edit/abandon). Never click by position alone.
 - Claude never clicks Sign & Submit / enters credentials itself; the user runs the commands. Claude watches the terminal
   and fixes the script.
+- Yes/no questions that open the browser or re-file ("Confirm and open the browser?", "Open the browser?", "Re-file it
+  anyway?") use `auto_enter=False`: y/n alone doesn't answer, Enter does. questionary normally answers on the key, and
+  an Enter typed after it then answered "Log in ... then press Enter" before the user had logged in. `Progress.ask`
+  also drops typed-ahead keys (`_drop_typeahead`: termios flush / msvcrt) before every prompt.
 - First run shows a disclaimer the user must accept (unofficial, as-is, user responsible for every filing).
 
 ## Layout
