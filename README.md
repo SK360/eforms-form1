@@ -72,7 +72,7 @@ set. Before your first filing, look at one result: Advanced > Regenerate a 5320.
 ## Get it
 - **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):
   `git clone https://github.com/SK360/eforms-form1.git` and later `git pull` (in that folder) to update.
-- **Without Git:** on the repository page (you need to be added as a collaborator and logged in to GitHub):
+- **Without Git:** on the repository page (https://github.com/SK360/eforms-form1):
   Code > Download ZIP, then unzip it. To update, download it again and copy your `data`, `forms` and `out`
   folders into the new copy.
 
