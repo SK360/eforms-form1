@@ -166,3 +166,28 @@ def test_row_length_overrides_the_settings_default(configured):
     atf.save_rows(rows)
     steps = _dry_steps()
     assert "fill #overallLength 7.25" in steps and "fill #overallLength 12" not in steps
+
+
+def test_select_is_confirmed_and_retried():
+    """A dropdown answer the page wipes once is picked again; one it keeps wiping stops the run (never goes on blank)."""
+    from playwright.sync_api import sync_playwright
+    said = []
+    atf.emit = lambda kind, text, **d: said.append(text)
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page()
+        page.set_content("""<select id="q"><option value="">Select</option><option value="1: No">No</option><option value="2">Yes</option></select>
+          <select id="c"><option>Select US/NON-US ...</option><option value="U">US</option><option value="N">NON-US</option></select>
+          <script>let wipes = 1; document.getElementById('q').addEventListener('change', e => {
+              if (wipes-- > 0) setTimeout(() => e.target.selectedIndex = 0, 100); });  // the page resets it once</script>""")
+        atf._select(page, page.locator("#q"), "No")
+        assert atf._shown_value(page.locator("#q")) == "No" and any("didn't stick" in t for t in said)
+        atf._select(page, page.locator("#c"), "US")                               # by label, not the value "U"
+        assert atf._shown_value(page.locator("#c")) == "US"
+        page.evaluate("wipes = 99")
+        with pytest.raises(RuntimeError, match="instead of 'Yes'"):
+            atf._select(page, page.locator("#q"), "Yes")
+        bad = []
+        page.set_content('<input id="v" value="NON-US">')
+        atf._run_steps(page, [{"selector": "#v", "action": "expect", "label": "Citizenship", "value": "US", "exact": True}],
+                       {}, False, bad)
+        assert bad                                                                  # "US" must not match "NON-US"

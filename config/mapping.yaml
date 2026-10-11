@@ -28,14 +28,25 @@ portal:
     # address/phone/email come pre-filled from the eForms account; nothing to do
     - {selector: "#tradeName", action: fill, value: "{trust_name}", only: trust}
     - {selector: "#titleOfTheSubmitter", action: fill, value: "{rp_title}", only: trust}
-    # individual: questions 11.A-11.M.2 (answers saved in your settings; all must be No, 11.M.2 = N/A)
+    # individual: questions 11.A-11.M.2 (answers saved in your settings; all must be No, 11.M.2 = N/A).
+    # The page loads your profile after it appears and once wiped answers picked too early: wait, pick (each pick is
+    # confirmed), then read everything back before Next.
+    - {selector: "[id='11.A']", action: wait_for, value: "20000", only: individual}
+    - {action: wait, value: "2500", only: individual}
     - action: repeat
       over: answers
       only: individual
       steps:
         - {selector: "[id='{q_id}']", action: select, value: "{q_answer}"}
     - {selector: "#14answer", action: fill, value: "{upin}", only: individual, if_set: upin}   # item 13: UPIN, if you have one
-    - {selector: "[id='17.Aanswer']", action: select, value: "US", only: individual}           # US citizen (NON-US not supported)
+    - {selector: "[id='17.Aanswer']", action: select, value: "US", only: individual}           # item 16 country of citizenship: US (NON-US not supported)
+    - {action: wait, value: "1000", only: individual}
+    - action: repeat
+      over: answers
+      only: individual
+      steps:
+        - {selector: "[id='{q_id}']", action: expect, label: "{q_id} (applicant page)", value: "{q_answer}", exact: true}
+    - {selector: "[id='17.Aanswer']", action: expect, label: "Citizenship (applicant page)", value: "US", exact: true, only: individual}
     - {selector: "#nextBtn", action: click}
     # --- responsible-persons: edit popup (first responsible person only; an individual gets the same popup) ---
     - {action: section, value: "Responsible person"}
@@ -128,7 +139,8 @@ portal:
       over: answers
       only: individual
       steps:
-        - {selector: "[id='{q_id}'] >> nth=0", action: expect, label: "Answer {q_id}", value: "{q_answer}"}
+        - {selector: "[id='{q_id}'] >> nth=0", action: expect, label: "Answer {q_id}", value: "{q_answer}", exact: true}
+    - {selector: "#question17a", action: expect, label: "Citizenship", value: "US", exact: true, only: individual}
     # Submitting (verify box, Certify page, Sign & Submit) is in _submit() in src/atf.py, gated on these checks.
   # --- start a NEW Form 1 from the home page (first row and between rows) ---
   # After a submission the portal is on the home page; the confirmation Ok is normally already clicked.

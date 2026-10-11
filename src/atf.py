@@ -486,7 +486,7 @@ def _dump_page(page):
                   if (e.disabled) o.disabled = true;
                   if (['radio','checkbox'].includes(e.type)) o.checked = e.checked;
                   if (['radio','checkbox'].includes(e.type)) o.value = e.value;
-                  if (e.tagName === 'SELECT') { o.options = [...e.options].map(x => x.text).slice(0,40);
+                  if (e.tagName === 'SELECT') { o.options = [...e.options].map(x => x.value && x.value !== x.text ? `${x.text} [${x.value}]` : x.text).slice(0,40);
                                                 o.selected = e.selectedIndex >= 0 ? e.options[e.selectedIndex].text : undefined; }
                   if (['INPUT','SELECT','TEXTAREA'].includes(e.tagName)) o.context = ctx(e);
                   return Object.fromEntries(Object.entries(o).filter(([k,v]) => v !== undefined && v !== ''));
@@ -1176,14 +1176,15 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
                 emit("step", "    (not present; skipping)")
             continue
         if act == "fill": loc.fill(val)
-        elif act == "select": loc.select_option(val)
+        elif act == "select": _select(page, loc, val)
         elif act == "check": _tick(page, sel)
         elif act == "click": loc.click()
         elif act == "upload": loc.set_input_files(val)
         elif act == "pause": ask(f"  >> {s.get('note', 'Do this step manually in the browser')} then press Enter... ")
         elif act == "expect":  # compare a read-only field against the intended value; never changes anything
-            got = (loc.input_value() or "").strip()
-            ok = _token_match(val, got)
+            got = _shown_value(loc)
+            # exact: whole-value match (e.g. citizenship "US", which a token match would also find in "NON-US")
+            ok = got.lower() == val.strip().lower() if s.get("exact") else _token_match(val, got)
             emit("expect", f"    {'OK ' if ok else 'MISMATCH'} expected {val!r} got {got!r}",
                  label=str(s.get("label", sel)).format(**ctx_vals), want=val, got=got, ok=ok, private=s.get("private", False))
             if not ok:
@@ -1227,6 +1228,38 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
         elif act == "press": page.keyboard.press(val)
         elif act == "wait": page.wait_for_timeout(int(val or 1000))
         elif act == "wait_for": loc.first.wait_for(state=s.get("state", "attached"), timeout=int(val or 30000))
+
+
+_SELECTED_JS = "e => e.tagName === 'SELECT' ? ((e.options[e.selectedIndex] || {}).text || '').trim() : (e.value || '').trim()"
+
+
+def _shown_value(loc):
+    """What a field shows: a dropdown's selected option text (its hidden value may be a code), else its value."""
+    return (loc.evaluate(_SELECTED_JS) or "").strip()
+
+
+def _select(page, loc, val):
+    """Pick a dropdown option by its label (else its value), then confirm the page kept it. On the individual's
+    applicant page the answers were once silently lost (the page was still loading the profile and reset them):
+    retry once, then stop rather than go on with a wrong or empty answer."""
+    want = val.strip().lower()
+
+    def kept():
+        return want in (_shown_value(loc).lower(), (loc.input_value() or "").strip().lower())
+    for attempt in range(2):
+        labels = loc.evaluate("e => [...e.options].map(o => o.text.trim())") or []
+        label = next((x for x in labels if x.lower() == want), None)
+        loc.select_option(label=label) if label is not None else loc.select_option(val)
+        steady = 0
+        for _ in range(10):  # kept for half a second in a row (a reset can come a moment later)
+            page.wait_for_timeout(250)
+            steady = steady + 1 if kept() else 0
+            if steady >= 2:
+                return
+        if not attempt:
+            emit("warn", f"    {val!r} didn't stick (the page shows {_shown_value(loc)!r}); trying again")
+            page.wait_for_timeout(1500)
+    raise RuntimeError(f"the page kept {_shown_value(loc)!r} instead of {val!r}")
 
 
 def _shutdown(page, ctx, pw, logout=True):
