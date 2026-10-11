@@ -85,7 +85,7 @@ def test_short_application_number():
 
 
 def test_serial_key_is_natural():
-    assert sorted(["S10", "S9", "s100", "S010A", "A1"], key=atf.serial_key) == ["A1", "S9", "S10", "S010A", "s100"]
+    assert sorted(["S10", "S9", "s100", "S10A", "A1"], key=atf.serial_key) == ["A1", "S9", "S10", "S10A", "s100"]
 
 
 def test_filed_dates_backfilled_from_the_log(configured):

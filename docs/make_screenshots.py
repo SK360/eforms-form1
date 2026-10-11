@@ -42,7 +42,7 @@ def sandbox():
         (f / name).write_bytes(b"x")
     settings = {
         "trust": {"name": "DEMO FAMILY TRUST"},
-        "responsible_persons": [{"title": "Trustee", "dob": "01/02/1980", "sex": "Male", "race": "White",
+        "responsible_persons": [{"title": "Settlor", "dob": "01/02/1980", "sex": "Male", "race": "White",
                                  "place_of_birth": {"country": "United States of America", "state": "Ohio"},
                                  "home_address": {"state": "Ohio"}}],
         "cleo": {"department": "SPRINGFIELD POLICE DEPARTMENT", "official": "PAT EXAMPLE", "title": "CHIEF OF POLICE",

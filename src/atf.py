@@ -783,7 +783,7 @@ def _go_home(page):
         page.locator("#form-type-search").wait_for(timeout=30000)
 
 
-# out/approved/: PDFs named by serial (S029.pdf); index.csv maps eForm ID -> file, because the results list only shows
+# out/approved/: PDFs named by serial (A101.pdf); index.csv maps eForm ID -> file, because the results list only shows
 # eForm IDs and that is how a later run knows which forms it already has.
 def _approved_index(folder):
     idx = folder / "index.csv"
@@ -801,7 +801,7 @@ def _save_approved_index(folder, index):
 
 
 def _file_by_serial(folder, index, eform_id, pdf):
-    """Rename a downloaded approval PDF to <serial>.pdf (S029.pdf; S029_2.pdf if that serial already has another
+    """Rename a downloaded approval PDF to <serial>.pdf (A101.pdf; A101_2.pdf if that serial already has another
     form; eForm-<id>.pdf if the serial can't be read) and record it in the index. Returns the new path."""
     try:
         serial = read_approved_pdf(pdf)["serial"].strip()

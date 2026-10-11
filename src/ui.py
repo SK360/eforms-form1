@@ -627,7 +627,7 @@ def settings_flow(first=False):
         trust["name"] = _a(questionary.text("Trust name (exactly as on the trust document):", default=get("trust.name"), validate=_need))
         con.rule("Responsible person (you)")
         rp = dict((t.get("responsible_persons") or [{}])[0])
-        rp["title"] = _a(questionary.text("Your title in the trust:", default=get("responsible_persons.0.title", "Trustee"), validate=_need))
+        rp["title"] = _a(questionary.text("Your title in the trust:", default=get("responsible_persons.0.title", "Settlor"), validate=_need))
         rp["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("responsible_persons.0.dob"), validate=_date))
         rp["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                           default=get("responsible_persons.0.sex", "Male").title()))

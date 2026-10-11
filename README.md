@@ -109,7 +109,7 @@ The first run asks for your trust, CLEO and file details (Settings; change them 
   caliber and length, shows the range to confirm, and adds nothing if any of those serials already exist.
 - **Edit or remove a queued suppressor**: fix a serial, caliber or length, or take it out of the queue. Filed and
   approved ones are your record of what was submitted, so they can't be changed here.
-- **Inventory**: every suppressor in serial order (S001, S002 … S010) with caliber, length, status (queued, filed,
+- **Inventory**: every suppressor in serial order (A1, A2 … A10) with caliber, length, status (queued, filed,
   approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. Filter by Approved /
   In progress / Queued, or **Show SBRs** for your approved SBRs. From there you can also open any approved Form 1 PDF
   and **export to Excel** (`out/inventory_<date>.xlsx`, with an SBRs sheet). The home screen shows a one-line summary.

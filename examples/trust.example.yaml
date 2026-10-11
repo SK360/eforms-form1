@@ -3,7 +3,7 @@
 trust:
   name: "Example Family Trust"            # exactly as on the trust document
 responsible_persons:                      # only the first entry is used
-  - title: "Trustee"                      # your title in the trust (typed into eForms as "title of the submitter")
+  - title: "Settlor"                      # your title in the trust (typed into eForms as "title of the submitter")
     dob: "MM/DD/YYYY"
     sex: "Male"                           # as the eForms dropdown lists it: Male / Female
     race: "White"                         # must match the eForms race option text

@@ -26,7 +26,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
     shutil.copy(FIXTURE, tpl)
     checks = {}
     answers(True, f"'{tpl}'",                                           # accept disclaimer; template dragged in, quoted
-            "Doe Family Trust", "Trustee", D, "Male", "Asian", D, "Ohio",   # typed over a prefill; DOB, birth state accepted
+            "Doe Family Trust", D, D, "Male", "Asian", D, "Ohio",       # name typed over a prefill; title, DOB, birth state accepted
             D, "Pat Chief", D, D, D, D, "Clark", D,                         # CLEO: official typed, county typed, rest accepted
             D, D, D,                                                        # model, length, description: defaults
             str(f / "prints.eft"), lambda kw: (checks.setdefault("blank_photo", kw["validate"]("")), str(f / "me.jpg"))[1],
@@ -38,6 +38,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
     assert seen["Agency / department:"] == FIXTURE_ANSWERS["cleo.department"]
     assert seen["Official's title:"] == FIXTURE_ANSWERS["cleo.title"] and seen["Agency ZIP:"] == FIXTURE_ANSWERS["cleo.address.zip"]
     assert seen[DESC_PROMPT] == ui.DEFAULT_DESCRIPTION
+    assert seen["Your title in the trust:"] == "Settlor" and t["responsible_persons"][0]["title"] == "Settlor"   # default title
     assert not any("manufacturer" in m.lower() for _, m in answers.asked)
     assert checks["blank_photo"] is not True                                             # photo is required
     assert t["trust"]["name"] == "Doe Family Trust" and t["cleo"]["official"] == "Pat Chief"
