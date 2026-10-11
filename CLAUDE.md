@@ -186,6 +186,12 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   agency/address needs a new template (agency and address lines are not restamped).
 - Responsible person fields (name, title, street, zip) are prefilled from the user's eForms account.
 
+## Screenshots (docs/screenshots/*.png)
+`.venv/bin/python docs/make_screenshots.py` regenerates them from the REAL menu code (rich's SVG export, made into PNG
+with Playwright) in a temp folder with a fake trust and made-up serials A101... (no real serials, not even last 4:
+the user posts these publicly). The browser part of filing and approvals is replayed as engine events; no eForms.
+Re-run after changing any screen.
+
 ## When the portal changes
 Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page (it
 records the newest tab to `out/capture_*.jsonl` and saves any PDF the portal sends to `out/captures/`); Claude reads those; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)

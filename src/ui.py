@@ -93,7 +93,7 @@ class Progress:
                             title="✋ Your turn in the browser", border_style="yellow", expand=False, padding=(1, 3)))
             self._start("[yellow]Waiting for the confirmation (up to 15 min)…[/]")
         elif kind == "done":
-            self._stop()
+            self._close()  # tick off Certify before the Filed line
             con.print(f"  [bold green]✔ Filed: application #{escape(short(d['number']))}[/]")
         elif kind == "error":
             self._close(mark="[red]✖[/]")

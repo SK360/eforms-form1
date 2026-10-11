@@ -11,6 +11,30 @@ your PIN for every submission.
 
 Currently supports: one trust, one responsible person, suppressors (Form 1), on a Mac or Windows PC.
 
+## What it looks like
+(Made-up serials, numbers and dates.)
+
+**Home:** your queue and recent filings, and a menu.
+
+![Home screen](docs/screenshots/01-home.png)
+
+**Add suppressors:** one, or a run of serials with the same caliber and length.
+
+![Adding ten suppressors](docs/screenshots/02-add.png)
+
+**File:** one confirmation for the whole batch, then each form is filled, read back and checked before it's signed.
+You enter the emailed code and your PIN.
+
+![Confirming a batch](docs/screenshots/03-file.png)
+![Filing a form](docs/screenshots/04-filing.png)
+
+**Inventory** (suppressors and SBRs) and **Check approvals**, which reads your approved Form 1s from eForms and
+compares them with your records.
+
+![Inventory](docs/screenshots/05-inventory.png)
+![SBR inventory](docs/screenshots/06-sbrs.png)
+![Check approvals](docs/screenshots/07-approvals.png)
+
 ## Before you start
 - An eForms account, your trust document (PDF), your fingerprint file (`.eft`), and a photo of you (JPG/PNG;
   eForms requires it for the responsible person, though the 5320.23 PDF itself doesn't need one).
@@ -60,10 +84,17 @@ of all the packages yet; the installer skips it and asks you to add 3.13 next to
 ```bash
 ./install.sh
 ```
-**Windows** (in the folder, right-click > Open in Terminal). First install Python 3.13: run `py install 3.13`
-if you have the Python install manager, or download 3.13 from https://www.python.org/downloads/windows/ and tick
-**"Add python.exe to PATH"**. Keep the folder outside OneDrive/Dropbox (e.g. `C:\Users\<you>\eforms-form1`): it holds
-your personal records and a large browser profile that shouldn't sync. Then:
+**Windows:**
+1. Install **Python 3.13** (not the newest: 3.15 doesn't work with this yet, and it's what python.org's big Download
+   button gives you now). Easiest way:
+   - On https://www.python.org/downloads/ click Download to get the **Python install manager** and install it.
+   - Open a terminal and run `py install 3.13`. Having 3.15 installed as well is fine; the installer below picks 3.13.
+
+   (Or, from https://www.python.org/downloads/windows/, any 3.13 or 3.14 release that has a "Windows installer
+   (64-bit)"; tick **"Add python.exe to PATH"** when installing.)
+2. Put this folder somewhere outside OneDrive/Dropbox (e.g. `C:\Users\<you>\eforms-form1`): it will hold your
+   personal records and a large browser profile that shouldn't sync.
+3. In the folder, right-click > Open in Terminal, and run:
 ```
 .\install.cmd
 ```
