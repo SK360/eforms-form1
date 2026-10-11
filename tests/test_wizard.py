@@ -25,7 +25,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
     tpl = f / "signed 5320.pdf"
     shutil.copy(FIXTURE, tpl)
     checks = {}
-    answers(True, f"'{tpl}'",                                           # accept disclaimer; template dragged in, quoted
+    answers(True, D, f"'{tpl}'",                                        # accept disclaimer; a trust (default); template, quoted
             "Doe Family Trust", D, D, "Male", "Asian", D, "Ohio",       # name typed over a prefill; title, DOB, birth state accepted
             D, "Pat Chief", D, D, D, D, "Clark", D,                         # CLEO: official typed, county typed, rest accepted
             D, D, D,                                                        # model, length, description: defaults
@@ -33,7 +33,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
             str(f / "My Trust.pdf"), True, str(f / "printer.jpg"), "3d printer", False, QUIT)
     ui.menu()
     out, t, seen = screen.getvalue(), saved(), answers.seen
-    assert answers.asked[1][0] == "path" and "5320.23" in answers.asked[1][1]          # template asked first
+    assert answers.asked[2][0] == "path" and "5320.23" in answers.asked[2][1]          # template asked first (after trust/individual)
     assert f"Read {len(FIXTURE_ANSWERS)} answers" in out
     assert seen["Agency / department:"] == FIXTURE_ANSWERS["cleo.department"]
     assert seen["Official's title:"] == FIXTURE_ANSWERS["cleo.title"] and seen["Agency ZIP:"] == FIXTURE_ANSWERS["cleo.address.zip"]
@@ -66,14 +66,14 @@ def test_drag_and_drop_quotes_and_windows_paths():
 
 
 def test_changed_cleo_title_still_stamps(configured, answers, screen):
-    answers(SETTINGS, True, *[D] * 9, "SHERIFF", *[D] * 8, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, True, *[D] * 9, "SHERIFF", *[D] * 8, D, D, D, True, False, QUIT)
     ui.menu()
     assert saved()["cleo"]["title"] == "SHERIFF" and "stamps correctly" in screen.getvalue()
 
 
 def test_kept_template_and_defaults_change_nothing(configured, answers, screen):
     before = saved()
-    answers(SETTINGS, True, *[D] * 18, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, QUIT)
     ui.menu()
     assert saved() == before and "stamps correctly" in screen.getvalue()
 
@@ -84,7 +84,7 @@ def test_new_template_values_win(configured, answers, screen):
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t), encoding="utf-8")
     newt = configured / "files" / "new.pdf"
     shutil.copy(FIXTURE, newt)
-    answers(SETTINGS, False, str(newt), *[D] * 18, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, False, str(newt), *[D] * 18, D, D, D, True, False, QUIT)
     ui.menu()
     assert saved()["cleo"]["official"] == FIXTURE_ANSWERS["cleo.official"]
 
@@ -93,9 +93,41 @@ def test_cancel_saves_nothing_and_keeps_template(configured, answers, screen):
     before, tpl = saved(), (atf.FORMS / "5320.23.pdf").read_bytes()
     other = configured / "files" / "other.pdf"
     other.write_bytes(b"%PDF-1.4 not a template")
-    answers(SETTINGS, False, str(other), "Changed Name", None, QUIT)
+    answers(SETTINGS, D, False, str(other), "Changed Name", None, QUIT)
     ui.menu()
     out = screen.getvalue()
     assert saved() == before and (atf.FORMS / "5320.23.pdf").read_bytes() == tpl
     assert "nothing saved" in out and "Couldn't read answers" in out
     assert re.search(r"Read \d+ answers", out) is None
+
+
+def test_new_individual_setup(sandbox, answers, screen):
+    """Filing as an individual: no 5320.23 template, no trust; questions 11.A-11.M asked in ATF's words and saved."""
+    f = sandbox / "files"
+    for name in ("prints.eft", "me.jpg"):
+        (f / name).write_bytes(b"x")
+    answers(True, "individual",                                         # accept disclaimer; file as an individual
+            "01/02/1980", "Male", "White", "Ohio", "Ohio",              # DOB, sex, race, birth state, state of residence
+            *["No"] * len(atf.QUESTIONS_11), "",                         # questions 11.A-11.M.1; no UPIN
+            "SPRINGFIELD POLICE DEPARTMENT", "Pat Chief", "CHIEF OF POLICE", "200 MAIN ST", "45502", "Springfield", "Clark", "Ohio",
+            D, D, D, str(f / "prints.eft"), str(f / "me.jpg"), False, QUIT)
+    ui.menu()
+    out, t = screen.getvalue(), saved()
+    asked = [m for _, m in answers.asked]
+    assert not any("5320.23" in m or "Trust" in m or "title in the trust" in m for m in asked)   # nothing about a trust
+    assert asked[7].startswith("11.A. Do you intend to make any firearm") and "Questions 11.A-11.M" in out
+    assert t["applicant_type"] == "individual" and set(t["individual"]["answers"].values()) == {"No"}
+    assert "trust" not in t and "trust_document" not in t["files"] and not (atf.FORMS / "5320.23.pdf").exists()
+    assert atf.settings_problems() == [] and "Settings saved" in out
+
+
+def test_individual_answering_yes_is_saved_but_blocks_filing(sandbox, answers, screen):
+    f = sandbox / "files"
+    for name in ("prints.eft", "me.jpg"):
+        (f / name).write_bytes(b"x")
+    answers(True, "individual", "01/02/1980", "Male", "White", "Ohio", "Ohio", "No", "No", "Yes", *["No"] * 10, "",
+            "SPRINGFIELD POLICE DEPARTMENT", "Pat Chief", "CHIEF OF POLICE", "200 MAIN ST", "45502", "Springfield", "Clark", "Ohio",
+            D, D, D, str(f / "prints.eft"), str(f / "me.jpg"), False, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert "only files when every answer is No" in out and saved()["individual"]["answers"]["11.C"] == "Yes"

@@ -7,11 +7,13 @@
 #          | section (progress marker shown in the ./atf menu) | repeat (run `steps` once per item in a list setting)
 # options: optional: true (click only if present) | skip_if_disabled: true
 #          | tag: ssn (left out unless you choose to type your SSN) | label / private on expect steps
+#          | only: trust / only: individual (the applicant type in your settings) | if_set: <setting> (skip if empty)
 portal:
   steps:
     # --- applicant-type ---
     - {action: section, value: "Applicant type"}
-    - {selector: "#Trust", action: check}
+    - {selector: "#Trust", action: check, only: trust}
+    - {selector: "#Individual", action: check, only: individual}
     - {selector: "#nextBtn", action: click}
     # --- intended-use ---
     - {action: section, value: "Intended use"}
@@ -24,14 +26,22 @@ portal:
     - {action: section, value: "Applicant"}
     - {selector: "#noFFL", action: check}            # confirm: trust has no FFL
     # address/phone/email come pre-filled from the eForms account; nothing to do
-    - {selector: "#tradeName", action: fill, value: "{trust_name}"}
-    - {selector: "#titleOfTheSubmitter", action: fill, value: "{rp_title}"}
+    - {selector: "#tradeName", action: fill, value: "{trust_name}", only: trust}
+    - {selector: "#titleOfTheSubmitter", action: fill, value: "{rp_title}", only: trust}
+    # individual: questions 11.A-11.M.2 (answers saved in your settings; all must be No, 11.M.2 = N/A)
+    - action: repeat
+      over: answers
+      only: individual
+      steps:
+        - {selector: "[id='{q_id}']", action: select, value: "{q_answer}"}
+    - {selector: "#14answer", action: fill, value: "{upin}", only: individual, if_set: upin}   # item 13: UPIN, if you have one
+    - {selector: "[id='17.Aanswer']", action: select, value: "US", only: individual}           # US citizen (NON-US not supported)
     - {selector: "#nextBtn", action: click}
-    # --- responsible-persons: edit popup (first responsible person only) ---
+    # --- responsible-persons: edit popup (first responsible person only; an individual gets the same popup) ---
     - {action: section, value: "Responsible person"}
     - {selector: "[id='0Edit']", action: click}
-    - {selector: "#citizenType", action: select, value: "U.S.CITIZEN"}   # country autofills
-    - {selector: "#formFile", action: upload, value: "{form_5320_path}"}  # generated per suppressor
+    - {selector: "#citizenType", action: select, value: "U.S.CITIZEN", skip_if_disabled: true}   # locked for individuals; country autofills
+    - {selector: "#formFile", action: upload, value: "{form_5320_path}", only: trust}  # 5320.23 generated per suppressor
     - {selector: "#photoFile", action: upload, value: "{photo_path}"}   # required by eForms (not needed on the 5320.23 PDF)
     - {selector: "#eftFile", action: upload, value: "{eft_path}"}
     # popup after the fingerprint attaches: waits up to 60 s for "Valid EBTS Package"; anything else blocks submitting
@@ -96,13 +106,14 @@ portal:
     - {selector: "#finishButton", action: click}
     - {action: wait, value: "1500"}
     - {selector: "#nextBtn", action: click}   # line-item page -> next
-    # --- attachments: trust document ---
-    - {action: section, value: "Trust document"}
-    - {selector: "#file-upload", action: upload, value: "{trust_doc_path}"}
-    - {selector: "#documentType", action: select, value: "CORPORATION/TRUST/OTHER LEGAL ENTITY"}
-    - {selector: "#description", action: fill, value: "{trust_doc_desc}"}
-    - {selector: "#addDocument", action: click}
-    - {action: wait, value: "1500"}
+    # --- attachments: trust document (individuals: nothing to attach) ---
+    - {action: section, value: "Trust document", only: trust}
+    - {selector: "#file-upload", action: upload, value: "{trust_doc_path}", only: trust}
+    - {selector: "#documentType", action: select, value: "CORPORATION/TRUST/OTHER LEGAL ENTITY", only: trust}
+    - {selector: "#description", action: fill, value: "{trust_doc_desc}", only: trust}
+    - {selector: "#addDocument", action: click, only: trust}
+    - {action: wait, value: "1500", only: trust}
+    - {action: section, value: "Attachments", only: individual}
     - {selector: "#nextBtn", action: click}
     # --- verify page: read back what the portal will certify (read-only) ---
     - {action: section, value: "Read-back check"}
@@ -112,7 +123,12 @@ portal:
     - {selector: "#weaponType", action: expect, label: "Type", value: "SILENCER"}
     - {selector: "#caliber", action: expect, label: "Caliber", value: "{caliber}"}
     - {selector: "#overallLength", action: expect, label: "Overall length", value: "{overall_length}"}
-    - {selector: "#businessName >> nth=0", action: expect, label: "Trust name", private: true, value: "{trust_name}"}
+    - {selector: "#businessName >> nth=0", action: expect, label: "Trust name", private: true, value: "{trust_name}", only: trust}
+    - action: repeat
+      over: answers
+      only: individual
+      steps:
+        - {selector: "[id='{q_id}'] >> nth=0", action: expect, label: "Answer {q_id}", value: "{q_answer}"}
     # Submitting (verify box, Certify page, Sign & Submit) is in _submit() in src/atf.py, gated on these checks.
   # --- start a NEW Form 1 from the home page (first row and between rows) ---
   # After a submission the portal is on the home page; the confirmation Ok is normally already clicked.

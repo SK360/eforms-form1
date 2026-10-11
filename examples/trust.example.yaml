@@ -1,6 +1,7 @@
 # Example of data/trust.yaml. You normally don't write this by hand: ./atf asks for it on first run (Settings).
 # data/ is never shared or committed (it holds personal data).
-trust:
+applicant_type: trust                     # trust (default) or individual
+trust:                                    # (trust only)
   name: "Example Family Trust"            # exactly as on the trust document
 responsible_persons:                      # only the first entry is used
   - title: "Settlor"                      # your title in the trust (typed into eForms as "title of the submitter")
@@ -25,3 +26,9 @@ files:
   photo: "/abs/path/to/photo.jpg"         # required by eForms for the responsible person (not needed on the 5320.23)
 docs:                                     # supporting documents uploaded with each firearm (any number)
   - {path: "/abs/path/to/printer.jpg", description: "3D PRINTER"}
+# As an individual (applicant_type: individual) there is no trust: or files.trust_document, and no 5320.23 template.
+# The wizard asks ATF's questions 11.A-11.M.1 and saves the answers (it only files when all are No):
+# individual:
+#   upin: ""                              # Unique Personal Identification Number, if ATF issued you one
+#   answers: {"11.A": "No", "11.B": "No", "11.C": "No", "11.D": "No", "11.E": "No", "11.F": "No", "11.G": "No",
+#             "11.H": "No", "11.I": "No", "11.J": "No", "11.K": "No", "11.L": "No", "11.M.1": "No"}

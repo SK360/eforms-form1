@@ -69,6 +69,20 @@ def fake_settings(root):
         "docs": [{"path": str(f / "printer.jpg"), "description": "3D PRINTER"}]}
 
 
+def make_individual(answer="No", upin=""):
+    """Switch the sandbox settings to filing as an individual (no trust, no 5320.23 template)."""
+    t = yaml.safe_load((atf.DATA / "trust.yaml").read_text(encoding="utf-8"))
+    t["applicant_type"] = "individual"
+    t["individual"] = {"answers": {q: "No" for q, _ in atf.QUESTIONS_11}, "upin": upin}
+    t["individual"]["answers"]["11.C"] = answer
+    for k in ("trust",):
+        t.pop(k, None)
+    t["files"].pop("trust_document", None)
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
+    (atf.FORMS / "5320.23.pdf").unlink(missing_ok=True)
+    return t
+
+
 @pytest.fixture
 def configured(sandbox):
     """Sandbox with complete fake settings, the fake template and an empty queue."""
@@ -145,7 +159,7 @@ def pick(title):
 FORM = """<div class="modal" id="aff"><button id="closeModalBtn" onclick="this.parentNode.remove()">I affirm</button></div>
 <input type="checkbox" id="Trust">
 <div class="modal" id="ebts">Fingerprint status: EBTS <button onclick="this.parentNode.remove()">Ok</button></div>
-<input id="serialNumberMessage" value="SERIAL"><input id="caliber" value="CAL"><input id="businessName" value="DOE FAMILY TRUST">
+<input id="serialNumberMessage" value="SERIAL"><input id="11.A" value="ANSWER11A"><input id="caliber" value="CAL"><input id="businessName" value="DOE FAMILY TRUST">
 <input type="checkbox" id="binary"><button id="nextBtn" onclick="document.getElementById('cert').style.display='block'">Next</button>
 <div id="cert" style="display:none">The application has validated successfully <input type="checkbox" id="signed">
 <button id="signAndSubmit" onclick="CONFIRM">Sign</button></div>
@@ -159,7 +173,8 @@ PORTAL_STEPS = [  # a miniature of config/mapping.yaml's steps, for the fake por
     {"action": "section", "value": "Read-back check"},
     {"selector": "#serialNumberMessage", "action": "expect", "label": "Serial number", "value": "{serial_number}"},
     {"selector": "#caliber", "action": "expect", "label": "Caliber", "value": "{caliber}"},
-    {"selector": "#businessName", "action": "expect", "label": "Trust name", "private": True, "value": "{trust_name}"}]
+    {"selector": "#businessName", "action": "expect", "label": "Trust name", "private": True, "value": "{trust_name}", "only": "trust"},
+    {"selector": "[id='11.A']", "action": "expect", "label": "Answer 11.A", "value": "No", "only": "individual"}]
 
 
 @pytest.fixture
@@ -182,11 +197,11 @@ def portal(monkeypatch):
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
     def configure(serials, ebts="Valid EBTS Package", shown_caliber=None, confirm=True, link=True, start_home=True,
-                  ebts_delay=0, rp_form=False):
+                  ebts_delay=0, rp_form=False, shown_11a="No"):
         """ebts=None: no fingerprint message at all; ebts_delay: ms before it shows; rp_form: the responsible-person
         form (Save & Close / Cancel) is open as a dialog too, like the real portal."""
         confirm_js = "setTimeout(()=>document.getElementById('done').style.display='block',200)" if confirm else ""
-        form = FORM.replace("CONFIRM", confirm_js)
+        form = FORM.replace("CONFIRM", confirm_js).replace("ANSWER11A", shown_11a)
         if ebts is None:
             form = re.sub(r'<div class="modal" id="ebts">.*?</div>\n', "", form)
         else:

@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 import yaml
 
-from conftest import FIXTURE, FIXTURE_ANSWERS, FIXTURE_SSN, TODAY, atf, fake_settings, queue
+from conftest import FIXTURE, FIXTURE_ANSWERS, FIXTURE_SSN, TODAY, atf, fake_settings, make_individual, queue
 
 
 def test_token_match_is_whole_token_and_case_insensitive():
@@ -108,6 +108,41 @@ def test_shared_mapping_resolves_from_settings(configured):
     assert steps.count("upload #file-upload") == 2                           # one supporting doc + the trust document
 
 
+def _dry_individual():
+    lines = []
+    atf.emit = lambda kind, text, **d: lines.append(text.strip()) if kind == "step" else None
+    atf._run_steps(None, atf.load_mapping()["portal"]["steps"], atf._row_context(atf.load_trust(), atf.load_rows()[0]), True, [])
+    return lines
+
+
+def test_individual_steps(configured):
+    queue(("ABC123", "9"))
+    trust_steps = _dry_steps()
+    assert "check #Trust" in trust_steps and "check #Individual" not in trust_steps and "[id='11.A']" not in trust_steps
+    make_individual(upin="U123")
+    steps = _dry_individual()
+    joined = "\n".join(steps)
+    assert "{" not in joined and "check #Individual" in steps and "check #Trust" not in steps
+    for q, _ in atf.QUESTIONS_11:
+        assert f"select [id='{q}'] No" in steps and f"expect [id='{q}'] >> nth=0 No" in steps   # filled, then read back
+    assert "select [id='11.M.2'] N/A" in steps and "select [id='17.Aanswer'] US" in steps and "fill #14answer U123" in steps
+    for absent in ("#tradeName", "#formFile", "#businessName", "CORPORATION/TRUST", "#titleOfTheSubmitter"):
+        assert absent not in joined, absent                                    # no trust, no 5320.23, no trust document
+    assert joined.count("upload #file-upload") == 1                            # the supporting doc only
+    make_individual(upin="")
+    assert "#14answer" not in "\n".join(_dry_individual())                    # no UPIN: left empty
+
+
+def test_individual_settings_problems(configured):
+    make_individual()
+    assert atf.settings_problems() == []                                       # no trust, no trust document, no 5320.23
+    make_individual(answer="Yes")
+    assert any("only files when every answer is No" in p for p in atf.settings_problems())
+    t = make_individual(answer="")
+    assert any("not answered: 11.C" in p for p in atf.settings_problems())
+    assert atf.applicant_type({}) == "trust" and atf.applicant_type(t) == "individual"
+
+
 def test_ssn_pause_is_left_out_when_skipped(configured):
     queue(("ABC123", "9"))
     has_pause = lambda steps: any(line.startswith("pause") for line in steps.splitlines())  # noqa: E731
@@ -119,7 +154,7 @@ def test_shared_mapping_has_no_personal_values():
     text = atf.MAPPING.read_text(encoding="utf-8")
     values = [v for v in re.findall(r'value: "([^"]*)"', text) if "{" not in v]
     allowed = {"U.S.CITIZEN", "UNITED STATES OF AMERICA", "UNITED STATES", "SILENCER", "CALIBER", "FMI",
-               "CORPORATION/TRUST/OTHER LEGAL ENTITY", "Escape", "Valid EBTS Package"}
+               "CORPORATION/TRUST/OTHER LEGAL ENTITY", "Escape", "Valid EBTS Package", "US"}
     sections = set(re.findall(r'action: section, value: "([^"]*)"', text))
     assert [v for v in values if v not in allowed | sections and not v.isdigit()] == []
 

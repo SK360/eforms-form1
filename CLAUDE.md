@@ -1,7 +1,7 @@
-# ATF eForms Form 1 automation (suppressors, filed by a trust)
+# ATF eForms Form 1 automation (suppressors, filed by a trust or an individual)
 
-Fills and submits ATF Form 1s in the eForms portal (https://eforms.atf.gov) for suppressors made by the user's trust,
-and stamps the 5320.23 Responsible Person Questionnaire required with each submission. Run `./atf` (menu,
+Fills and submits ATF Form 1s in the eForms portal (https://eforms.atf.gov) for suppressors made by the user's trust
+(stamping the 5320.23 Responsible Person Questionnaire required with each submission) or by the user as an individual. Run `./atf` (menu,
 `src/ui.py`); the engine and plain CLI is `src/atf.py`. Python 3.9+ (developed on 3.14), Playwright, PyMuPDF, PyYAML,
 rich + questionary. Built interactively 2026-10-08/09. Personal status for a given checkout is in `CLAUDE.local.md`
 (gitignored) if present.
@@ -59,6 +59,16 @@ plain CLI, kept for debugging/scripting:
 - **Tests must never touch the real `data/`:** the `sandbox` fixture asserts the real data/ folder is unchanged after
   each test (a module-level path once leaked fake rows into data/sbrs.csv). New paths under DATA/OUT/FORMS must be
   looked up at call time or patched in conftest.
+- **Applicant type** (`applicant_type: trust | individual` in trust.yaml; missing = trust, so older settings are
+  unchanged; `atf.applicant_type()`). Individual (mapped from a live capture 2026-10-11): applicant-type `#Individual`;
+  no trust name/title/trust document/5320.23 (the RP popup's `#formFile` and `#citizenType` are locked for individuals:
+  `only: trust` / `skip_if_disabled`); the APPLICANT page asks questions `[id='11.A']`..`[id='11.M.1']` (No/Yes) and
+  `11.M.2` (only "N/A" once M.1 is No), `#13answer` alien number (locked), `#14answer` = item 13 UPIN (`if_set: upin`),
+  `[id='17.Aanswer']` US/NON-US (US only); the verify page shows the answers again (read back by `expect`). Answers are
+  saved in `individual.answers` (`QUESTIONS_11` holds ATF's wording; the wizard shows it); `settings_problems` refuses
+  filing unless every answer is No; the menu's confirmation lists them and the user affirms they're true today.
+  Mapping step options `only: trust|individual` (checked before placeholders are filled) and `if_set: <ctx key>`.
+  The same RP popup carries the individual's photo, EFT, DOB, birthplace, sex, race (responsible_persons[0] settings).
 - `data/trust.yaml` (personal): see `examples/trust.example.yaml`. `REQUIRED` + `settings_problems()` in atf.py list
   what must be set; filing refuses to start until it's complete.
 - `src/atf.py` engine: `stamp_5320(row, when, out_dir)`, `file_rows(rows, todo, opts)` (prechecks, browser, per-row
@@ -198,7 +208,7 @@ Re-run after changing any screen.
 
 ## When the portal changes
 Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page (it
-records the newest tab to `out/capture_*.jsonl` and saves any PDF the portal sends to `out/captures/`); Claude reads those; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
+records each field's question text (`context`), dropdown options and selected answer, and the newest tab to `out/capture_*.jsonl` and saves any PDF the portal sends to `out/captures/`); Claude reads those; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
 prints steps without a browser. `--capture` records screens after the automated part into `out/capture_*.jsonl`
 (includes page text, may contain PII; do not share).
 
@@ -207,6 +217,7 @@ prints steps without a browser. `--capture` records screens after the automated 
   12/31/2025) when checked; ATF had a revision pending. If the generator updates, re-check stamping on a new template.
 - Early test drafts may remain in the eForms dashboard (auto-delete after 90 days); not submissions.
 - One responsible person only (first entry in trust.yaml); additional RPs need new steps captured live (`[id='1Edit']`?).
+- Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
 - Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
 - Windows: install/launcher/tests verified on GitHub's Windows runners; not yet used on a real Windows PC against the
   live portal. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.

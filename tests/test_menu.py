@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from conftest import TICKED, atf, pick, queue, ui
+from conftest import TICKED, atf, make_individual, pick, queue, ui
 
 QUIT = lambda kw: "quit"  # noqa: E731
 
@@ -31,6 +31,18 @@ def test_add_then_file_two(configured, portal, answers, screen):
         assert shown in out, shown
     assert "DOE FAMILY TRUST" not in out.upper() and "900000102" not in out and "(hidden)" in out  # screenshot-safe
     assert (atf.OUT / "5320.23_T103.pdf").exists()
+
+
+def test_file_as_individual_from_the_menu(configured, portal, answers, screen):
+    queue(("S1", "9"))
+    make_individual()
+    portal([("S1", "9")])
+    answers(pick("File 1 queued"), TICKED, False, True, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert "Filing as: an individual (you)" in out and "Questions 11.A-11.M.1: all No; 11.M.2: N/A" in out
+    assert "answers to questions 11.A-11.M above are true today" in out and "5320.23s generated" not in out
+    assert atf.load_rows()[0]["status"] == "filed" and "Answer 11.A" in out
 
 
 def test_declining_confirmation_opens_no_browser(configured, answers, screen, monkeypatch):

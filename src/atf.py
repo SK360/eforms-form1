@@ -469,7 +469,15 @@ def _dump_page(page):
             const labels = [...document.querySelectorAll('label,legend')].filter(vis).map(e => ({for: e.htmlFor, text: e.innerText.trim().slice(0,70)})).filter(x => x.text);
             const dialogs = [...document.querySelectorAll('.modal, .modal-content, [role=dialog], [role=alertdialog], .ui-dialog, [class*=modal], [class*=popup]')]
                 .filter(vis).map(e => e.innerText.trim().replace(/\\n{2,}/g, ' | ').slice(0, 2500)).filter(t => t.length > 15);
-            return {url: location.href, title: document.title, dialogs: [...new Set(dialogs)], pageText: document.body.innerText.replace(/\\n{2,}/g, " | ").slice(0, 2500), widgets, labels,
+            // the question a field answers: the nearest enclosing block with some text besides the field's own
+            const ctx = e => { const own = (e.innerText || e.value || '').trim().length;
+                for (let p = e.parentElement, i = 0; p && i < 8; p = p.parentElement, i++) {
+                    const t = (p.innerText || '').trim();
+                    if (t.length > 1500) break;
+                    if (t.length > own + 12) return t.replace(/\\s*\\n\\s*/g, ' | ').slice(0, 500);
+                }
+                return ''; };
+            return {url: location.href, title: document.title, dialogs: [...new Set(dialogs)], pageText: document.body.innerText.replace(/\\n{2,}/g, " | ").slice(0, 20000), widgets, labels,
               controls: [...document.querySelectorAll('input,select,textarea,button,a[href],[role=button],[role=tab]')]
                 .filter(vis).map(e => {
                   const o = {tag: e.tagName.toLowerCase(), id: e.id, name: e.name || undefined, type: e.type || undefined,
@@ -478,7 +486,9 @@ def _dump_page(page):
                   if (e.disabled) o.disabled = true;
                   if (['radio','checkbox'].includes(e.type)) o.checked = e.checked;
                   if (['radio','checkbox'].includes(e.type)) o.value = e.value;
-                  if (e.tagName === 'SELECT') o.options = [...e.options].map(x => x.text).slice(0,40);
+                  if (e.tagName === 'SELECT') { o.options = [...e.options].map(x => x.text).slice(0,40);
+                                                o.selected = e.selectedIndex >= 0 ? e.options[e.selectedIndex].text : undefined; }
+                  if (['INPUT','SELECT','TEXTAREA'].includes(e.tagName)) o.context = ctx(e);
                   return Object.fromEntries(Object.entries(o).filter(([k,v]) => v !== undefined && v !== ''));
                 })};
         }""")
@@ -1002,18 +1012,61 @@ def cmd_inspect(_):
 
 
 # Settings the shared mapping needs (data/trust.yaml). (path, description) -- used by the setup wizard and prechecks.
-REQUIRED = [
-    ("trust.name", "trust name"), ("responsible_persons.0.title", "your title in the trust (e.g. Settlor)"),
+# Filing as a trust (default; the 5320.23 carries the responsible person's answers) or as an individual (the
+# applicant page asks questions 11.A-11.M; answers are saved in settings and confirmed before every batch).
+QUESTIONS_11 = [  # ATF's wording on the eForms applicant page (captured 2026-10-11)
+    ("11.A", "Do you intend to make any firearm listed on this form for sale or other disposition to any person "
+             "described in questions 11.c through 11.l, or a person described in question 11.m who does not fall under "
+             "an exception?"),
+    ("11.B", "Do you intend to sell or otherwise dispose of any firearm listed on this form in furtherance of any felony "
+             "or other offense punishable by imprisonment for a term of more than one year, a Federal crime of terrorism, "
+             "or a drug trafficking offense?"),
+    ("11.C", "Are you under indictment or information in any court for a felony, or any other crime, for which the judge "
+             "could imprison you for more than one year? (See definition 1.N)"),
+    ("11.D", "Have you ever been convicted in any court for a felony, or any other crime, for which the judge could have "
+             "imprisoned you for more than one year, even if you received a shorter sentence including probation? "
+             "(See definition 1.N)"),
+    ("11.E", "Are you a fugitive from justice? (See definition 1.T)"),
+    ("11.F", "Are you an unlawful user of, or addicted to, marijuana or any depressant, stimulant, narcotic drug, or any "
+             "other controlled substance? Warning: The use or possession of marijuana remains unlawful under Federal law "
+             "regardless of whether it has been legalized or decriminalized for medicinal or recreational purposes in the "
+             "state where you reside."),
+    ("11.G", "Have you ever been adjudicated as a mental defective OR have you ever been committed to a mental "
+             "institution? (See definition 1.O and 1.P)"),
+    ("11.H", "Have you been discharged from the Armed Forces under dishonorable conditions?"),
+    ("11.I", "Are you subject to a court order restraining you from harassing, stalking, or threatening your child or an "
+             "intimate partner or child of such partner? (See definition 1.Q)"),
+    ("11.J", "Have you ever been convicted in any court of a misdemeanor crime of domestic violence? (See definition 1.R)"),
+    ("11.K", "Have you ever renounced United States citizenship?"),
+    ("11.L", "Are you an alien illegally or unlawfully in the United States?"),
+    ("11.M.1", "Are you an alien who has been admitted to the United States under a nonimmigrant visa?"),
+]
+# 11.M.2 ("If 'Yes', do you fall within any of the exceptions...") only offers N/A once 11.M.1 is No.
+
+COMMON_REQUIRED = [
     ("responsible_persons.0.dob", "date of birth"), ("responsible_persons.0.sex", "sex"),
     ("responsible_persons.0.race", "race"), ("responsible_persons.0.place_of_birth.state", "state of birth"),
     ("responsible_persons.0.home_address.state", "state of residence"),
     ("cleo.department", "CLEO agency"), ("cleo.official", "CLEO official's name"), ("cleo.title", "CLEO official's title"),
     ("cleo.address.street", "CLEO street"), ("cleo.address.zip", "CLEO ZIP"), ("cleo.address.city", "CLEO city"),
     ("cleo.address.county", "CLEO county"), ("cleo.address.state", "CLEO state"),
-    ("firearm.description", "firearm description"),
-    ("files.trust_document", "trust document PDF"), ("files.eft", "fingerprint file (.eft)"),
-    ("files.photo", "photo of you (eForms requires it for the responsible person)"),
+    ("firearm.description", "firearm description"), ("files.eft", "fingerprint file (.eft)"),
+    ("files.photo", "photo of you (eForms requires it)"),
 ]
+TRUST_REQUIRED = [("trust.name", "trust name"), ("responsible_persons.0.title", "your title in the trust (e.g. Settlor)"),
+                  ("files.trust_document", "trust document PDF")]
+REQUIRED = TRUST_REQUIRED + COMMON_REQUIRED  # (trust filing; kept for callers that list everything)
+
+
+def applicant_type(trust):
+    """'trust' (default, also for settings saved before individuals were supported) or 'individual'."""
+    return "individual" if str((trust or {}).get("applicant_type") or "").lower() == "individual" else "trust"
+
+
+def answers_11(trust):
+    """Saved answers to questions 11.A-11.M.1 as {id: 'No'|'Yes'} (individual filing)."""
+    saved = ((trust or {}).get("individual") or {}).get("answers") or {}
+    return {q: str(saved.get(q) or "").strip().title() for q, _ in QUESTIONS_11}
 
 
 def _get(d, path):
@@ -1031,14 +1084,25 @@ def settings_problems(trust=None):
         if not (DATA / "trust.yaml").exists():
             return ["no settings yet (data/trust.yaml)"]
         trust = load_trust()
-    probs = [f"missing {desc} ({path})" for path, desc in REQUIRED if not str(_get(trust, path) or "").strip()]
-    paths = [("files.trust_document", "trust document"), ("files.eft", "fingerprint file"), ("files.photo", "photo")]
+    kind = applicant_type(trust)
+    need = COMMON_REQUIRED + (TRUST_REQUIRED if kind == "trust" else [])
+    probs = [f"missing {desc} ({path})" for path, desc in need if not str(_get(trust, path) or "").strip()]
+    if kind == "individual":
+        ans = answers_11(trust)
+        blank = [q for q, a in ans.items() if a not in ("No", "Yes")]
+        if blank:
+            probs.append(f"questions not answered: {', '.join(blank)} (Settings)")
+        elif any(a == "Yes" for a in ans.values()):
+            probs.append("an answer to questions 11.A-11.M.1 is Yes: this helper only files when every answer is No; "
+                         "file this application yourself in eForms")
+    paths = [("files.eft", "fingerprint file"), ("files.photo", "photo")]
+    paths += [("files.trust_document", "trust document")] if kind == "trust" else []
     paths += [(f"docs.{i}.path", f"supporting document {i + 1}") for i in range(len(trust.get("docs") or []))]
     for path, desc in paths:
         v = _get(trust, path)
         if v and not Path(v).is_file():
             probs.append(f"{desc} not found: {v}")
-    if not (FORMS / "5320.23.pdf").is_file():
+    if kind == "trust" and not (FORMS / "5320.23.pdf").is_file():
         probs.append("no 5320.23 template at forms/5320.23.pdf")
     return probs
 
@@ -1047,10 +1111,16 @@ def _row_context(trust, item):
     """Placeholder values for config/mapping.yaml steps for one suppressor row."""
     rp = trust["responsible_persons"][0]
     f, cl, fa = trust.get("files", {}), trust["cleo"], trust.get("firearm", {})
-    out_pdf = _find_5320(item["serial_number"])
-    ctx = {**{f"trust_{k}": v for k, v in trust["trust"].items() if not isinstance(v, dict)},
-           **{f"trust_{k}": v for k, v in trust["trust"].get("address", {}).items()}, **item,
-           "rp_title": rp["title"], "rp_dob": rp["dob"], "rp_race": rp["race"],
+    kind = applicant_type(trust)
+    out_pdf = _find_5320(item["serial_number"]) if kind == "trust" else ""  # individuals have no 5320.23
+    tr = trust.get("trust") or {}
+    ans = answers_11(trust)
+    ctx = {**{f"trust_{k}": v for k, v in tr.items() if not isinstance(v, dict)},
+           **{f"trust_{k}": v for k, v in tr.get("address", {}).items()}, **item,
+           "applicant_type": kind,
+           "answers": [{"q_id": q, "q_answer": a} for q, a in ans.items()] + [{"q_id": "11.M.2", "q_answer": "N/A"}],
+           "upin": str((trust.get("individual") or {}).get("upin") or "").strip(),
+           "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": rp["race"],
            "rp_birth_state": rp["place_of_birth"]["state"].upper(),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),
            "cleo_department": cl["department"], "cleo_official": cl["official"], "cleo_title": cl["title"],
@@ -1075,6 +1145,8 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
     global _current_step
     for s in steps:  # {selector, action: fill|select|check|click|upload|..., value: "{key}" or literal}
         act = s["action"]
+        if s.get("only") and s["only"] != ctx_vals.get("applicant_type", "trust"):  # trust-only / individual-only
+            continue  # (before formatting: an individual has no {trust_name})
         val = str(s.get("value", "")).format(**ctx_vals) if s.get("value") else None
         sel = s["selector"].format(**ctx_vals) if s.get("selector") else None  # e.g. :has-text('{rp_race}')
         if act == "section":  # progress marker only
@@ -1085,6 +1157,8 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
                 _run_steps(page, s["steps"], {**ctx_vals, **item}, dry, bad, skip_tags)
             continue
         _current_step = sel or act
+        if s.get("if_set") and not str(ctx_vals.get(s["if_set"]) or "").strip():  # e.g. a UPIN only if you have one
+            continue
         if s.get("tag") in skip_tags:
             emit("step", f"(skipping {s['tag']} step)")
             continue
@@ -1111,7 +1185,7 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             got = (loc.input_value() or "").strip()
             ok = _token_match(val, got)
             emit("expect", f"    {'OK ' if ok else 'MISMATCH'} expected {val!r} got {got!r}",
-                 label=s.get("label", sel), want=val, got=got, ok=ok, private=s.get("private", False))
+                 label=str(s.get("label", sel)).format(**ctx_vals), want=val, got=got, ok=ok, private=s.get("private", False))
             if not ok:
                 bad.append((sel, val, got))
         elif act == "dismiss_dialog":  # print the dialog's text (so warnings stay visible), then click its OK
@@ -1252,7 +1326,8 @@ def file_rows(rows, todo, args):
     today, probs = datetime.now().strftime("%m/%d/%Y"), []
     for i in todo:
         _row_context(trust, rows[i])
-        probs += _check_5320(_find_5320(rows[i]["serial_number"], warn=True), rows[i], today)
+        if applicant_type(trust) == "trust":
+            probs += _check_5320(_find_5320(rows[i]["serial_number"], warn=True), rows[i], today)
     if args.dry:
         for i in todo:
             emit("row", f"\n=== Row {i + 1}: serial {rows[i]['serial_number']} (dry run) ===",

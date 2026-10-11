@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import TODAY, atf, queue
+from conftest import TODAY, atf, make_individual, queue
 
 OPTS = dict(dry=False, submit=True, auto_affirm=True, skip_ssn=True, capture=False)
 
@@ -56,6 +56,24 @@ def test_no_fingerprint_message_blocks_submit(configured, portal, monkeypatch):
     assert file_all()[0]["status"] == "" and state["logged_out"]
     assert not any("closed" in p for p in prompts)                 # never told to close the responsible-person form
     assert not state["rp_clicked"]
+
+
+def test_individual_files_without_a_5320(configured, portal):
+    queue(("S1", "9"))
+    make_individual()
+    state = portal([("S1", "9")])
+    rows = atf.load_rows()
+    atf.file_rows(rows, [0], SimpleNamespace(**OPTS))                         # no 5320.23 stamped or needed
+    assert atf.load_rows()[0]["status"] == "filed" and state["logged_out"]
+    assert not list(atf.OUT.glob("5320.23*"))
+
+
+def test_individual_answer_shown_differently_blocks_submit(configured, portal):
+    queue(("S1", "9"))
+    make_individual()
+    state = portal([("S1", "9")], shown_11a="Yes")                            # the verify page shows another answer
+    atf.file_rows(atf.load_rows(), [0], SimpleNamespace(**OPTS))
+    assert atf.load_rows()[0]["status"] == "" and state["logged_out"]
 
 
 def test_missing_confirmation_leaves_row_pending(configured, portal):

@@ -1,15 +1,16 @@
-# eForms Form 1 helper (suppressors, filed by a trust)
+# eForms Form 1 helper (suppressors, filed by a trust or by you as an individual)
 
-Fills and submits ATF Form 1s in eForms for suppressors your trust makes, and prepares the 5320.23 Responsible Person
-Questionnaire for each one. You stay in the loop: you log in, optionally type your SSN, and enter the emailed code and
-your PIN for every submission.
+Fills and submits ATF Form 1s in eForms for suppressors you make, either through your trust (it prepares the 5320.23
+Responsible Person Questionnaire for each one) or as an individual. You stay in the loop: you log in, optionally type
+your SSN, and enter the emailed code and your PIN for every submission.
 
 > **Disclaimer.** Unofficial, provided as-is with no warranty, not affiliated with or endorsed by ATF. You are solely
 > responsible for every application it files for you: each submission is your certification under penalty of perjury.
 > Review what it fills, check ATF's eForms terms of use, and stop if anything looks wrong. It never asks for, stores or
 > types your password, SSN, emailed code or PIN.
 
-Currently supports: one trust, one responsible person, suppressors (Form 1), on a Mac or Windows PC.
+Currently supports: a trust with one responsible person, or yourself as an individual (U.S. citizen); suppressors
+(Form 1); on a Mac or Windows PC.
 
 ## What it looks like
 (Made-up serials, numbers and dates.)
@@ -36,12 +37,14 @@ compares them with your records.
 ![Check approvals](docs/screenshots/07-approvals.png)
 
 ## Before you start
-- An eForms account, your trust document (PDF), your fingerprint file (`.eft`), and a photo of you (JPG/PNG;
-  eForms requires it for the responsible person, though the 5320.23 PDF itself doesn't need one).
-- **One signed 5320.23 template** (see the next section).
+- An eForms account, your fingerprint file (`.eft`) and a photo of you (JPG/PNG; eForms requires it).
+- **Through a trust:** also your trust document (PDF) and **one signed 5320.23 template** (see the next section).
+- **As an individual:** nothing else. Setup asks ATF's questions 11.A-11.M once (in ATF's own words) and saves your
+  answers; they're filled in on each form, checked on the verify page, and shown for you to confirm before every
+  batch. The helper only files when every answer is No (otherwise file that application yourself in eForms).
 - Optional: supporting documents for the firearm (e.g. photos of the tools/materials you'll use).
 
-## Making your 5320.23 template (once)
+## Making your 5320.23 template (once, trusts only)
 You make one signed 5320.23 with placeholder caliber and serial; for each suppressor the helper copies it, replaces
 the caliber and serial, and stamps the date you file.
 
@@ -102,7 +105,8 @@ of all the packages yet; the installer skips it and asks you to add 3.13 next to
 ## Use
 Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
 
-The first run asks for your trust, CLEO and file details (Settings; change them any time). Then:
+The first run asks whether you file through a trust or as an individual, then for your details, CLEO and files
+(Settings; change them any time, including switching between trust and individual). Then:
 
 - **Add suppressors**: asks how many (Enter = 1), then the (first) serial, caliber and overall length, suggesting the
   next serial and your last caliber and length. For several, it numbers them in sequence (e.g. A101 … A110) with the same
@@ -124,8 +128,8 @@ The first run asks for your trust, CLEO and file details (Settings; change them 
   overall length, approval date); other types are only counted. Approvals are recorded in your inventory, and it
   offers to add approved suppressors that aren't in it yet (e.g. ones you filed before using this tool).
 - **⚠ Resolve a pending row**: only if a confirmation was missed. Check the eForms dashboard, then say whether it was filed.
-- **Advanced**: preview the steps without a browser, regenerate a 5320.23 with another date, re-file, capture portal
-  pages if ATF changes the site.
+- **Advanced**: preview the steps without a browser, regenerate a 5320.23 with another date (trusts), re-file,
+  capture portal pages if ATF changes the site.
 
 Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one session at a time).
 

@@ -450,20 +450,26 @@ def file_flow(indices=None):
     if ssn is None:
         return
     today = date.today().strftime("%m/%d/%Y")
-    for i in indices:
+    settings = _settings()
+    individual = atf.applicant_type(settings) == "individual"
+    for i in ([] if individual else indices):  # individuals file without a 5320.23
         dest, missing = atf.stamp_5320(rows[i], today)
         probs = missing + atf._check_5320(dest, rows[i], today)
         if probs:
             con.print(f"  [bold red]✖ 5320.23 for {escape(rows[i]['serial_number'])}: {escape(', '.join(probs))}[/]")
             return pause()
-    con.print(f"  [green]✔[/] 5320.23s generated, dated {today}")
-    deflen = str((_settings().get("firearm") or {}).get("overall_length") or "12")
+    if not individual:
+        con.print(f"  [green]✔[/] 5320.23s generated, dated {today}")
+    deflen = str((settings.get("firearm") or {}).get("overall_length") or "12")
     lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}, "
                       f"{escape(rows[i]['overall_length'] or deflen)}\" overall" for i in indices)
     con.print(Panel(
         f"[bold]File {len(indices)} Form 1{'s' if len(indices) > 1 else ''}:[/]\n{lines}\n\n"
-        f"SSN: {'you type it on each form' if ssn else 'left blank'}\n\n"
+        f"Filing as: {'an individual (you)' if individual else 'your trust'}\n"
+        f"SSN: {'you type it on each form' if ssn else 'left blank'}\n"
+        + (_answers_line(settings) if individual else "") + "\n"
         "By confirming, you affirm that each is a legitimate Form 1 application (the portal's \"I affirm\"),\n"
+        + ("that your answers to questions 11.A-11.M above are true today,\n" if individual else "") +
         "and you authorize the script to tick the certification and click Sign & Submit for each one,\n"
         "only after every read-back check and the portal's validation pass. You still enter the code and PIN.",
         title="Confirm", border_style="cyan", expand=False))
@@ -480,12 +486,19 @@ def file_flow(indices=None):
     pause()
 
 
+def _answers_line(settings):
+    ans = atf.answers_11(settings)
+    if all(a == "No" for a in ans.values()):
+        return "Questions 11.A-11.M.1: all No; 11.M.2: N/A (from Settings)\n"
+    return "Questions 11.A-11.M.1: " + ", ".join(f"{q} {a or '?'}" for q, a in ans.items()) + "\n"
+
+
 def preview_flow():
     rows = atf.load_rows()
     i = questionary.select("Preview the steps for which row?", choices=[_row_choice(rows, i) for i in range(len(rows))][::-1]).ask()
     if i is None:
         return
-    if not any(atf.OUT.glob(f"5320.23*_{rows[i]['serial_number']}.pdf")):
+    if atf.applicant_type(_settings()) == "trust" and not any(atf.OUT.glob(f"5320.23*_{rows[i]['serial_number']}.pdf")):
         atf.stamp_5320(rows[i], date.today().strftime("%m/%d/%Y"))
     P.verbose = True
     try:
@@ -609,41 +622,68 @@ def _check_template():
         return [str(e.code)]
 
 
+def _questions_11(saved):
+    """Ask questions 11.A-11.M.1 in ATF's words. Returns {id: 'No'|'Yes'}."""
+    con.rule("Questions 11.A-11.M (asked on every Form 1 you file as an individual)")
+    con.print("  ATF's wording. Your answers are saved, filled in on each form, checked on the verify page, and shown\n"
+              "  for you to confirm before every batch. Definitions: ATF's Form 1 instructions (eForms shows them too).\n"
+              "  [dim]11.M.2 (exceptions for nonimmigrant visas) is answered N/A.[/]")
+    out = {}
+    for q, text in atf.QUESTIONS_11:
+        out[q] = _a(questionary.select(f"{q}. {text}", choices=["No", "Yes"],
+                                       default=saved.get(q) if saved.get(q) in ("No", "Yes") else None))
+    if any(a == "Yes" for a in out.values()):
+        con.print(Panel("You answered Yes to at least one question. This helper only files when every answer is No:\n"
+                        "file this application yourself in eForms. (Your answers are saved; filing stays blocked.)",
+                        border_style="red", expand=False))
+    return out
+
+
 def settings_flow(first=False):
     path = atf.DATA / "trust.yaml"
     t = yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     if first:
-        con.print(Panel("[bold]Welcome.[/] This sets up your trust's details once; you can change them later in Settings.\n\n"
+        con.print(Panel("[bold]Welcome.[/] This sets up your details once; you can change them later in Settings.\n\n"
                         + escape(DISCLAIMER), title="eForms Form 1 helper", border_style="cyan", expand=False))
         if not questionary.confirm("I understand and accept", default=False).ask():
             sys.exit("Setup not completed.")
     try:
-        con.rule("Your 5320.23 template")
-        tpl, new_tpl = atf.FORMS / "5320.23.pdf", None
-        if not tpl.exists() or not _a(questionary.confirm("Keep your current 5320.23 template?", default=True)):
+        kind = _a(questionary.select("Who files the Form 1s?", default=atf.applicant_type(t), choices=[
+            questionary.Choice("A trust (you are a responsible person; a 5320.23 goes with each form)", "trust"),
+            questionary.Choice("Me, as an individual (no 5320.23; you answer questions 11.A-11.M once here)", "individual")]))
+        trust_filing = kind == "trust"
+        tpl, new_tpl, pre = atf.FORMS / "5320.23.pdf", None, {}
+        if trust_filing:
+            con.rule("Your 5320.23 template")
+        if trust_filing and (not tpl.exists() or not _a(questionary.confirm("Keep your current 5320.23 template?", default=True))):
             con.print(f"  Make it once at [cyan]{GENERATOR_URL}[/]: Form 1, your details, your CLEO, sign it,\n"
                       "  and use serial [bold]TEMPLATE[/] and caliber [bold]00[/] (they get replaced for each suppressor).\n"
                       "  Download the ATF copy. Step by step: README.md, \"Making your 5320.23 template\".")
             new_tpl = Path(_clean_path(_a(questionary.path("5320.23 PDF (drag it here):", validate=_file(suffixes=(".pdf",))))))
-        try:
-            pre = atf.read_template(new_tpl or tpl)
-        except Exception:
-            pre = {}
-        if pre:
-            con.print(f"  [green]✔[/] Read {len(pre)} answers from it (never the SSN). Press Enter to accept each, or type a correction.")
-        else:
-            con.print("  [yellow]⚠ Couldn't read answers from it (was it made with the generator?); you'll type them in.[/]")
+        if trust_filing:
+            try:
+                pre = atf.read_template(new_tpl or tpl)
+            except Exception:
+                pre = {}
+            if pre:
+                con.print(f"  [green]✔[/] Read {len(pre)} answers from it (never the SSN). Press Enter to accept each, or type a correction.")
+            else:
+                con.print("  [yellow]⚠ Couldn't read answers from it (was it made with the generator?); you'll type them in.[/]")
         # A newly chosen template wins over saved settings (e.g. a new chief); a kept one only fills gaps.
         if new_tpl:
             get = lambda p, d="": pre.get(p) or atf._get(t, p) or d  # noqa: E731
         else:
             get = lambda p, d="": atf._get(t, p) or pre.get(p) or d  # noqa: E731
-        con.rule("Trust")
         trust = dict(t.get("trust") or {})
-        trust["name"] = _a(questionary.text("Trust name (exactly as on the trust document):", default=get("trust.name"), validate=_need))
-        con.rule("Responsible person (you)")
         rp = dict((t.get("responsible_persons") or [{}])[0])
-        rp["title"] = _a(questionary.text("Your title in the trust:", default=get("responsible_persons.0.title", "Settlor"), validate=_need))
+        if trust_filing:
+            con.rule("Trust")
+            trust["name"] = _a(questionary.text("Trust name (exactly as on the trust document):", default=get("trust.name"), validate=_need))
+            con.rule("Responsible person (you)")
+            rp["title"] = _a(questionary.text("Your title in the trust:", default=get("responsible_persons.0.title", "Settlor"), validate=_need))
+        else:
+            con.rule("You (the applicant)")
+            con.print("  [dim]Your name, address, phone and email come from your eForms account.[/]")
         rp["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("responsible_persons.0.dob"), validate=_date))
         rp["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                           default=get("responsible_persons.0.sex", "Male").title()))
@@ -653,6 +693,11 @@ def settings_flow(first=False):
                                 "state": _state("State of birth:", get("responsible_persons.0.place_of_birth.state"))}
         rp["home_address"] = {**(rp.get("home_address") or {}),
                               "state": _state("State you live in:", get("responsible_persons.0.home_address.state"))}
+        ind = dict(t.get("individual") or {})
+        if not trust_filing:
+            ind["answers"], ind["upin"] = _questions_11(atf.answers_11(t)), _a(questionary.text(
+                "Unique Personal Identification Number (UPIN), if ATF issued you one (else leave empty):",
+                default=str(ind.get("upin") or ""))).strip()
         con.rule("CLEO (chief law enforcement officer you notify)")
         cl = dict(t.get("cleo") or {})
         cl["department"] = _a(questionary.text("Agency / department:", default=get("cleo.department"), validate=_need))
@@ -677,11 +722,12 @@ def settings_flow(first=False):
         con.rule("Files")
         files = dict(t.get("files") or {})
         files["eft"] = _clean_path(_a(questionary.path("Fingerprint file (.eft):", default=get("files.eft"), validate=_file(suffixes=(".eft",)))))
-        files["photo"] = _clean_path(_a(questionary.path("Photo of you (eForms requires it; not needed on the 5320.23):",
+        files["photo"] = _clean_path(_a(questionary.path("Photo of you (eForms requires it):",
                                                          default=get("files.photo"), validate=_file(suffixes=(".jpg", ".jpeg", ".png")))))
-        files["trust_document"] = _clean_path(_a(questionary.path("Trust document (PDF):", default=get("files.trust_document"),
-                                                                  validate=_file(suffixes=(".pdf",)))))
-        files["trust_document_desc"] = get("files.trust_document_desc", "TRUST")
+        if trust_filing:
+            files["trust_document"] = _clean_path(_a(questionary.path("Trust document (PDF):", default=get("files.trust_document"),
+                                                                      validate=_file(suffixes=(".pdf",)))))
+            files["trust_document_desc"] = get("files.trust_document_desc", "TRUST")
         docs = list(t.get("docs") or [])
         if docs:
             con.print("  Supporting documents: " + escape(", ".join(f"{Path(d['path']).name} ({d['description']})" for d in docs)))
@@ -695,8 +741,14 @@ def settings_flow(first=False):
     except Cancelled:
         con.print("  [yellow]Cancelled; nothing saved.[/]")
         return pause() if not first else sys.exit("Setup not completed.")
+    if kind == "individual" or "applicant_type" in t:  # older trust settings stay as they were
+        t["applicant_type"] = kind
     t.update({"trust": trust, "responsible_persons": [rp] + list((t.get("responsible_persons") or [])[1:]),
               "cleo": cl, "firearm": fa, "files": files, "docs": docs})
+    if not trust_filing:
+        t["individual"] = ind
+    if not t.get("trust"):  # an individual who never had a trust
+        t.pop("trust", None)
     if first:
         t["accepted_disclaimer"] = date.today().isoformat()
     atf.DATA.mkdir(exist_ok=True)
@@ -707,12 +759,14 @@ def settings_flow(first=False):
                     + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200), encoding="utf-8")
     if not atf.SUPP.exists():
         atf.save_rows([])
-    probs = atf.settings_problems(t) + _check_template()
+    probs = atf.settings_problems(t) + (_check_template() if trust_filing else [])
     if probs:
         con.print(Panel("\n".join(f"• {escape(x)}" for x in probs), title="Saved, but fix these before filing",
                         border_style="red", expand=False))
-    else:
+    elif trust_filing:
         con.print("  [green]✔ Settings saved, and your 5320.23 template stamps correctly.[/]")
+    else:
+        con.print("  [green]✔ Settings saved.[/]")
     pause()
 
 
@@ -774,9 +828,10 @@ def approvals_flow():
 
 
 def advanced_flow():
+    trust_filing = atf.applicant_type(_settings()) == "trust"
     what = questionary.select("Advanced:", choices=[
-        questionary.Choice("Preview the steps for a row (no browser)", preview_flow),
-        questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow),
+        questionary.Choice("Preview the steps for a row (no browser)", preview_flow)] + ([
+        questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow)] if trust_filing else []) + [
         questionary.Choice("Re-file a row that's already filed", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),
         questionary.Choice("Back", "back")]).ask()
