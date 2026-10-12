@@ -174,3 +174,7 @@ never committed. **Never zip or copy this folder to share it**; share the git re
   that serial again. If ATF changed the site, the selectors in `config/mapping.yaml` need updating (see CLAUDE.md).
 - The plain command line is still underneath: `./atf fill-form1 --help` (Windows: `.\atf.cmd fill-form1 --help`).
 - Windows: if a step says a file is in use, close `suppressors.csv` in Excel and try again.
+
+## License
+MIT (see [LICENSE](LICENSE)): use, change and share it freely; it comes as is, with no warranty. The PDF library it
+installs, PyMuPDF, has its own license (AGPL-3.0); that matters only if you bundle it into something you distribute.

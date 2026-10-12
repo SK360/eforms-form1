@@ -153,7 +153,7 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 - First run shows a disclaimer the user must accept (unofficial, as-is, user responsible for every filing).
 
 ## Layout
-- `atf` launcher, `install.sh` installer, `src/ui.py` menu, `src/atf.py` engine + CLI, `config/mapping.yaml` portal steps,
+- `LICENSE` (MIT, copyright SK360). `atf` launcher, `install.sh` installer, `src/ui.py` menu, `src/atf.py` engine + CLI, `config/mapping.yaml` portal steps,
   `examples/` sanitized samples, `requirements.txt`.
 - Personal, gitignored, never shared: `data/` (trust.yaml, suppressors.csv queue, trust PDF, .eft, photos),
   `forms/5320.23.pdf` (signed template), `out/` (stamped 5320.23s, submissions.csv log, capture_*.jsonl),
