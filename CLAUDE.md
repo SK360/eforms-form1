@@ -49,11 +49,12 @@ plain CLI, kept for debugging/scripting:
   approved | disapproved; `SKIP` = never (re)filed without --force), application_number (from the filing confirmation),
   filed_date (set at Sign & Submit; `backfill_filed_dates()` from out/submissions.csv), approved_date, eform_id,
   control_number, conditions (from approvals), built ("yes" | ""; `is_built`), design (free text: what it is, e.g.
-  "PCC Short"). Builds: `record_build` (APPROVED rows only, else ValueError and nothing saved; a Form 1 must be
+  "PCC Short"). Builds: `record_builds({serial: design})` / `record_build(serials, design)` (APPROVED rows only, else ValueError and nothing saved; a Form 1 must be
   approved before making), `clear_build`, `serials_in("A101-A110, A115")`; menu
   Inventory > Record builds (`builds_flow`), views Built / Approved, not built (`build_table`). Deliberately NOT
   tracked (the user's call): build date, print file, marked/engraved (markings are printed with the part). The
-  design is typed every time (no pick-from-previous list; the user asked). `load_rows()` tolerates older files with fewer columns.
+  design is typed every time, separately for each serial (no pick-from-previous list; one batch is not one design),
+  all shown together, saved only on the confirmation. `load_rows()` tolerates older files with fewer columns.
   `apply_approvals(records, import_unknown)` records approvals (fills an empty length from the PDF, never overwrites
   one), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
   order); sorting happens ONLY there (never during filing: file_rows holds row indices). out/submissions.csv stays a

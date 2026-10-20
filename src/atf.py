@@ -84,19 +84,24 @@ def is_built(row):
     return row.get("built", "").lower() == "yes"
 
 
-def record_build(serials, design=""):
-    """Mark suppressors as built, with what they are (or change the design of built ones). Only APPROVED rows: a Form 1
-    must be approved before the suppressor is made. Returns the serials updated; raises ValueError if any serial is
-    unknown or not approved (then nothing is saved)."""
+def record_builds(designs):
+    """Mark suppressors as built, each with what it is: {serial: design} (or change the design of built ones). Only
+    APPROVED rows: a Form 1 must be approved before the suppressor is made. Saves once; returns the serials updated;
+    raises ValueError if any serial is unknown or not approved (then nothing is saved)."""
     rows = load_rows()
     by = {r["serial_number"].upper(): r for r in rows}
-    bad = [s for s in serials if (by.get(s.upper()) or {}).get("status") != "approved"]
+    bad = [s for s in designs if (by.get(s.upper()) or {}).get("status") != "approved"]
     if bad:
         raise ValueError(f"not approved (or not in the inventory): {', '.join(bad)}")
-    for s in serials:
+    for s, design in designs.items():
         by[s.upper()].update(built="yes", design=design.strip())
     save_rows(rows)
-    return list(serials)
+    return list(designs)
+
+
+def record_build(serials, design=""):
+    """record_builds with the same design for every serial."""
+    return record_builds({s: design for s in serials})
 
 
 def clear_build(serial):

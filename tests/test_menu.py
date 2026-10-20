@@ -310,14 +310,24 @@ def test_record_builds_by_range(configured, answers, screen):
     def spec(kw):
         seen["bad"] = kw["validate"]("T1-T3, T6")              # T6 is only filed: can't be built yet
         return "T1-T3, T5"
-    answers(pick("Inventory"), pick("Record builds"), pick("Record builds (5 approved"), spec, "PCC Short", True, "back", QUIT)
+    answers(pick("Inventory"), pick("Record builds"), pick("Record builds (5 approved"), spec,
+            "PCC Short", "Rimfire 12in", "", "PCC Long", True, "back", QUIT)   # one design per serial (T3: none)
     ui.menu()
     rows = {r["serial_number"]: r for r in atf.load_rows()}
     assert seen["bad"] == "T6 isn't one of them (approved, not built yet)"
     assert [s for s, r in rows.items() if atf.is_built(r)] == ["T1", "T2", "T3", "T5"]
-    assert (rows["T2"]["built"], rows["T2"]["design"]) == ("yes", "PCC Short")
+    assert {s: rows[s]["design"] for s in ("T1", "T2", "T3", "T5")} == {"T1": "PCC Short", "T2": "Rimfire 12in", "T3": "", "T5": "PCC Long"}
+    assert [m for k, m in answers.asked if k == "text"][1:] == [f"Design of {s} (what it is, e.g. PCC Short):" for s in ("T1", "T2", "T3", "T5")]
     assert rows["T4"]["built"] == "" and rows["T6"]["built"] == ""
-    assert "Recorded 4 as built: T1, T2, T3, T5" in screen.getvalue()
+    out = screen.getvalue()
+    assert "Rimfire 12in" in out and "Recorded 4 as built: T1, T2, T3, T5" in out
+
+
+def test_cancelling_a_design_saves_nothing(configured, answers, screen):
+    _approved_run()
+    answers(pick("Inventory"), pick("Record builds"), pick("Record builds"), "T1-T3", "PCC Short", None, "back", QUIT)
+    ui.menu()
+    assert not any(atf.is_built(r) for r in atf.load_rows())
 
 
 def test_record_build_from_the_list(configured, answers, screen):

@@ -313,9 +313,10 @@ def edit_queued_flow():
     pause()
 
 
-def _ask_design(default=""):
+def _ask_design(default="", serial=""):
     """What it is (e.g. "PCC Short"), typed each time. Returns the text, or None if cancelled."""
-    v = questionary.text("Design (what it is, e.g. PCC Short):", default=default).ask()
+    v = questionary.text(f"Design of {serial} (what it is, e.g. PCC Short):" if serial else "Design (what it is, e.g. PCC Short):",
+                         default=default).ask()
     return None if v is None else v.strip()
 
 
@@ -348,13 +349,21 @@ def _record_builds(todo):
                                r["serial_number"]) for r in todo]).ask()
     if not serials:
         return
-    design = _ask_design()
-    if design is None:
+    designs = {}
+    for s in serials:  # each one can be a different design; nothing is saved until the confirmation below
+        design = _ask_design(serial=s)
+        if design is None:
+            return
+        designs[s] = design
+    t = Table(box=box.ROUNDED, header_style="bold", border_style="blue")
+    for col in ("Serial", "Design"):
+        t.add_column(col)
+    for s, design in designs.items():
+        t.add_row(escape(s), escape(design) or "[dim](none)[/]")
+    con.print(t)
+    if not questionary.confirm(f"Record {'these ' + str(len(serials)) if len(serials) > 1 else serials[0]} as built?", default=True).ask():
         return
-    names = serials[0] + (f" – {serials[-1]}" if len(serials) > 1 else "")
-    if not questionary.confirm(f"Record {len(serials)} as built ({names})" + (f": {design}" if design else "") + "?", default=True).ask():
-        return
-    atf.record_build(serials, design)
+    atf.record_builds(designs)
     con.print(f"  [green]✔[/] Recorded {len(serials)} as built: {escape(', '.join(serials))}")
     pause()
 

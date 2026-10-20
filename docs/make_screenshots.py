@@ -216,7 +216,7 @@ def shot_sbrs():
 
 def shot_builds():
     answered("Inventory:", "Record builds")
-    script("new", "A105-A106", "Rimfire 12in", True)
+    script("new", "A105-A106", "Rimfire 12in", "Rimfire Short", True)
     ui.builds_flow()
     rows = [r for r in atf.load_rows() if r["status"] == "approved"]
     ui.con.print(ui.build_table(rows, f"[bold]Inventory[/] · Approved ({len(rows)})"))

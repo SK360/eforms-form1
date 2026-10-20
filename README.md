@@ -133,10 +133,10 @@ stray keypress can't start anything). Then:
   In progress / Queued / Built / Approved, not built, or **Show SBRs** for your approved SBRs. From there you can also
   open any approved Form 1 PDF and **export to Excel** (`out/inventory_<date>.xlsx`, with an SBRs sheet). The home
   screen shows a one-line summary.
-- **Record builds** (in Inventory): mark approved suppressors as built, with what each one is (its design, typed
-  in, e.g. "PCC Short"). Name them as a range and/or list (`A101-A110, A115`)
-  or tick them in a list. Only approved suppressors can be marked built. The design can be changed, or the build
-  record cleared, later.
+- **Record builds** (in Inventory): mark approved suppressors as built, with what each one is. Name them as a range
+  and/or list (`A101-A110, A115`) or tick them in a list; it then asks the design of each one (typed in, e.g. "PCC
+  Short"), shows them all, and saves when you confirm. Only approved suppressors can be marked built. The design can
+  be changed, or the build record cleared, later.
 - **File N queued suppressors**: pick the rows and say whether you want to type your SSN on each form. Trusts: it
   makes each suppressor's 5320.23, dated today. One confirmation lists the batch and says whether you're filing as
   your trust or as an individual (with your saved answers to questions 11.A-11.M); confirming is your "I affirm" and
