@@ -102,6 +102,17 @@ plain CLI, kept for debugging/scripting:
   tagged data-atf-row so the click hits that row. The home page shows "Total Rows: 0" before any search: wait for rows.
   Overall length is compared with the row's recorded length (else the settings default) only for suppressors in your
   records (older builds differ). Older control numbers are 10 digits (newer 11); also read from the PDF's last page.
+  Approvals from Oct 2026 on print the date as "October 15, 2026" ~4.5 pt below the "Date" label (older: 08/15/2026,
+  ~10 pt); `_mmddyyyy` stores MM/DD/YYYY. Their PDFs have dangling refs: MuPDF warnings ("cannot find object in xref")
+  are switched off in `read_approved_pdf`, harmless. Paginator (from a capture): icon-only first/prev anchors, page
+  numbers, icon-only next/last, a "10" rows box; live 2026-10-19 with 7 pages the "6" link never showed (only some
+  numbers shown). Each results row's eForm ID is ALSO a numeric link (`<span><a id="eformId-link"> 1234567 </a>`):
+  page numbers = 1-3 digit links. `_PAGER_JS` tags the shown numbers and the empty anchor right after them (next); `_approved_results`
+  clicks the target, else the highest shown number below it, else next (tests: block/sliding windows, current page
+  marked or not); unreachable = error + `out/paginator_*.html`. Never click Search while results show (the old
+  table reads as the new results, then the search resets to page 1): page n is reached from page n-1
+  (`search=False`), Search only after Go Home; a failed page is retried once from a reloaded home page; if it still
+  fails, paging stops with a problem line (✖) and the report covers every PDF already saved (index.csv).
 - questionary gotcha: `Choice(title, None)` returns the TITLE as the value; menu items use explicit string values.
 - Keep code Python 3.9-compatible (stock macOS python3): no `X | Y` types, no backslashes inside f-string expressions.
 - **Screenshot-safe menu (users share screenshots):** no trust name anywhere in `ui.py`; application numbers shown as

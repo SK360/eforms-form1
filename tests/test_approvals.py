@@ -12,7 +12,7 @@ QUIT = lambda kw: "quit"  # noqa: E731
 
 
 def approved_pdf(type_="SILENCER", serial="T201", caliber="22", length="12", barrel="", model="N/A",
-                 approved=True, disapproved=False, date="08/15/2026", conditions=""):
+                 approved=True, disapproved=False, date="08/15/2026", conditions="", date_x=505, date_top=718):
     """A one-page stand-in for an approved Form 1 PDF: labels and values at the positions eForms uses."""
     doc = pymupdf.open()
     p = doc.new_page(width=612, height=792)
@@ -35,7 +35,7 @@ def approved_pdf(type_="SILENCER", serial="T201", caliber="22", length="12", bar
         p.insert_text((30, 668), "4", fontname="zadb", fontsize=10)
     if disapproved:
         p.insert_text((249, 668), "4", fontname="zadb", fontsize=10)
-    value(505, 718, date)
+    value(date_x, date_top, date)
     if conditions:  # older approvals: a conditions page at the end (the banner is drawn first, see above)
         last = doc.new_page(width=612, height=792)
         last.insert_text((40, 80), conditions, fontname="helv", fontsize=9)
@@ -56,6 +56,13 @@ def test_read_approved_pdf(tmp_path):
     assert (r["type"], r["barrel_length"], r["overall_length"], r["caliber"]) == ("SHORT BARRELED RIFLE", "10.5", "26", "5.56")
     f.write_bytes(approved_pdf(approved=False, disapproved=True))
     assert atf.read_approved_pdf(f)["approved"] is False
+
+
+def test_newer_approval_date(tmp_path):
+    # approvals from Oct 2026 on: the date is spelled out and sits ~4.5 pt below the "Date" label (older: ~10 pt)
+    f = tmp_path / "n.pdf"
+    f.write_bytes(approved_pdf(date="October 15, 2026", date_x=504, date_top=712.8))
+    assert atf.read_approved_pdf(f)["approval_date"] == "10/15/2026"
 
 
 def test_approved_with_conditions(tmp_path):
@@ -100,7 +107,7 @@ def test_safe_click_refuses_anything_unexpected():
 
 
 DASHBOARD = """<a href='#' onclick="document.title='LOGGEDOUT'">Log Out</a><div id=app></div><script>
-const FORMS = %s, PER = 10;
+const FORMS = %s, PER = %d, LINKS = %d, MODE = %s;  // LINKS page numbers shown at a time, in blocks or sliding
 const app = () => document.getElementById('app');
 function home() {
   app().innerHTML = `<select id="form-type-search"><option>Select...</option><option>ATF Form 1 (5320.1)</option><option>ATF Form 4 (5320.4)</option></select>
@@ -115,14 +122,19 @@ function search() {
 function showPage(n) {
   // markup like a UI-library table: empty first cell, column titles inside cells, hidden duplicate buttons
   const T = t => `<span class="col-title">${t} </span>`;
-  const rows = window.hits.slice((n - 1) * PER, n * PER).map(f => `<tr><td></td><td>${T('ID')}${f.id}</td>
+  const rows = window.hits.slice((n - 1) * PER, n * PER).map(f => `<tr><td></td><td>${T('ID')}<span class="ng-star-inserted"><a id="eformId-link"> ${f.id} </a></span></td>
      <td>${T('Permit / Control Number')}2026${f.id}0</td><td></td><td>${T('Created By')}JOHN DOE</td>
      <td>1/1/2026</td><td>1/2/2026</td><td>${f.fin}</td><td><button style="display:none" onclick="fetch('/clicked/hidden')">View Form</button>
      <button onclick="viewForm('${f.id}')">View Form</button> <button onclick="fetch('/clicked/void')">Submit Void</button></td></tr>`).join('');
   const pages = Math.ceil(window.hits.length / PER);
-  const links = Array.from({length: pages}, (_, i) => `<a href="#" onclick="showPage(${i + 1});return false">${i + 1}</a>`).join(' ');
+  let lo = MODE.startsWith('block') ? Math.floor((n - 1) / LINKS) * LINKS + 1 : Math.max(1, Math.min(n - Math.floor(LINKS / 2), pages - LINKS + 1));
+  const nums = Array.from({length: Math.min(LINKS, pages - lo + 1)}, (_, i) => lo + i);
+  const icon = (cls, to) => `<a href="#" class="ui-paginator-${cls}${to < 1 || to > pages || to === n ? ' ui-state-disabled' : ''}"
+     onclick="${to >= 1 && to <= pages ? `showPage(${to});` : ''}return false"><span class="pi pi-caret" style="display:inline-block;width:12px;height:12px"></span></a>`;
+  const links = icon('first', 1) + icon('prev', n - 1) + '<span class="ui-paginator-pages">' + nums.map(k => `<a href="#" class="ui-paginator-page${k === n && !MODE.includes('nomark') ? ' ui-state-active' : ''}"
+     onclick="showPage(${k});return false">${k}</a>`).join(' ') + '</span>' + icon('next', n + 1) + icon('last', pages);
   document.getElementById('results').innerHTML = `<table><tr><th>ID</th><th>Permit / Control Number</th></tr>${rows}</table>
-     ${links} <span>10 | Total Rows: ${window.hits.length}</span>`;
+     <div class="ui-paginator">${links} <input type="text" value="10"></div><span>10 | Total Rows: ${window.hits.length}</span>`;
 }
 function viewForm(id) {
   app().innerHTML = `<button id="saveBtn" onclick="fetch('/clicked/save')">Save</button><button id="cancelBtn">Cancel</button>
@@ -148,9 +160,9 @@ def dashboard(monkeypatch):
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(forms, start="/home"):
+    def configure(forms, start="/home", per=10, links=5, mode="slide"):
         pdfs = {f[0]: f[2] for f in forms}
-        html = DASHBOARD % json.dumps([{"id": f[0], "fin": f[1]} for f in forms])
+        html = DASHBOARD % (json.dumps([{"id": f[0], "fin": f[1]} for f in forms]), per, links, json.dumps(mode))
 
         def route(r):
             path = r.request.url.split("fake.test", 1)[1]
@@ -224,6 +236,63 @@ def test_check_approvals_end_to_end(configured, dashboard):
     state["pdf_hits"] = 0
     found, problems = atf.fetch_approved()
     assert len(found) == 12 and state["pdf_hits"] == 0 and problems == []
+
+
+def test_results_page_that_wont_load(configured, dashboard, monkeypatch):
+    """Live 2026-10-19: the page-2 link didn't show up within 15 s and the traceback lost the whole report. Now it starts
+    over once; if the page still won't load it stops paging, says so, and reports every PDF saved so far."""
+    state, fails = dashboard(FORMS), {"left": 0}
+    real = atf._approved_results
+
+    def flaky(page, page_no=1, search=True):
+        if page_no == 2 and fails["left"]:
+            fails["left"] -= 1
+            raise RuntimeError("Locator.inner_text: Timeout 15000ms exceeded.\nCall log: ...")
+        return real(page, page_no, search)
+    monkeypatch.setattr(atf, "_approved_results", flaky)
+
+    fails["left"] = 99                                            # page 2 never loads: page 1 is still saved and reported
+    found, problems = atf.fetch_approved()
+    assert len(found) == 10 and state["logged_out"] and len(problems) == 1
+    assert problems[0].startswith("stopped at results page 2 of 2: Locator.inner_text: Timeout")
+
+    fails["left"] = 1                                             # fails once: the retry gets the rest
+    found, problems = atf.fetch_approved()
+    assert len(found) == 12 and problems == [] and state["pdf_hits"] == 12
+
+    fails["left"] = 99                                            # everything saved: the report still covers all 12
+    found, problems = atf.fetch_approved()
+    assert len(found) == 12 and len(problems) == 1 and len({r["eform_id"] for r in found}) == 12
+    records, more = atf.read_approved(found)
+    assert len(records) == 12 and more == []
+
+
+@pytest.mark.parametrize("mode", ["block", "slide", "block-nomark"])
+def test_paginator_shows_only_some_pages(configured, dashboard, mode):
+    """Live 2026-10-19: 66 forms on 7 pages and the "6" link never showed up. Here: 12 forms, 2 per page, 3 page
+    numbers shown at a time, in blocks (1-3, then the icon-only next arrow) or sliding; current page marked or not."""
+    state = dashboard(FORMS, per=2, links=3, mode=mode)
+    found, problems = atf.fetch_approved()
+    assert problems == [] and len(found) == 12 and state["pdf_hits"] == 12 and state["bad_clicks"] == [] and state["logged_out"]
+    assert sorted(r["eform_id"] for r in found) == sorted(f[0] for f in FORMS)
+
+
+def test_pager_ignores_eform_id_links():
+    """Live 2026-10-19: each results row's eForm ID is a link too (<span><a id="eformId-link"> 1234567 </a></span>);
+    it was taken for the paginator and nothing was found. Markup shaped like the live page (made-up IDs)."""
+    from playwright.sync_api import sync_playwright
+    icon = lambda c: f'<a href="#" class="ui-paginator-{c}"><span style="display:inline-block;width:9px;height:9px"></span></a>'  # noqa: E731
+    html = ("<table>" + "".join(f'<tr><td><span class="ng-star-inserted"><a id="eformId-link"> 1000000{i} </a></span></td>'
+                                f"<td><button>View Form</button></td></tr>" for i in range(3)) + "</table>"
+            + '<div class="ui-paginator">' + icon("first") + icon("prev") + '<span class="ui-paginator-pages">'
+            + " ".join(f'<a href="#" class="ui-paginator-page{" ui-state-active" if k == 1 else ""}">{k}</a>' for k in range(1, 6))
+            + "</span>" + icon("next") + icon("last") + '<input type="text" value="10"></div><span>10 | Total Rows: 66</span>')
+    with sync_playwright() as pw:
+        page = pw.chromium.launch(headless=True).new_page()
+        page.set_content(html)
+        pg = page.evaluate(atf._PAGER_JS)
+        assert (pg["nums"], pg["current"], pg["next"]) == ([1, 2, 3, 4, 5], 1, True)
+        assert "eformId" not in pg["html"] and page.locator("a[data-atf-next]").get_attribute("class") == "ui-paginator-next"
 
 
 def test_waits_until_logged_in(configured, dashboard, monkeypatch):

@@ -643,11 +643,23 @@ def _submit(page, item, bad, rows, idx, length=""):
 
 
 # ---------- Approved Form 1s (read-only) ----------
+def _mmddyyyy(text):
+    """Approval dates as MM/DD/YYYY: older approvals print 08/15/2026, newer ones (Oct 2026) "October 15, 2026"."""
+    m = re.fullmatch(r"([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})", text.strip())
+    if m:
+        try:
+            return datetime.strptime(f"{m[1][:3]} {m[2]} {m[3]}", "%b %d %Y").strftime("%m/%d/%Y")
+        except ValueError:
+            pass
+    return text
+
+
 def read_approved_pdf(path):
     """Item 4 and ATF's decision block from an approved Form 1 PDF as eForms renders it ("View PDF").
     Values are located relative to the printed labels. The label font is learned from the labels themselves and
     ignored (in eForms' PDFs labels are TimesNewRomanPSMT; typed values are Helvetica, the serial "TimesNewRoman")."""
     import pymupdf
+    pymupdf.TOOLS.mupdf_display_errors(False)  # newer eForms PDFs have dangling refs ("cannot find object in xref"): harmless
     page = pymupdf.open(path)[0]
     spans = [sp for blk in page.get_text("dict")["blocks"] for ln in blk.get("lines", []) for sp in ln["spans"] if sp["text"].strip()]
     label_fonts = {sp["font"] for sp in spans if re.search(r"Serial number|Caliber or gauge|Overall length|Type of firearm", sp["text"])}
@@ -681,7 +693,7 @@ def read_approved_pdf(path):
             "caliber": value("c. Caliber or gauge", (-10, 75), (20, 40)), "model": value("d. Model", (-10, 60), (5, 20)),
             "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)), "overall_length": value("Overall length", (-15, 50), (5, 22)),
             "approved": ticked(approved) and not ticked(dis),
-            "approval_date": value("Date", (-5, 80), (5, 20), pick=below), "conditions": conditions,
+            "approval_date": _mmddyyyy(value("Date", (-5, 80), (2, 20), pick=below)), "conditions": conditions,
             "pdf_control_number": next((m.group(1) for pg in page.parent for m in [re.search(r"Control\s*Number:\s*(\d{10,11})\b", pg.get_text())] if m), "")}
 
 
@@ -729,36 +741,96 @@ def _parse_result_row(text):
     return {"eform_id": eid.group(), "control_number": control.group() if control else "", "finalized": dates[-1] if dates else ""}
 
 
-def _approved_results(page, page_no=1):
-    """Search Form 1 + APPROVED, go to results page `page_no`; returns (total rows, [{eform_id, control_number, finalized}])."""
-    page.locator("#form-type-search").select_option(label="ATF Form 1 (5320.1)")
-    page.locator("#form-status-search").select_option(label="APPROVED")
-    _safe_click(page.locator("#queryBtn"), "Search")
-
+def _approved_results(page, page_no=1, search=True):
+    """Search Form 1 + APPROVED (search=False: stay on the results page shown), go to results page `page_no`;
+    returns (total rows, [{eform_id, control_number, finalized}]). Search only from a home page WITHOUT results: a
+    table still showing is read as the new results, and the search coming back then resets it to page 1."""
     def rows():
         return [r for r in (_parse_result_row(t) for t in page.evaluate(_ROW_TEXTS_JS)) if r]
-    # The home page already shows an empty table ("Total Rows: 0") before any search, and results arrive a moment
-    # after Search: wait for result rows rather than for the text (up to 30 s; then there really are none).
     current = rows()
-    for _ in range(120):
-        if current:
-            break
-        page.wait_for_timeout(250)
+    if search:
+        page.locator("#form-type-search").select_option(label="ATF Form 1 (5320.1)")
+        page.locator("#form-status-search").select_option(label="APPROVED")
+        _safe_click(page.locator("#queryBtn"), "Search")
+        # The home page already shows an empty table ("Total Rows: 0") before any search, and results arrive a moment
+        # after Search: wait for result rows rather than for the text (up to 30 s; then there really are none).
         current = rows()
+        for _ in range(120):
+            if current:
+                break
+            page.wait_for_timeout(250)
+            current = rows()
     total = int((re.search(r"Total Rows:\s*(\d+)", page.inner_text("body")) or [0, 0])[1])
     if total and not current:
         raise RuntimeError(f"eForms says {total} approved form(s) but no result rows could be read; the page layout "
                            "may have changed (use Advanced > Capture portal pages)")
-    for n in range(2, page_no + 1):
+    def click(loc, expected):
+        nonlocal current
         first = current[0]["eform_id"] if current else ""
-        _safe_click(page.get_by_role("link", name=str(n), exact=True).first, str(n))
+        _safe_click(loc, expected)
         for _ in range(40):  # wait until the table shows the new page
             page.wait_for_timeout(250)
             current = rows()
             if current and current[0]["eform_id"] != first:
                 break
+
+    # The paginator shows only some page numbers (live 2026-10-19: "6" of 7 never showed up). Click the target when
+    # shown; else the highest shown number below it; else the icon-only arrow right after the numbers (next).
+    reached, clicked = page_no == 1, 1
+    for _ in range(page_no + 5):
+        if reached:
+            break
+        pg = page.evaluate(_PAGER_JS)
+        if pg["current"] == page_no or page_no in pg["nums"]:
+            if pg["current"] != page_no:
+                click(page.locator(f'a[data-atf-page="{page_no}"]'), str(page_no))
+            reached = True
+            break
+        lower = max((k for k in pg["nums"] if k < page_no), default=0)
+        if lower > clicked:
+            click(page.locator(f'a[data-atf-page="{lower}"]'), str(lower))
+            clicked = lower
+        elif pg["next"]:
+            click(page.locator("a[data-atf-next]"), "")
+        else:
+            break
+    if not reached:
+        raise RuntimeError(f"couldn't get to results page {page_no}{_save_pager(page)}")
     total = int(re.search(r"Total Rows:\s*(\d+)", page.inner_text("body")).group(1))
     return total, current
+
+
+# The results table's paginator: tag the shown page-number links (data-atf-page=<n>) and the icon-only arrow right
+# after the last one (data-atf-next); report the numbers, the current page (if the paginator marks it) and its HTML.
+_PAGER_JS = """() => {
+  const shown = e => e.getClientRects().length > 0;
+  document.querySelectorAll('[data-atf-page],[data-atf-next]').forEach(a => { a.removeAttribute('data-atf-page'); a.removeAttribute('data-atf-next'); });
+  // page numbers are 1-3 digits; the results rows' eForm IDs (7-8 digits) are links too (live 2026-10-19)
+  const links = [...document.querySelectorAll('a')].filter(a => shown(a) && /^\\d{1,3}$/.test(a.innerText.trim()));
+  if (!links.length) return {nums: [], current: null, next: false, html: ''};
+  // the smallest box holding every page number and an icon-only link after them (PrimeNG: numbers in their own span)
+  let box = links[0].parentElement;
+  const after = b => { const all = [...b.querySelectorAll('a')].filter(shown); return all.slice(all.indexOf(links[links.length - 1]) + 1).some(a => !a.innerText.trim()); };
+  for (let i = 0; i < 8 && box.parentElement && (!links.every(a => box.contains(a)) || !after(box)); i++) box = box.parentElement;
+  const nums = [], isCur = e => /active|highlight|current|selected/i.test((e.className || '') + ' ' + ((e.parentElement || {}).className || '')) || e.getAttribute('aria-current');
+  let current = null;
+  links.filter(a => box.contains(a)).forEach(a => { const n = +a.innerText.trim(); a.setAttribute('data-atf-page', n); nums.push(n); if (isCur(a)) current = n; });
+  const all = [...box.querySelectorAll('a')].filter(shown), last = all.indexOf(links.filter(a => box.contains(a)).pop());
+  const nxt = all.slice(last + 1).find(a => !a.innerText.trim());
+  const off = nxt && /disabled/i.test((nxt.className || '') + ' ' + ((nxt.parentElement || {}).className || '') + (nxt.getAttribute('aria-disabled') || ''));
+  if (nxt && !off) nxt.setAttribute('data-atf-next', '1');
+  return {nums, current, next: !!(nxt && !off), html: box.outerHTML.slice(0, 20000)}; }"""
+
+
+def _save_pager(page):
+    """Save the paginator's HTML (page numbers only, no form data) for debugging; returns ' (saved to ...)' or ''."""
+    try:
+        html = page.evaluate(_PAGER_JS)["html"]
+        f = OUT / f"paginator_{datetime.now():%Y%m%d_%H%M%S}.html"
+        f.write_text(html, encoding="utf-8")
+        return f" (its page links are saved in {f})"
+    except Exception:
+        return ""
 
 
 def _fetch_form_pdf(page, ctx, row, dest):
@@ -782,7 +854,12 @@ def _fetch_form_pdf(page, ctx, row, dest):
     dest.write_bytes(data)
 
 
-def _go_home(page):
+def _go_home(page, reload=False):
+    """Back to the home page; reload=True: a fresh one (no results table) even when already there."""
+    if reload:
+        page.goto(re.match(r"https?://[^/]+", page.url).group() + "/home")
+        page.locator("#form-type-search").wait_for(timeout=30000)
+        return
     if page.locator("#form-type-search").is_visible():  # already there (e.g. the form never opened)
         return
     try:
@@ -856,30 +933,56 @@ def fetch_approved():
         pages = -(-total // max(len(rows), 1))
         emit("info", f"{total} approved Form 1(s) on {pages} page(s)")
         for n in range(1, pages + 1):
-            if n > 1:
-                emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
-                _, rows = _approved_results(page, n)
-            for row in rows:
-                known = index.get(row["eform_id"])
-                if known and (folder / known).exists():  # saved on an earlier run
-                    found.append({**row, "pdf": str(folder / known)})
-                    continue
-                emit("step", f"downloading eForm …{row['eform_id'][-4:]}")
-                try:
-                    tmp = folder / f".{row['eform_id']}.part.pdf"
-                    _fetch_form_pdf(page, ctx, row, tmp)
-                    dest = _file_by_serial(folder, index, row["eform_id"], tmp)
-                    _save_approved_index(folder, index)
-                    found.append({**row, "pdf": str(dest)})
-                    emit("info", f"saved {dest.name}")
-                except Exception as e:
-                    problems.append(f"eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
-                    emit("warn", f"could not get the PDF for eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
-                _go_home(page)
-                _approved_results(page, n)  # back to the same results page for the next row
+            try:
+                if n > 1:
+                    emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
+                    _, rows = _results_page(page, n, search=False)  # on from page n-1, which is showing
+                _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems)
+            except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
+                msg = f"stopped at results page {n} of {pages}: {str(e).splitlines()[0]}"
+                problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
+                emit("error", msg)  # ✖ on the section instead of a later ✔
+                seen = {r["eform_id"] for r in found}
+                found += [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
+                          for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
+                          if eid not in seen and (folder / name).exists()]
+                break
     finally:
         _shutdown(page, ctx, pw)
     return found, problems
+
+
+def _results_page(page, n, search=True):
+    """Results page n (search=False: page on from the results shown), starting over from a freshly loaded home page
+    once if it fails."""
+    try:
+        return _approved_results(page, n, search)
+    except Exception as e:
+        emit("step", f"results page {n} didn't load ({str(e).splitlines()[0]}); trying once more")
+        _go_home(page, reload=True)
+        return _approved_results(page, n)
+
+
+def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
+    """Save the PDF of every row on results page n that isn't saved yet."""
+    for row in rows:
+        known = index.get(row["eform_id"])
+        if known and (folder / known).exists():  # saved on an earlier run
+            found.append({**row, "pdf": str(folder / known)})
+            continue
+        emit("step", f"downloading eForm …{row['eform_id'][-4:]}")
+        try:
+            tmp = folder / f".{row['eform_id']}.part.pdf"
+            _fetch_form_pdf(page, ctx, row, tmp)
+            dest = _file_by_serial(folder, index, row["eform_id"], tmp)
+            _save_approved_index(folder, index)
+            found.append({**row, "pdf": str(dest)})
+            emit("info", f"saved {dest.name}")
+        except Exception as e:
+            problems.append(f"eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
+            emit("warn", f"could not get the PDF for eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
+        _go_home(page)
+        _results_page(page, n)  # back to the same results page for the next row
 
 
 def read_approved(found=None):
