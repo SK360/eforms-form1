@@ -63,9 +63,11 @@ def load_mapping():
 # ---------- Inventory (data/suppressors.csv: one row per suppressor, queued -> filed -> approved) ----------
 SUPP = DATA / "suppressors.csv"
 COLS = ["caliber", "serial_number", "overall_length", "status", "application_number", "filed_date", "approved_date",
-        "eform_id", "control_number", "conditions"]
+        "eform_id", "control_number", "conditions", "built", "design"]
 # overall_length: inches, per suppressor (empty = the settings default, firearm.overall_length, is used and then recorded)
 # status: "" queued | pending (Sign & Submit clicked, confirmation never read) | filed | approved | disapproved
+# built: "yes" once made ("" = not yet; only approved rows are ever marked built, see record_build).
+# design: what it is, free text (e.g. "PCC Short").
 
 
 def load_rows():
@@ -76,6 +78,52 @@ def load_rows():
             r[c] = (r.get(c) or "").strip()
         r["status"] = r["status"].lower()
     return rows
+
+
+def is_built(row):
+    return row.get("built", "").lower() == "yes"
+
+
+def record_build(serials, design=""):
+    """Mark suppressors as built, with what they are (or change the design of built ones). Only APPROVED rows: a Form 1
+    must be approved before the suppressor is made. Returns the serials updated; raises ValueError if any serial is
+    unknown or not approved (then nothing is saved)."""
+    rows = load_rows()
+    by = {r["serial_number"].upper(): r for r in rows}
+    bad = [s for s in serials if (by.get(s.upper()) or {}).get("status") != "approved"]
+    if bad:
+        raise ValueError(f"not approved (or not in the inventory): {', '.join(bad)}")
+    for s in serials:
+        by[s.upper()].update(built="yes", design=design.strip())
+    save_rows(rows)
+    return list(serials)
+
+
+def clear_build(serial):
+    """Undo a build record (marked built by mistake)."""
+    rows = load_rows()
+    for r in rows:
+        if r["serial_number"].upper() == serial.upper():
+            r.update(built="", design="")
+    save_rows(rows)
+
+
+def serials_in(spec, rows):
+    """Serials named by `spec` ("A101-A110, A115"): single serials and inclusive ranges in natural order, among `rows`.
+    Returns (serials in serial order, problems)."""
+    names = {r["serial_number"].upper(): r["serial_number"] for r in rows}
+    out, problems = set(), []
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        m = re.fullmatch(r"(\S+?)\s*(?:-|–|to)\s*(\S+)", part) if part.upper() not in names else None
+        if m:
+            lo, hi = sorted((serial_key(m[1]), serial_key(m[2])))
+            hits = [n for n in names.values() if lo <= serial_key(n) <= hi and re.sub(r"\d", "", n).upper() == re.sub(r"\d", "", m[1]).upper()]
+            out.update(hits) if hits else problems.append(f"nothing in {part}")
+        elif part.upper() in names:
+            out.add(names[part.upper()])
+        else:
+            problems.append(f"{part} isn't one of them")
+    return sorted(out, key=serial_key), problems
 
 
 def serial_key(serial):
@@ -236,7 +284,7 @@ def approved_pdf_for(row):
 EXPORT_COLS = [("Serial", "serial_number", 10), ("Caliber", "caliber", 9), ("Length (in)", "overall_length", 11),
                ("Status", "status", 11), ("Filed", "filed_date", 11), ("Approved", "approved_date", 11),
                ("Conditions", "conditions", 60), ("Application #", "application_number", 14), ("eForm ID", "eform_id", 11),
-               ("Control #", "control_number", 14)]
+               ("Control #", "control_number", 14), ("Built", "built", 7), ("Design", "design", 30)]
 
 
 def export_inventory(dest=None):

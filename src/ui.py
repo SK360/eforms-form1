@@ -156,8 +156,9 @@ def queue_table(rows, only=None, title=None):
 
 def summary(rows):
     n = lambda *st: sum(1 for r in rows if r["status"] in st)  # noqa: E731
-    parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]", f"[blue]{n(*IN_PROGRESS)} in progress[/]",
-             f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
+    built = sum(1 for r in rows if atf.is_built(r))
+    parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]"] + ([f"[green]{built} built[/]"] if built else []) + [
+             f"[blue]{n(*IN_PROGRESS)} in progress[/]", f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
     sbrs = len(atf.load_sbrs())
     return " · ".join(parts + ([f"[magenta]{sbrs} SBR{'s' if sbrs != 1 else ''}[/]"] if sbrs else []))
 
@@ -177,7 +178,7 @@ def _days(date_str):
 
 def inventory_table(rows, title):
     t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
-    for col in ("Serial", "Caliber", "Length", "Status", "Filed", "Approved / waiting", "App # / eForm"):
+    for col in ("Serial", "Caliber", "Length", "Status", "Filed", "Approved / waiting", "Built", "App # / eForm"):
         t.add_column(col)
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
         if r["status"] == "approved":
@@ -188,7 +189,18 @@ def inventory_table(rows, title):
             when = ""
         ident = short(r["application_number"]) or (f"eForm {short(r['eform_id'])}" if r["eform_id"] else "")
         t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
-                  escape(r["filed_date"]), when, escape(ident))
+                  escape(r["filed_date"]), when, "[green]✔[/]" if atf.is_built(r) else "", escape(ident))
+    return t
+
+
+def build_table(rows, title):
+    """Approved suppressors, built or not, and what each one is (for the Built / Approved, not built views)."""
+    t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
+    for col in ("Serial", "Caliber", "Length", "Approved", "Built", "Design"):
+        t.add_column(col)
+    for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
+        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), escape(r["approved_date"]),
+                  "[green]✔ built[/]" if atf.is_built(r) else "[dim]not built[/]", escape(r["design"]))
     return t
 
 
@@ -213,7 +225,8 @@ def sbr_summary(sbrs):
 def inventory_flow():
     view = "all"
     filters = {"all": ("All", lambda r: True), "approved": ("Approved", lambda r: r["status"] == "approved"),
-               "progress": ("In progress", lambda r: r["status"] in IN_PROGRESS), "queued": ("Queued", lambda r: r["status"] == "")}
+               "progress": ("In progress", lambda r: r["status"] in IN_PROGRESS), "queued": ("Queued", lambda r: r["status"] == ""),
+               "built": ("Built", atf.is_built), "unbuilt": ("Approved, not built", lambda r: r["status"] == "approved" and not atf.is_built(r))}
     while True:
         rows = atf.load_rows()
         con.clear()
@@ -225,7 +238,8 @@ def inventory_flow():
         else:
             name, keep = filters[view]
             shown = [r for r in rows if keep(r)]
-            con.print(inventory_table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
+            table = build_table if view in ("built", "unbuilt") else inventory_table
+            con.print(table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
             con.print(f"  {summary(rows)}")
             cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
             where = "data/suppressors.csv"
@@ -237,6 +251,7 @@ def inventory_flow():
         if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
+            choices.append(questionary.Choice("Record builds", builds_flow))
             choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
         choices.append(questionary.Choice("Export to Excel", export_flow))
         what = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
@@ -296,6 +311,74 @@ def edit_queued_flow():
     atf.save_rows(rows)
     con.print(f"  [green]✔[/] Updated {escape(r['serial_number'])}")
     pause()
+
+
+def _ask_design(default=""):
+    """What it is (e.g. "PCC Short"), typed each time. Returns the text, or None if cancelled."""
+    v = questionary.text("Design (what it is, e.g. PCC Short):", default=default).ask()
+    return None if v is None else v.strip()
+
+
+def builds_flow():
+    """Record which approved suppressors are built and what each one is. Only approved rows can be marked built."""
+    rows = atf.load_rows()
+    todo = [r for r in rows if r["status"] == "approved" and not atf.is_built(r)]
+    built = [r for r in rows if atf.is_built(r)]
+    choices = ([questionary.Choice(f"Record builds ({len(todo)} approved, not built yet)", "new")] if todo else []) + (
+        [questionary.Choice("Change or clear a build record", "change")] if built else []) + [questionary.Choice("Back", "back")]
+    what = questionary.select("Builds:", choices=choices).ask()
+    if what == "new":
+        _record_builds(todo)
+    elif what == "change":
+        _change_build(built)
+
+
+def _record_builds(todo):
+    todo = sorted(todo, key=lambda r: atf.serial_key(r["serial_number"]))
+    spec = questionary.text("Which serials? A range and/or list (e.g. A101-A110, A115), or empty to pick from a list:",
+                            validate=lambda v: not v.strip() or not atf.serials_in(v, todo)[1]
+                            or "; ".join(atf.serials_in(v, todo)[1]) + " (approved, not built yet)").ask()
+    if spec is None:
+        return
+    if spec.strip():
+        serials = atf.serials_in(spec, todo)[0]
+    else:
+        serials = questionary.checkbox("Built (space to tick, Enter to continue):", choices=[
+            questionary.Choice(f"{r['serial_number']}  (caliber {r['caliber']}, {r['overall_length'] or '?'}\", approved {r['approved_date']})",
+                               r["serial_number"]) for r in todo]).ask()
+    if not serials:
+        return
+    design = _ask_design()
+    if design is None:
+        return
+    names = serials[0] + (f" – {serials[-1]}" if len(serials) > 1 else "")
+    if not questionary.confirm(f"Record {len(serials)} as built ({names})" + (f": {design}" if design else "") + "?", default=True).ask():
+        return
+    atf.record_build(serials, design)
+    con.print(f"  [green]✔[/] Recorded {len(serials)} as built: {escape(', '.join(serials))}")
+    pause()
+
+
+def _change_build(built):
+    built = sorted(built, key=lambda r: atf.serial_key(r["serial_number"]))
+    r = questionary.select("Which one?", choices=[questionary.Choice(
+        f"{r['serial_number']}  ({r['design'] or 'built'})", r) for r in built]
+        + [questionary.Choice("Back", "back")]).ask()
+    if r in (None, "back"):
+        return
+    what = questionary.select(f"{r['serial_number']}:", choices=[questionary.Choice("Change the design", "edit"),
+                              questionary.Choice("Clear it (not built)", "clear"), questionary.Choice("Back", "back")]).ask()
+    if what == "clear":
+        if questionary.confirm(f"Clear the build record of {r['serial_number']}?", default=False).ask():
+            atf.clear_build(r["serial_number"])
+            con.print(f"  [green]✔[/] {escape(r['serial_number'])} is no longer marked built")
+            pause()
+    elif what == "edit":
+        design = _ask_design(r["design"])
+        if design is not None:
+            atf.record_build([r["serial_number"]], design)
+            con.print(f"  [green]✔[/] Updated {escape(r['serial_number'])}")
+            pause()
 
 
 def open_approved_flow():

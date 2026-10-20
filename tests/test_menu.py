@@ -295,3 +295,67 @@ def test_open_sbr_pdf_and_export_sheet(configured, answers, screen, monkeypatch)
     wb = load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx"))
     rows = list(wb["SBRs"].iter_rows(values_only=True))
     assert wb.sheetnames == ["Inventory", "SBRs"] and [r[0] for r in rows[1:]] == ["R2", "R10"] and rows[1][3] == 10.5
+
+
+def _approved_run():
+    """T1-T5 approved, T6 filed, T7 queued (made up)."""
+    atf.save_rows([{"serial_number": f"T{n}", "caliber": "22", "overall_length": "12", "approved_date": "10/15/2026",
+                    "status": "approved" if n <= 5 else ("filed" if n == 6 else "")} for n in range(1, 8)])
+
+
+def test_record_builds_by_range(configured, answers, screen):
+    _approved_run()
+    seen = {}
+
+    def spec(kw):
+        seen["bad"] = kw["validate"]("T1-T3, T6")              # T6 is only filed: can't be built yet
+        return "T1-T3, T5"
+    answers(pick("Inventory"), pick("Record builds"), pick("Record builds (5 approved"), spec, "PCC Short", True, "back", QUIT)
+    ui.menu()
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert seen["bad"] == "T6 isn't one of them (approved, not built yet)"
+    assert [s for s, r in rows.items() if atf.is_built(r)] == ["T1", "T2", "T3", "T5"]
+    assert (rows["T2"]["built"], rows["T2"]["design"]) == ("yes", "PCC Short")
+    assert rows["T4"]["built"] == "" and rows["T6"]["built"] == ""
+    assert "Recorded 4 as built: T1, T2, T3, T5" in screen.getvalue()
+
+
+def test_record_build_from_the_list(configured, answers, screen):
+    _approved_run()
+    atf.record_build(["T1", "T2", "T3"], "PCC Short")
+    answers(pick("Inventory"), pick("Record builds"), pick("Record builds"), "", lambda kw: ["T4"], "Rimfire 12in", True,
+            pick("Show built"), "back", QUIT)
+    ui.menu()
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert rows["T4"]["design"] == "Rimfire 12in" and rows["T1"]["design"] == "PCC Short"
+    out = screen.getvalue()
+    assert "Inventory · Built (4)" in out and "4 built" in out
+
+
+def test_change_and_clear_build(configured, answers, screen):
+    _approved_run()
+    atf.record_build(["T1", "T2"], "A")
+    answers(pick("Inventory"), pick("Record builds"), pick("Change or clear"), pick("T1"), "edit", "PCC Short",
+            pick("Record builds"), pick("Change or clear"), pick("T2"), "clear", True, "back", QUIT)
+    ui.menu()
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert (rows["T1"]["built"], rows["T1"]["design"]) == ("yes", "PCC Short")
+    assert not atf.is_built(rows["T2"]) and rows["T2"]["design"] == ""
+
+
+def test_only_approved_can_be_built(configured):
+    _approved_run()
+    with pytest.raises(ValueError, match="not approved .*: T6, T7, T99"):
+        atf.record_build(["T1", "T6", "T7", "T99"], "A")
+    assert not any(atf.is_built(r) for r in atf.load_rows())                    # nothing saved
+
+
+def test_export_has_build_columns(configured):
+    from openpyxl import load_workbook
+    _approved_run()
+    atf.record_build(["T3"], "PCC Short")
+    ws = load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx")).active
+    rows = list(ws.iter_rows(values_only=True))
+    i = rows[0].index("Built")
+    assert rows[0][i:i + 2] == ("Built", "Design") and rows[3][i:i + 2] == ("yes", "PCC Short")
+    assert rows[4][i:i + 2] == (None, None)

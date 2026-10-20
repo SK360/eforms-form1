@@ -64,6 +64,8 @@ def inventory():
         if n <= 106:
             r.update(status="approved", filed_date=d(320 - n * 2), approved_date=d(220 - n * 2), eform_id=f"1000{n}",
                      application_number=f"100000{n}", conditions="Mark per 27 CFR 479.102" if n == 101 else "")
+            if n <= 104:  # built (made-up design names)
+                r.update(built="yes", design="Rimfire Short" if n < 103 else "Rimfire 12in")
         elif n <= 112:
             r.update(status="filed", filed_date=d(230 - n * 2), application_number=f"100000{n}")
         else:
@@ -200,8 +202,9 @@ def shot_inventory():
     ui.con.print(ui.inventory_table(rows, f"[bold]Inventory[/] · All ({len(rows)})"))
     ui.con.print(f"  {ui.summary(rows)}")
     ui.con.print("  [yellow]⚠ approved with conditions: A101[/] [dim](conditions are in data/suppressors.csv)[/]")
-    open_select("Inventory:", ["Show approved", "Show in progress", "Show queued", "Show SBRs",
-                               "Edit or remove a queued suppressor", "Open an approved PDF", "Export to Excel", "Back"])
+    open_select("Inventory:", ["Show approved", "Show in progress", "Show queued", "Show built", "Show approved, not built",
+                               "Show SBRs", "Edit or remove a queued suppressor", "Record builds",
+                               "Open an approved PDF", "Export to Excel", "Back"])
 
 
 def shot_sbrs():
@@ -209,6 +212,14 @@ def shot_sbrs():
     answered("Inventory:", "Show SBRs")
     ui.con.print(ui.sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
     ui.con.print(f"  {ui.sbr_summary(sbrs)}")
+
+
+def shot_builds():
+    answered("Inventory:", "Record builds")
+    script("new", "A105-A106", "Rimfire 12in", True)
+    ui.builds_flow()
+    rows = [r for r in atf.load_rows() if r["status"] == "approved"]
+    ui.con.print(ui.build_table(rows, f"[bold]Inventory[/] · Approved ({len(rows)})"))
 
 
 def shot_approvals():
@@ -274,7 +285,8 @@ def shot_individual():
 
 
 SHOTS = [("01-home", shot_home), ("02-add", shot_add), (None, shot_file),  # shot_file makes 03-file and 04-filing
-         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs), ("07-approvals", shot_approvals),
+         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs), ("10-builds", shot_builds),
+         ("07-approvals", shot_approvals),
          (None, shot_individual)]  # 08-individual-confirm, 09-individual-readback (last: it switches the settings)
 
 
