@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 import yaml
 
-from conftest import FIXTURE, FIXTURE_ANSWERS, FIXTURE_SSN, TODAY, atf, fake_settings, make_individual, queue
+from conftest import FIXTURE, FIXTURE_ANSWERS, FIXTURE_SSN, OTHER_RP, TODAY, add_other_rp, atf, fake_settings, make_individual, queue
 
 
 def test_token_match_is_whole_token_and_case_insensitive():
@@ -194,3 +194,90 @@ def test_answers_are_checked_together_and_repicked():
         atf._run_steps(page, [{"selector": "#v", "action": "expect", "label": "Citizenship", "value": "US", "exact": True}],
                        {}, False, bad)
         assert bad                                                                  # "US" must not match "NON-US"
+
+
+# ---------- other responsible persons in the trust ----------
+def test_read_person_gets_their_name_address_and_never_the_ssn():
+    got = atf.read_person(FIXTURE)
+    assert got == {"first_name": "JOHN", "middle_name": "Q", "last_name": "DOE", "email": "JOHN.DOE@EXAMPLE.COM",
+                   "home_address.street": "100 OAK ST", "home_address.city": "SPRINGFIELD", "home_address.state": "Ohio",
+                   "home_address.zip": "45501", "dob": "01/02/1980", "place_of_birth.state": "Ohio"}
+    assert FIXTURE_SSN not in str(got)
+
+
+def test_each_responsible_person_gets_their_own_5320(configured):
+    t = atf.load_trust()
+    t["cleo"]["official"] = "NEW CHIEF"                     # your CLEO changed; theirs is whoever they put on their form
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t), encoding="utf-8")
+    person = add_other_rp()
+    (mine, m1), (theirs, m2) = atf.stamp_all({"serial_number": "ABC123", "caliber": "9"}, TODAY)
+    assert m1 == m2 == [] and (mine.name, theirs.name) == ("5320.23_ABC123.pdf", "5320.23_ABC123.jane-roe.pdf")
+    assert "NEW CHIEF, CHIEF OF POLICE" in pymupdf.open(mine)[0].get_text()
+    p1 = pymupdf.open(theirs)[0].get_text()
+    assert "PAT EXAMPLE, CHIEF OF POLICE" in p1 and "NEW CHIEF" not in p1 and "ABC123" in p1
+    assert atf._check_5320(theirs, {"serial_number": "ABC123"}, TODAY) == []
+    assert atf._find_5320("ABC123") == mine and atf._find_5320("ABC123", person=person) == theirs
+
+
+def test_other_responsible_person_settings_problems(configured):
+    add_other_rp(last_name="", photo="/nowhere/jane.jpg")
+    probs = atf.settings_problems()
+    assert "responsible person 2: missing last name" in probs
+    assert any(p.startswith("responsible person 2: photo not found") for p in probs)
+    assert not any("Jane" in p for p in probs)                                 # numbered, never named (home screen)
+    (atf.FORMS / OTHER_RP["template"]).unlink()
+    assert "responsible person 2: no 5320.23 template at forms/5320.23_jane-roe.pdf" in atf.settings_problems()
+    make_individual()
+    assert atf.settings_problems() == [] and atf.other_rps(atf.load_trust()) == []   # individuals have no others
+
+
+def test_mapping_adds_each_other_responsible_person(configured):
+    queue(("ABC123", "9"))
+    assert "#addResponsiblePerson" not in _dry_steps()                         # just you: nothing added, no count check
+    add_other_rp(middle_name="Q", suffix="JR")
+    atf.stamp_all(atf.load_rows()[0], TODAY)
+    steps = _dry_steps()
+    assert "{" not in steps
+    for expected in ("click #addResponsiblePerson", "fill #title Co-Trustee", "fill #firstName Jane", "fill #lastName Roe",
+                     "select #middleNameDetail INITIAL ONLY", "fill #middleName Q", "select #cadence JR",
+                     "fill #emailAddress jane@example.com", "fill #street 300 ELM ST", "fill #zipCode 45503",
+                     "select #state OHIO", "select select[name='city'] SPRINGFIELD", "fill #dateOfBirth 03/04/1985",
+                     "select #sex FEMALE", "has-text('White')", f"upload #photoFile {configured / 'files' / 'jane.jpg'}",
+                     f"upload #formFile {atf.OUT / '5320.23_ABC123.jane-roe.pdf'}", "expect tr:has([id='1Edit']) Roe",
+                     "expect input[id$='Edit'] 2"):
+        assert expected in steps, expected
+    assert steps.count("dismiss_dialog") == 2 and steps.count("upload #formFile") == 2
+    assert steps.index("fill #tradeName") < steps.index("click #addResponsiblePerson") < steps.index("#cleoAgencyOrDepartmentName")
+
+
+def test_filing_refuses_a_missing_5320_of_another_person(configured):
+    from types import SimpleNamespace
+    queue(("ABC123", "9"))
+    add_other_rp()
+    atf.stamp_5320(atf.load_rows()[0], TODAY)                                  # only yours
+    opts = SimpleNamespace(dry=True, submit=False, auto_affirm=True, skip_ssn=True, capture=False)
+    with pytest.raises(SystemExit, match="titled 'Co-Trustee' for serial ABC123"):
+        atf.file_rows(atf.load_rows(), [0], opts)
+
+
+def test_fill_handles_a_dropdown_or_a_wrapped_field(sandbox):
+    """A step's id may turn out to be a dropdown, or a wrapper around the input (the trust's Add Responsible Person
+    popup, first live try: '#title ... is not an <input>'). Anything else fails, and the failing page is saved."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page()
+        page.set_default_timeout(3000)
+        page.set_content("""<div class="modal">Add Responsible Person <span id="title"><label>Title</label><input></span>
+          <select id="kind"><option>Select ...</option><option>TRUSTEE</option></select><input id="plain"><p id="text">x</p></div>""")
+        steps = [{"selector": "#title", "action": "fill", "value": "Trustee"}, {"selector": "#kind", "action": "fill", "value": "Trustee"},
+                 {"selector": "#plain", "action": "fill", "value": "Roe"}]
+        atf._run_steps(page, steps, {}, False, [])
+        assert page.locator("#title input").input_value() == "Trustee" and atf._shown_value(page.locator("#kind")) == "TRUSTEE"
+        assert page.locator("#plain").input_value() == "Roe"
+        with pytest.raises(RuntimeError, match="#text is a <p> with no field inside it"):
+            atf._run_steps(page, [{"selector": "#text", "action": "fill", "value": "x"}], {}, False, [])
+        atf._save_failure(page)
+    saved_html = next(atf.OUT.glob("failed_*.html")).read_text(encoding="utf-8")
+    record = yaml.safe_load(next(atf.OUT.glob("failed_*.jsonl")).read_text(encoding="utf-8"))
+    assert saved_html.startswith('<div class="modal">') and 'id="title"' in saved_html
+    assert record["failed_step"] == "#text" and any(c.get("id") == "kind" for c in record["controls"])

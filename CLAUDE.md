@@ -12,12 +12,14 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
   a `.venv` from another Python is rebuilt; make `.venv`,
   install requirements + Chromium); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
   open the extensionless `atf` shell script as a document).
-  First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files) -> `data/trust.yaml`.
+  First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files, other responsible
+  persons) -> `data/trust.yaml`.
 - **Normal use:** `./atf` -> Add suppressors -> File N queued. The menu stamps the 5320.23s (dated today), asks once
   per batch whether to pause for the SSN, shows one confirmation (= "I affirm" + authorization to Sign & Submit),
   opens the browser, the user logs in, then per row: open a new Form 1 (home page `#FORM53201LinkId`), fill, read back,
   certify, sign, wait for the user's emailed code + PIN, record the application number. Pending rows are resolved
-  from the menu. Settings and Advanced (preview steps, re-date a 5320.23, re-file, capture portal pages) are in the menu.
+  from the menu. Settings (a trust: All settings | Other responsible persons) and Advanced (preview steps, re-date a
+  5320.23, re-file, practice run, capture portal pages) are in the menu.
 - **5320.23 template:** the user makes ONE signed 5320.23 with https://jakepro716.github.io/atf-5320-generator/
   (Form 1, their details, the CLEO, signature, placeholder serial `TEMPLATE` and caliber `00`); the wizard copies it to
   `forms/5320.23.pdf` and test-stamps it. The wizard asks for the template FIRST and `read_template()` pre-fills
@@ -34,7 +36,7 @@ plain CLI, kept for debugging/scripting:
 
 | Command | What it does |
 |---|---|
-| `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`. No row = all unfiled rows. |
+| `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`, and each other responsible person's template -> `out/5320.23_<serial>.<first-last>.pdf` (no CLEO line). No row = all unfiled rows. |
 | `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. The menu's "File" = `--auto-affirm --submit` (+ `--skip-ssn` unless the user chose to type the SSN). |
 | `inspect` | Dumps controls + visible text + dialog text of the page you're on, to map new/changed steps. |
 | `fields <pdf>` | Lists AcroForm fields (only for a fresh fillable PDF; generator output is flattened). |
@@ -75,6 +77,19 @@ plain CLI, kept for debugging/scripting:
   filing unless every answer is No; the menu's confirmation lists them and the user affirms they're true today.
   Mapping step options `only: trust|individual` (checked before placeholders are filled) and `if_set: <ctx key>`.
   The same RP popup carries the individual's photo, EFT, DOB, birthplace, sex, race (responsible_persons[0] settings).
+- **Other responsible persons** (trust only; `responsible_persons[1:]`, `atf.other_rps()`): each has title, first/middle/
+  last name, suffix (portal "Cadence"), email, dob, sex, race, place_of_birth.state, home_address {street, zip, city,
+  state}, eft, photo, and `template` = their own signed 5320.23 copied to `forms/5320.23_<first-last>.pdf` (on save).
+  `stamp_5320(row, when, person=p)` -> `out/5320.23_<serial>.<first-last>.pdf` (serial, caliber, date; NOT their CLEO
+  line: item 5 is the CLEO where THEY live); `stamp_all()` = you + them (menu, practice, redate, fill-5320).
+  Menu Settings (`settings_menu`): a trust picks "All settings" (the wizard, which also ends with this list) or
+  "Other responsible persons" (`rps_flow`: just the list, saved via `_save_settings`). `read_person()` prefills them from their template (3a name/address, 3c email; never the SSN). `OTHER_RP_REQUIRED`;
+  problems are numbered ("responsible person 2: ...") and screens show titles, never their names (Settings excepted).
+  Mapping: `repeat: other_rps` after your popup: `#addResponsiblePerson`, the same popup fields (ids from the 10/11
+  capture, where they were locked), ZIP -> `#state` / `select[name='city']`, then read back row `[id='{n-1}Edit']`
+  (private expect on the row's text = last name) and `expect count` of `input[id$='Edit']` = 1 + others (a leftover RP
+  blocks submitting). `_shown_value` reads a non-form element's text. Live: a practice run (2026-10-22, the user
+  added as RP 2 with their own files) went all the way through; not yet filed for real with a different person.
 - `data/trust.yaml` (personal): see `examples/trust.example.yaml`. `REQUIRED` + `settings_problems()` in atf.py list
   what must be set; filing refuses to start until it's complete.
 - `src/atf.py` engine: `stamp_5320(row, when, out_dir)`, `file_rows(rows, todo, opts)` (prechecks, browser, per-row
@@ -134,7 +149,7 @@ plain CLI, kept for debugging/scripting:
 
 ## What is automated vs. manual
 Automated: applicant pages, responsible-person popup (uploads of 5320.23/photo/EFT, DOB, birth/residence,
-sex, race), CLEO page, firearm (manufacturer code FMI, silencer, model, caliber, serial, overall length, description),
+sex, race), the trust's other responsible persons (Add Responsible Person: name, address, email, the same uploads/fields), CLEO page, firearm (manufacturer code FMI, silencer, model, caliber, serial, overall length, description),
 supporting documents, trust document, read-back verification, verify-and-Next, certification, Sign & Submit, logging.
 
 **Always manual (by design, do not automate):** logging in/MFA; typing the **SSN** (optional; the user chooses per
@@ -151,8 +166,8 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 - A row is marked `pending` (saved to the CSV) just before Sign & Submit is clicked, and `filed` only after the
   portal's confirmation popup is read. Pending rows are skipped by every command until resolved (menu: Resolve a
   pending row; `--force` overrides): **check the dashboard** to avoid duplicate filings.
-- Before opening the browser: settings must be complete, and every queued row's 5320.23 must have the serial on page 1
-  and today's signature date (the menu regenerates them each time). The newest PDF for a serial is used.
+- Before opening the browser: settings must be complete, and every queued row's 5320.23 (each responsible person's) must
+  have the serial on page 1 and today's signature date (the menu regenerates them each time). The newest PDF for a serial is used.
 - The fingerprint `dismiss_dialog` step has `require: "Valid EBTS Package"`: any other dialog text counts as a
   mismatch and blocks submitting.
 - Step failures leave the browser open and log out cleanly (eForms allows ONE session; a crash without logout locks
@@ -192,6 +207,14 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   it out). Practice runs: Advanced > "Practice run" (= `fill-form1 --auto-affirm`, submit=False). The menu's
   File path ALWAYS submits after the checks: never suggest it for testing. `expect` reads a dropdown's selected TEXT (`_shown_value`), not its value code.
 - **Selectors:** IDs starting with a digit are invalid CSS: use `[id='0Edit']`, not `#0Edit`.
+- **Step failures save the page:** `_save_failure()` writes `out/failed_<time>.jsonl` (like a capture, + `failed_step`)
+  and `.html` (outermost open dialogs, else the page): read those first. `fill` goes through `_fill()`: an id that is a
+  dropdown gets picked, a wrapper gets its inner field filled (first live trust RP-2 try, 2026-10-22: "#title ... is
+  not an <input>").
+- **Adding documents is asynchronous:** after Add Document the portal saves in the background, lists the file, THEN
+  clears the form. A fixed 1 s wait once let the next file go in first (2026-10-22: only the 2nd doc listed, under the
+  2nd description; form wiped; Add disabled -> timeout). Each add now waits for `td:has-text(<file name>)` (names
+  JSON-quoted in `doc_file` / `trust_doc_file`). The failure record also has `last_steps`.
 - **Hidden checkboxes:** the portal hides real inputs behind styled labels; `_tick()` falls back to the label/DOM click.
   The `check` action uses it. Playwright's plain `.check()` times out here.
 - **Locked/prefilled fields** hang `select`/`fill` for 30s: use `skip_if_disabled: true` (done for the firearm popup
@@ -242,7 +265,8 @@ prints steps without a browser. `--capture` records screens after the automated 
 - 5320.23 template revision: the generator (and ATF's PDF it embeds) was the Jan 2023 revision (OMB expiry
   12/31/2025) when checked; ATF had a revision pending. If the generator updates, re-check stamping on a new template.
 - Early test drafts may remain in the eForms dashboard (auto-delete after 90 days); not submissions.
-- One responsible person only (first entry in trust.yaml); additional RPs need new steps captured live (`[id='1Edit']`?).
+- Other responsible persons (added 2026-10-21 on request): practice run passed 2026-10-22 with the user as RP 2 (own
+  EFT); a real second person (their own EFT/name) not yet. Verify page RP read-back not mapped. U.S. citizens only.
 - Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
 - Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
 - Windows: install/launcher/tests verified on GitHub's Windows runners; not yet used on a real Windows PC against the

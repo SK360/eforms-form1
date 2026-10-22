@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from conftest import TICKED, atf, make_individual, pick, queue, ui
+from conftest import TICKED, add_other_rp, atf, make_individual, pick, queue, ui
 
 QUIT = lambda kw: "quit"  # noqa: E731
 
@@ -43,6 +43,22 @@ def test_file_as_individual_from_the_menu(configured, portal, answers, screen):
     assert "Filing as: an individual (you)" in out and "Questions 11.A-11.M.1: all No; 11.M.2: N/A" in out
     assert "answers to questions 11.A-11.M above are true today" in out and "5320.23s generated" not in out
     assert atf.load_rows()[0]["status"] == "filed" and "Answer 11.A" in out
+
+
+def test_file_with_another_responsible_person(configured, portal, answers, screen):
+    """The fake portal's mini mapping has no popup steps (the real ones are tested in test_portal.py): here, the menu
+    stamps everyone's 5320.23, asks about everyone's SSN and says who goes on the form, without naming anyone."""
+    queue(("S1", "9"))
+    add_other_rp()
+    portal([("S1", "9")])
+    answers(pick("File 1 queued"), TICKED, lambda kw: (answers.kw.setdefault("ssn", kw), False)[1], True, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert "Responsible persons: you + 1 other (Co-Trustee), each with their 5320.23 dated today" in out
+    assert "5320.23s generated" in out and "(2 per form)" in out
+    assert "Jane" not in out and "Roe" not in out                              # screenshot-safe: titles, no names
+    assert [m for k, m in answers.asked if k == "confirm"][0].startswith("Type the SSNs (yours and each other")
+    assert (atf.OUT / "5320.23_S1.jane-roe.pdf").exists() and atf.load_rows()[0]["status"] == "filed"
 
 
 def test_practice_run_never_submits(configured, portal, answers, screen):

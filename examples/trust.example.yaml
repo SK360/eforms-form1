@@ -3,13 +3,29 @@
 applicant_type: trust                     # trust (default) or individual
 trust:                                    # (trust only)
   name: "Example Family Trust"            # exactly as on the trust document
-responsible_persons:                      # only the first entry is used
+responsible_persons:                      # you first (name/address come from your eForms account)
   - title: "Settlor"                      # your title in the trust (typed into eForms as "title of the submitter")
     dob: "MM/DD/YYYY"
     sex: "Male"                           # as the eForms dropdown lists it: Male / Female
     race: "White"                         # must match the eForms race option text
     place_of_birth: {country: "United States of America", state: "Texas"}
     home_address: {state: "Texas"}        # state of residence
+  # other responsible persons in the trust (trust only; Settings > Other responsible persons in the trust), each typed into eForms'
+  # "Add Responsible Person" with their own 5320.23 (forms/<template>), photo and fingerprints:
+  # - title: "Co-Trustee"
+  #   first_name: "Jane"
+  #   middle_name: ""                     # empty, an initial, or a full middle name
+  #   last_name: "Example"
+  #   suffix: ""                          # JR, SR, II ... (eForms "Cadence")
+  #   email: ""
+  #   dob: "MM/DD/YYYY"
+  #   sex: "Female"
+  #   race: "White"
+  #   place_of_birth: {country: "United States of America", state: "Texas"}
+  #   home_address: {street: "1 OAK ST", zip: "00000", city: "EXAMPLE", state: "Texas"}
+  #   eft: "/abs/path/to/jane.eft"
+  #   photo: "/abs/path/to/jane.jpg"
+  #   template: "5320.23_jane-example.pdf"  # their signed 5320.23, copied into forms/ by Settings
 cleo:                                     # chief law enforcement officer: typed into eForms and stamped on the 5320.23
   department: "EXAMPLE POLICE DEPARTMENT"
   official: "FIRST LAST"

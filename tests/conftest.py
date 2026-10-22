@@ -83,6 +83,26 @@ def make_individual(answer="No", upin=""):
     return t
 
 
+OTHER_RP = {"title": "Co-Trustee", "first_name": "Jane", "middle_name": "", "last_name": "Roe", "suffix": "",
+            "email": "jane@example.com", "dob": "03/04/1985", "sex": "Female", "race": "White",
+            "place_of_birth": {"country": "United States of America", "state": "Ohio"},
+            "home_address": {"street": "300 ELM ST", "zip": "45503", "city": "Springfield", "state": "Ohio"},
+            "template": "5320.23_jane-roe.pdf"}
+
+
+def add_other_rp(**over):
+    """Add a second (fake) responsible person to the sandbox trust: their own template, photo and .eft."""
+    t = yaml.safe_load((atf.DATA / "trust.yaml").read_text(encoding="utf-8"))
+    files = atf.DATA.parent / "files"
+    for name in ("jane.eft", "jane.jpg"):
+        (files / name).write_bytes(b"x")
+    person = {**OTHER_RP, "eft": str(files / "jane.eft"), "photo": str(files / "jane.jpg"), **over}
+    shutil.copy(FIXTURE, atf.FORMS / person["template"])
+    t["responsible_persons"].append(person)
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
+    return person
+
+
 @pytest.fixture
 def configured(sandbox):
     """Sandbox with complete fake settings, the fake template and an empty queue."""

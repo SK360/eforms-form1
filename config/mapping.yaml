@@ -8,6 +8,7 @@
 # options: optional: true (click only if present) | skip_if_disabled: true
 #          | tag: ssn (left out unless you choose to type your SSN) | label / private on expect steps
 #          | only: trust / only: individual (the applicant type in your settings) | if_set: <setting> (skip if empty)
+#          | count: true on expect (compare how many elements match, e.g. rows in a list)
 portal:
   steps:
     # --- applicant-type ---
@@ -49,7 +50,7 @@ portal:
         - {selector: "[id='{q_id}']", action: expect, label: "{q_id} (applicant page)", value: "{q_answer}", exact: true}
     - {selector: "[id='17.Aanswer']", action: expect, label: "Citizenship (applicant page)", value: "US", exact: true, only: individual}
     - {selector: "#nextBtn", action: click}
-    # --- responsible-persons: edit popup (first responsible person only; an individual gets the same popup) ---
+    # --- responsible-persons: edit popup for you (row 0, from your eForms account; an individual gets the same popup) ---
     - {action: section, value: "Responsible person"}
     - {selector: "[id='0Edit']", action: click}
     - {selector: "#citizenType", action: select, value: "U.S.CITIZEN", skip_if_disabled: true}   # locked for individuals; country autofills
@@ -70,6 +71,50 @@ portal:
     - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
     - {action: press, value: "Escape"}
     - {selector: "#finishButton", action: click}
+    # --- other responsible persons in the trust (Settings), each with "Add Responsible Person" ---
+    # The same popup as yours (field ids from a capture of it, 2026-10-11), but nothing comes from an eForms account:
+    # name, address and email are typed in. Practice run passed live 2026-10-22; not yet a real filing.
+    - action: repeat
+      over: other_rps
+      only: trust
+      steps:
+        - {action: section, value: "Responsible person {rp_n}"}
+        - {selector: "#addResponsiblePerson", action: wait_for, value: "10000", state: visible}
+        - {selector: "#addResponsiblePerson", action: click}
+        - {selector: "#citizenType", action: select, value: "U.S.CITIZEN"}
+        - {action: wait, value: "800"}   # citizenship country fills in
+        - {selector: "#title", action: fill, value: "{rp_title}"}
+        - {selector: "#firstName", action: fill, value: "{rp_first_name}"}
+        - {selector: "#middleNameDetail", action: select, value: "{rp_middle_detail}"}
+        - {selector: "#middleName", action: fill, value: "{rp_middle_name}", if_set: rp_middle_name}
+        - {selector: "#lastName", action: fill, value: "{rp_last_name}"}
+        - {selector: "#cadence", action: select, value: "{rp_suffix}", if_set: rp_suffix}   # Jr, Sr, II...
+        - {selector: "#emailAddress", action: fill, value: "{rp_email}", if_set: rp_email}
+        - {selector: "#formFile", action: upload, value: "{form_5320_path}"}   # THEIR 5320.23, stamped per suppressor
+        - {selector: "#photoFile", action: upload, value: "{photo_path}"}
+        - {selector: "#eftFile", action: upload, value: "{eft_path}"}
+        - {action: dismiss_dialog, value: "60000", require: "Valid EBTS Package", about: "EBTS"}
+        - {action: pause, tag: ssn, note: "Type the SSN of responsible person {rp_n} ({rp_title}) into the SSN field yourself (script never enters it)"}
+        - {selector: "#street", action: fill, value: "{rp_street}"}
+        - {selector: "#zipCode", action: fill, value: "{rp_zip}"}
+        - {action: wait, value: "1500"}   # state/city dropdowns populate from the ZIP
+        - {selector: "#state", action: select, value: "{rp_state}"}
+        - {selector: "select[name='city']", action: select, value: "{rp_city}"}
+        - {selector: "#dateOfBirth", action: fill, value: "{rp_dob}"}
+        - {selector: "#birthCountry", action: select, value: "UNITED STATES OF AMERICA"}
+        - {action: wait, value: "800"}   # birthState is disabled until country is chosen
+        - {selector: "#birthState", action: select, value: "{rp_birth_state}"}
+        - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
+        - {selector: "#sex", action: select, value: "{rp_sex}"}
+        - {selector: "#raceEthnicity .ui-multiselect", action: click}
+        - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
+        - {action: press, value: "Escape"}
+        - {selector: "#finishButton", action: click}
+        # read back: the list now has their row (row n-1; yours is 0) with their last name
+        - {selector: "[id='{rp_edit}']", action: wait_for, value: "10000"}
+        - {selector: "tr:has([id='{rp_edit}'])", action: expect, label: "Responsible person {rp_n} (list)", private: true, value: "{rp_last_name}"}
+    # exactly you + the others in your settings (none left over from an earlier attempt, none missing)
+    - {selector: "input[id$='Edit']", action: expect, count: true, label: "Responsible persons listed", value: "{rp_count}", exact: true, only: trust, if_set: has_other_rps}
     - {selector: "#nextBtn", action: click}
     # --- cleo ---
     - {action: section, value: "CLEO"}
@@ -114,7 +159,9 @@ portal:
         - {selector: "#file-upload", action: upload, value: "{doc_path}"}
         - {selector: "#description", action: fill, value: "{doc_desc}"}
         - {selector: "#addDocument", action: click}
-        - {action: wait, value: "1000"}
+        # wait until it is listed: the portal saves it in the background and then clears the form, so the next file
+        # must not go in before that (2026-10-22: a 1 s wait was too short; the next one was wiped, Add stayed disabled)
+        - {selector: "td:has-text({doc_file})", action: wait_for, value: "30000"}
     - {selector: "#finishButton", action: click}
     - {action: wait, value: "1500"}
     - {selector: "#nextBtn", action: click}   # line-item page -> next
@@ -124,7 +171,7 @@ portal:
     - {selector: "#documentType", action: select, value: "CORPORATION/TRUST/OTHER LEGAL ENTITY", only: trust}
     - {selector: "#description", action: fill, value: "{trust_doc_desc}", only: trust}
     - {selector: "#addDocument", action: click, only: trust}
-    - {action: wait, value: "1500", only: trust}
+    - {selector: "td:has-text({trust_doc_file})", action: wait_for, value: "30000", only: trust}   # listed: saved
     - {action: section, value: "Attachments", only: individual}
     - {selector: "#nextBtn", action: click}
     # --- verify page: read back what the portal will certify (read-only) ---

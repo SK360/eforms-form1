@@ -537,27 +537,32 @@ def file_flow(indices=None):
                                        validate=lambda a: bool(a) or "Pick at least one").ask()
         if not indices:
             return
-    ssn = questionary.confirm("Type your SSN on each form? (optional; leaving it blank may delay processing)",
+    settings = _settings()
+    others = atf.other_rps(settings)
+    whose = "your SSN" if not others else "the SSNs (yours and each other responsible person's)"
+    ssn = questionary.confirm(f"Type {whose} on each form? (optional; leaving it blank may delay processing)",
                               default=False).ask()
     if ssn is None:
         return
     today = date.today().strftime("%m/%d/%Y")
-    settings = _settings()
     individual = atf.applicant_type(settings) == "individual"
     for i in ([] if individual else indices):  # individuals file without a 5320.23
-        dest, missing = atf.stamp_5320(rows[i], today)
-        probs = missing + atf._check_5320(dest, rows[i], today)
-        if probs:
-            con.print(f"  [bold red]✖ 5320.23 for {escape(rows[i]['serial_number'])}: {escape(', '.join(probs))}[/]")
-            return pause()
+        for n, (dest, missing) in enumerate(atf.stamp_all(rows[i], today), 1):
+            probs = missing + atf._check_5320(dest, rows[i], today)
+            if probs:
+                who = f" (responsible person {n})" if n > 1 else ""
+                con.print(f"  [bold red]✖ 5320.23{who} for {escape(rows[i]['serial_number'])}: {escape(', '.join(probs))}[/]")
+                return pause()
     if not individual:
-        con.print(f"  [green]✔[/] 5320.23s generated, dated {today}")
+        con.print(f"  [green]✔[/] 5320.23s generated, dated {today}" + (f" ({1 + len(others)} per form)" if others else ""))
     deflen = str((settings.get("firearm") or {}).get("overall_length") or "12")
     lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}, "
                       f"{escape(rows[i]['overall_length'] or deflen)}\" overall" for i in indices)
     con.print(Panel(
         f"[bold]File {len(indices)} Form 1{'s' if len(indices) > 1 else ''}:[/]\n{lines}\n\n"
         f"Filing as: {'an individual (you)' if individual else 'your trust'}\n"
+        + (f"Responsible persons: you + {len(others)} other{'s' if len(others) > 1 else ''} "
+           f"({escape(', '.join(p.get('title', '') for p in others))}), each with their 5320.23 dated today\n" if others else "") +
         f"SSN: {'you type it on each form' if ssn else 'left blank'}\n"
         + (_answers_line(settings) if individual else "") + "\n"
         "By confirming, you affirm that each is a legitimate Form 1 application (the portal's \"I affirm\"),\n"
@@ -591,7 +596,7 @@ def preview_flow():
     if i is None:
         return
     if atf.applicant_type(_settings()) == "trust" and not any(atf.OUT.glob(f"5320.23*_{rows[i]['serial_number']}.pdf")):
-        atf.stamp_5320(rows[i], date.today().strftime("%m/%d/%Y"))
+        atf.stamp_all(rows[i], date.today().strftime("%m/%d/%Y"))
     P.verbose = True
     try:
         atf.file_rows(rows, [i], SimpleNamespace(dry=True, submit=False, auto_affirm=True, skip_ssn=False, capture=False))
@@ -622,7 +627,7 @@ def practice_flow():
     if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
         return
     if atf.applicant_type(_settings()) == "trust":
-        atf.stamp_5320(rows[i], date.today().strftime("%m/%d/%Y"))
+        atf.stamp_all(rows[i], date.today().strftime("%m/%d/%Y"))
     try:
         atf.file_rows(rows, [i], SimpleNamespace(dry=False, submit=False, auto_affirm=True, skip_ssn=True, capture=False))
     finally:
@@ -645,8 +650,8 @@ def redate_flow():
     when = questionary.text("Signature date (MM/DD/YYYY):", default=date.today().strftime("%m/%d/%Y"), validate=valid).ask()
     if when is None:
         return
-    dest, missing = atf.stamp_5320(rows[i], when.strip())
-    con.print(f"  [red]✖ not found after stamping: {', '.join(missing)}[/]" if missing else f"  [green]✔[/] wrote {escape(str(dest))}")
+    for dest, missing in atf.stamp_all(rows[i], when.strip()):
+        con.print(f"  [red]✖ not found after stamping: {', '.join(missing)}[/]" if missing else f"  [green]✔[/] wrote {escape(str(dest))}")
     pause()
 
 
@@ -731,16 +736,22 @@ def _state(msg, cur):
     return cur if str(cur or "").upper() == v.strip().upper() else upper[v.strip().upper()]  # unchanged: keep as saved
 
 
-def _check_template():
-    """Test-stamp forms/5320.23.pdf with a dummy serial; returns a list of problems (empty = OK)."""
+def _check_template(others=()):
+    """Test-stamp forms/5320.23.pdf (and each other responsible person's template) with a dummy serial; returns a list
+    of problems (empty = OK)."""
     import tempfile
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            today = date.today().strftime("%m/%d/%Y")
-            dest, missing = atf.stamp_5320({"serial_number": "TEST123", "caliber": "22"}, today, out_dir=tmp)
-            return [f"could not place: {', '.join(missing)}"] if missing else atf._check_5320(dest, {"serial_number": "TEST123"}, today)
-    except SystemExit as e:
-        return [str(e.code)]
+    probs = []
+    for n, person in enumerate([None] + list(others), 1):
+        who = f"responsible person {n}'s 5320.23: " if person else ""
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                today = date.today().strftime("%m/%d/%Y")
+                dest, missing = atf.stamp_5320({"serial_number": "TEST123", "caliber": "22"}, today, out_dir=tmp, person=person)
+                probs += [who + p for p in ([f"could not place: {', '.join(missing)}"] if missing
+                                            else atf._check_5320(dest, {"serial_number": "TEST123"}, today))]
+        except SystemExit as e:
+            probs.append(who + str(e.code))
+    return probs
 
 
 def _questions_11(saved):
@@ -758,6 +769,102 @@ def _questions_11(saved):
                         "file this application yourself in eForms. (Your answers are saved; filing stays blocked.)",
                         border_style="red", expand=False))
     return out
+
+
+def _rp_label(p):
+    return f"{p.get('first_name', '')} {p.get('last_name', '')} ({p.get('title', '')})".strip()
+
+
+def _slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "person"
+
+
+def _other_rp(p, others):
+    """Ask for (or change) another responsible person in the trust. Returns (entry, new template path or None);
+    a new template is only copied into forms/ when the settings are saved."""
+    p = dict(p)
+    con.print(f"  They make and sign their OWN 5320.23 at [cyan]{GENERATOR_URL}[/]: Form 1, their details, the CLEO\n"
+              "  where THEY live, serial [bold]TEMPLATE[/], caliber [bold]00[/]. Like yours, each suppressor's serial and caliber\n"
+              "  and the filing date are stamped on it: make sure they agree to that. Their CLEO line is left as they made it.")
+    cur = atf.FORMS / p["template"] if p.get("template") else None
+    new_tpl = None
+    if not (cur and cur.is_file()) or not _a(questionary.confirm("Keep their current 5320.23 template?", default=True)):
+        new_tpl = Path(_clean_path(_a(questionary.path("Their signed 5320.23 PDF (drag it here):", validate=_file(suffixes=(".pdf",))))))
+    try:
+        pre = atf.read_person(new_tpl or cur)
+    except Exception:
+        pre = {}
+    if pre:
+        con.print(f"  [green]✔[/] Read {len(pre)} answers from it (never the SSN). Press Enter to accept each, or type a correction.")
+    if new_tpl:  # as for yours: a newly chosen template wins over what was saved
+        get = lambda k, d="": pre.get(k) or atf._get(p, k) or d  # noqa: E731
+    else:
+        get = lambda k, d="": atf._get(p, k) or pre.get(k) or d  # noqa: E731
+    p["title"] = _a(questionary.text("Their title in the trust:", default=get("title", "Trustee"), validate=_need))
+    p["first_name"] = _a(questionary.text("First name:", default=get("first_name"), validate=_need)).strip()
+    p["middle_name"] = _a(questionary.text("Middle name or initial (empty if none):", default=get("middle_name"))).strip()
+    p["last_name"] = _a(questionary.text("Last name:", default=get("last_name"), validate=_need)).strip()
+    suffix = _a(questionary.select("Suffix:", choices=["(none)"] + atf.NAME_SUFFIXES,
+                                   default=get("suffix") if get("suffix") in atf.NAME_SUFFIXES else "(none)"))
+    p["suffix"] = "" if suffix == "(none)" else suffix
+    p["email"] = _a(questionary.text("Email (optional):", default=get("email"))).strip()
+    p["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("dob"), validate=_date))
+    p["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
+                                     default=str(get("sex", "Male")).title()))
+    race = get("race")
+    p["race"] = _a(questionary.select("Race (as eForms lists it):", choices=RACES, default=race if race in RACES else None))
+    p["place_of_birth"] = {**(p.get("place_of_birth") or {}), "country": "United States of America",
+                           "state": _state("State of birth:", get("place_of_birth.state"))}
+    addr = dict(p.get("home_address") or {})
+    addr["street"] = _a(questionary.text("Home street address:", default=get("home_address.street"), validate=_need))
+    z = _a(questionary.text("Home ZIP:", default=str(get("home_address.zip")), validate=_need))
+    addr["zip"] = addr.get("zip") if str(addr.get("zip")) == z else z
+    addr["city"] = _a(questionary.text("Home city:", default=get("home_address.city"), validate=_need))
+    addr["state"] = _state("Home state (state of residence):", get("home_address.state"))
+    p["home_address"] = addr
+    p["eft"] = _clean_path(_a(questionary.path("Their fingerprint file (.eft):", default=get("eft"), validate=_file(suffixes=(".eft",)))))
+    p["photo"] = _clean_path(_a(questionary.path("Their photo (eForms requires it):", default=get("photo"),
+                                                 validate=_file(suffixes=(".jpg", ".jpeg", ".png")))))
+    if not p.get("template"):  # forms/5320.23_<name>.pdf, unique among the trust's responsible persons
+        taken, tag = {o.get("template") for o in others}, _slug(f"{p['first_name']} {p['last_name']}")
+        n, name = 1, f"5320.23_{tag}.pdf"
+        while name in taken:
+            n += 1
+            name = f"5320.23_{tag}-{n}.pdf"
+        p["template"] = name
+    return p, new_tpl
+
+
+def _other_rps(others):
+    """The trust's other responsible persons: add, change or remove. Returns (entries, {template name: new file})."""
+    others, copies = [dict(o) for o in others], {}
+    con.rule("Other responsible persons in the trust")
+    con.print("  [dim]Everyone else the trust names as a responsible person (e.g. a co-trustee) goes on each Form 1 too,\n"
+              "  with their own 5320.23, photo and fingerprints. You are responsible person 1.[/]")
+    while True:
+        done = "Done (just you)" if not others else f"Done (you + {len(others)})"
+        what = _a(questionary.select("Other responsible persons:", choices=[
+            questionary.Choice(done, "done"), questionary.Choice("Add a responsible person", "add")]
+            + [questionary.Choice(f"Change {_rp_label(o)}", f"edit {i}") for i, o in enumerate(others)]
+            + [questionary.Choice(f"Remove {_rp_label(o)}", f"remove {i}") for i, o in enumerate(others)]))
+        if what == "done":
+            return others, copies
+        if what == "add":
+            con.rule(f"Responsible person {len(others) + 2}")
+            p, new_tpl = _other_rp({}, others)
+            others.append(p)
+        else:
+            act, i = what.split()
+            i = int(i)
+            if act == "remove":
+                if _a(questionary.confirm(f"Remove {_rp_label(others[i])}?", default=False)):
+                    copies.pop(others.pop(i)["template"], None)
+                continue
+            con.rule(f"Responsible person {i + 2}")
+            p, new_tpl = _other_rp(others[i], others[:i] + others[i + 1:])
+            others[i] = p
+        if new_tpl:
+            copies[p["template"]] = new_tpl
 
 
 def settings_flow(first=False):
@@ -859,12 +966,15 @@ def settings_flow(first=False):
         while _a(questionary.confirm("Add a supporting document?", default=not docs)):
             dp = _clean_path(_a(questionary.path("  File (drag it here):", validate=_file())))
             docs.append({"path": dp, "description": _a(questionary.text("  Short description (e.g. 3D PRINTER):", validate=_need)).upper()})
+        others, copies = list((t.get("responsible_persons") or [])[1:]), {}
+        if trust_filing:
+            others, copies = _other_rps(others)
     except Cancelled:
         con.print("  [yellow]Cancelled; nothing saved.[/]")
         return pause() if not first else sys.exit("Setup not completed.")
     if kind == "individual" or "applicant_type" in t:  # older trust settings stay as they were
         t["applicant_type"] = kind
-    t.update({"trust": trust, "responsible_persons": [rp] + list((t.get("responsible_persons") or [])[1:]),
+    t.update({"trust": trust, "responsible_persons": [rp] + others,
               "cleo": cl, "firearm": fa, "files": files, "docs": docs})
     if not trust_filing:
         t["individual"] = ind
@@ -876,19 +986,61 @@ def settings_flow(first=False):
     if new_tpl:  # only now, so cancelling never replaces the old template
         atf.FORMS.mkdir(exist_ok=True)
         tpl.write_bytes(new_tpl.read_bytes())
-    path.write_text("# Your settings (personal; data/ is never shared). Edit via ./atf > Settings.\n"
-                    + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200), encoding="utf-8")
+    _save_settings(t, copies)
     if not atf.SUPP.exists():
         atf.save_rows([])
-    probs = atf.settings_problems(t) + (_check_template() if trust_filing else [])
+    _report_saved(t, trust_filing, others)
+
+
+def _save_settings(t, copies=None):
+    """Write data/trust.yaml, after copying in other responsible persons' new templates ({name in forms/: source})."""
+    for name, src in (copies or {}).items():  # only on save, so cancelling never replaces a template
+        atf.FORMS.mkdir(exist_ok=True)
+        (atf.FORMS / name).write_bytes(src.read_bytes())
+    atf.DATA.mkdir(exist_ok=True)
+    (atf.DATA / "trust.yaml").write_text("# Your settings (personal; data/ is never shared). Edit via ./atf > Settings.\n"
+                                         + yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=200), encoding="utf-8")
+
+
+def _report_saved(t, trust_filing, others):
+    probs = atf.settings_problems(t) + (_check_template(others) if trust_filing else [])
     if probs:
         con.print(Panel("\n".join(f"• {escape(x)}" for x in probs), title="Saved, but fix these before filing",
                         border_style="red", expand=False))
     elif trust_filing:
-        con.print("  [green]✔ Settings saved, and your 5320.23 template stamps correctly.[/]")
+        con.print("  [green]✔ Settings saved, and your 5320.23 template stamps correctly.[/]" if not others else
+                  f"  [green]✔ Settings saved, and all {1 + len(others)} 5320.23 templates stamp correctly.[/]")
     else:
         con.print("  [green]✔ Settings saved.[/]")
     pause()
+
+
+def settings_menu():
+    """Settings from the menu. A trust gets a choice, so its other responsible persons are one step away
+    (not at the end of the whole wizard)."""
+    t = _settings()
+    if atf.applicant_type(t) != "trust":
+        return settings_flow()
+    n = len(atf.other_rps(t))
+    what = questionary.select("Settings:", choices=[
+        questionary.Choice("All settings (you, your 5320.23 template, CLEO, firearm, files)", settings_flow),
+        questionary.Choice(f"Other responsible persons in the trust ({n})", rps_flow),
+        questionary.Choice("Back", "back")]).ask()
+    if callable(what):
+        what()
+
+
+def rps_flow():
+    """Add, change or remove the trust's other responsible persons, and save just that."""
+    t = _settings()
+    try:
+        others, copies = _other_rps((t.get("responsible_persons") or [])[1:])
+    except Cancelled:
+        con.print("  [yellow]Cancelled; nothing saved.[/]")
+        return pause()
+    t["responsible_persons"] = (t.get("responsible_persons") or [{}])[:1] + others
+    _save_settings(t, copies)
+    _report_saved(t, True, others)
 
 
 def _approved_table(items, title, style):
@@ -987,7 +1139,7 @@ def menu():
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         choices += [
                     questionary.Choice("Check approvals on eForms", approvals_flow),
-                    questionary.Choice("Settings", settings_flow),
+                    questionary.Choice("Settings", settings_menu),
                     questionary.Choice("Advanced…", advanced_flow),
                     questionary.Choice("Quit", "quit")]
         what = questionary.select("What next?", choices=choices).ask()

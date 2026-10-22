@@ -9,8 +9,8 @@ your SSN, and enter the emailed code and your PIN for every submission.
 > Review what it fills, check ATF's eForms terms of use, and stop if anything looks wrong. It never asks for, stores or
 > types your password, SSN, emailed code or PIN.
 
-Currently supports: a trust with one responsible person, or yourself as an individual (U.S. citizen); suppressors
-(Form 1); on a Mac or Windows PC.
+Currently supports: a trust with one or more responsible persons (U.S. citizens), or yourself as an individual
+(U.S. citizen); suppressors (Form 1); on a Mac or Windows PC.
 
 ## What it looks like
 (Made-up serials, numbers and dates.)
@@ -49,6 +49,8 @@ compares them with your records.
 - **As an individual:** nothing else. Setup asks ATF's questions 11.A-11.M once (in ATF's own words) and saves your
   answers; they're filled in on each form, checked on the verify page, and shown for you to confirm before every
   batch. The helper only files when every answer is No (otherwise file that application yourself in eForms).
+- **A trust with other responsible persons** (e.g. a co-trustee): each of them goes on every Form 1 with their own
+  signed 5320.23 template, photo and `.eft` (see "Other responsible persons" below).
 - Optional: supporting documents for the firearm (e.g. photos of the tools/materials you'll use).
 
 ## Making your 5320.23 template (once, trusts only)
@@ -78,6 +80,24 @@ set. Before your first filing, look at one result: Advanced > Regenerate a 5320.
   **No** to "Keep your current 5320.23 template?".
 - Remake it whenever something on it changes: your address, the model, the CLEO agency or address. (A new official
   at the same agency only needs Settings: the helper stamps the current official's name on every copy.)
+
+## Other responsible persons (trusts)
+eForms lists you (from your account) as the first responsible person. Everyone else your trust names as a responsible
+person is added to each Form 1 with eForms' "Add Responsible Person", and each of them needs their own 5320.23.
+
+1. Each of them makes **their own** template in the generator, the same way as yours (step list above) but with
+   **their** details and the **CLEO where they live**, caliber `00`, serial `TEMPLATE`, signed by them.
+2. In `./atf`, **Settings > Other responsible persons in the trust**, choose **Add a responsible person** and drag in
+   their template. Their name, address, email, date of birth and state of birth are read from it (never the SSN);
+   add their title in the trust, fingerprint file and photo. Change or remove them there too.
+3. For each suppressor, their template gets the serial, caliber and filing date stamped like yours (their CLEO line
+   is left as they made it). Make sure they agree to that, as you do for your own.
+
+Filing then adds each of them on the responsible-persons page (typing their name and address, uploading their
+5320.23, photo and fingerprints), reads the list back (their row is there, and nobody else), and the confirmation says
+how many go on each form. If you choose to type SSNs, it pauses for each person's. It has been through a full
+Practice run on the live portal, but not a real filing yet: do a Practice run (Advanced) first with your trust's
+people and check their rows on the responsible-persons page.
 
 ## Get it
 - **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):

@@ -30,7 +30,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
             D, "Pat Chief", D, D, D, D, "Clark", D,                         # CLEO: official typed, county typed, rest accepted
             D, D, D,                                                        # model, length, description: defaults
             str(f / "prints.eft"), lambda kw: (checks.setdefault("blank_photo", kw["validate"]("")), str(f / "me.jpg"))[1],
-            str(f / "My Trust.pdf"), True, str(f / "printer.jpg"), "3d printer", False, QUIT)
+            str(f / "My Trust.pdf"), True, str(f / "printer.jpg"), "3d printer", False, "done", QUIT)
     ui.menu()
     out, t, seen = screen.getvalue(), saved(), answers.seen
     assert answers.asked[2][0] == "path" and "5320.23" in answers.asked[2][1]          # template asked first (after trust/individual)
@@ -66,14 +66,14 @@ def test_drag_and_drop_quotes_and_windows_paths():
 
 
 def test_changed_cleo_title_still_stamps(configured, answers, screen):
-    answers(SETTINGS, D, True, *[D] * 9, "SHERIFF", *[D] * 8, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, True, *[D] * 9, "SHERIFF", *[D] * 8, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved()["cleo"]["title"] == "SHERIFF" and "stamps correctly" in screen.getvalue()
 
 
 def test_kept_template_and_defaults_change_nothing(configured, answers, screen):
     before = saved()
-    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved() == before and "stamps correctly" in screen.getvalue()
 
@@ -84,7 +84,7 @@ def test_new_template_values_win(configured, answers, screen):
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t), encoding="utf-8")
     newt = configured / "files" / "new.pdf"
     shutil.copy(FIXTURE, newt)
-    answers(SETTINGS, D, False, str(newt), *[D] * 18, D, D, D, True, False, QUIT)
+    answers(SETTINGS, D, False, str(newt), *[D] * 18, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved()["cleo"]["official"] == FIXTURE_ANSWERS["cleo.official"]
 
@@ -131,3 +131,70 @@ def test_individual_answering_yes_is_saved_but_blocks_filing(sandbox, answers, s
     ui.menu()
     out = screen.getvalue()
     assert "only files when every answer is No" in out and saved()["individual"]["answers"]["11.C"] == "Yes"
+
+
+def test_add_change_and_remove_another_responsible_person(configured, answers, screen):
+    """Prefilled from THEIR template (never the SSN); copied into forms/ only on save; numbered in the template check."""
+    f = configured / "files"
+    for name in ("jane.eft", "jane.jpg"):
+        (f / name).write_bytes(b"x")
+    theirs = f / "jane 5320.pdf"
+    shutil.copy(FIXTURE, theirs)
+    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False,           # everything about you kept, as before
+            "add", f"'{theirs}'",                                          # add one: their template (dragged, quoted)
+            "Co-Trustee", "Jane", D, "Roe", "JR", D, D, "Female", "White", D,  # names typed over JOHN Q DOE; suffix JR
+            D, D, D, D,                                                    # home address: read from their template
+            str(f / "jane.eft"), str(f / "jane.jpg"), "done", QUIT)
+    ui.menu()
+    t, seen, out = saved(), answers.seen, screen.getvalue()
+    assert seen["First name:"] == "JOHN" and seen["Home street address:"] == "100 OAK ST" and seen["Email (optional):"] == "JOHN.DOE@EXAMPLE.COM"
+    assert FIXTURE_SSN not in str(seen) and FIXTURE_SSN not in (atf.DATA / "trust.yaml").read_text(encoding="utf-8")
+    other = t["responsible_persons"][1]
+    assert (other["first_name"], other["middle_name"], other["last_name"], other["suffix"], other["title"]) == ("Jane", "Q", "Roe", "JR", "Co-Trustee")
+    assert other["home_address"] == {"street": "100 OAK ST", "zip": "45501", "city": "SPRINGFIELD", "state": "Ohio"}
+    assert other["template"] == "5320.23_jane-roe.pdf" and (atf.FORMS / "5320.23_jane-roe.pdf").read_bytes() == theirs.read_bytes()
+    assert atf.settings_problems() == [] and "all 2 5320.23 templates stamp correctly" in out
+    choices = []
+    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False,
+            lambda kw: (choices.extend(c.title for c in kw["choices"]), "remove 0")[1], True, "done", QUIT)
+    ui.menu()
+    assert choices == ["Done (you + 1)", "Add a responsible person", "Change Jane Roe (Co-Trustee)", "Remove Jane Roe (Co-Trustee)"]
+    assert len(saved()["responsible_persons"]) == 1
+
+
+def test_cancelling_a_new_responsible_person_copies_nothing(configured, answers, screen):
+    theirs = configured / "files" / "jane.pdf"
+    shutil.copy(FIXTURE, theirs)
+    before = saved()
+    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, "add", str(theirs), "Co-Trustee", None, QUIT)
+    ui.menu()
+    assert saved() == before and list(atf.FORMS.glob("5320.23_*")) == []
+
+
+def test_settings_goes_straight_to_other_responsible_persons(configured, answers, screen):
+    """A trust's Settings asks first: everything, or just the other responsible persons (no walk through the rest)."""
+    from conftest import pick
+    f = configured / "files"
+    for name in ("jane.eft", "jane.jpg"):
+        (f / name).write_bytes(b"x")
+    theirs = f / "jane.pdf"
+    shutil.copy(FIXTURE, theirs)
+    before = saved()
+    answers(pick("Settings"), pick("Other responsible persons in the trust (0)"), "add", str(theirs),
+            "Co-Trustee", "Jane", "", "Roe", "(none)", D, D, "Female", "White", D, D, D, D, D,
+            str(f / "jane.eft"), str(f / "jane.jpg"), "done", QUIT)
+    ui.menu()
+    asked = [m for _, m in answers.asked]
+    assert not any(m.startswith(("Trust name", "Keep your current 5320.23", "Agency", "Fingerprint file")) for m in asked)
+    t = saved()
+    assert t["responsible_persons"][0] == before["responsible_persons"][0] and t["cleo"] == before["cleo"]
+    assert t["responsible_persons"][1]["last_name"] == "Roe" and (atf.FORMS / "5320.23_jane-roe.pdf").exists()
+    assert "all 2 5320.23 templates stamp correctly" in screen.getvalue()
+
+
+def test_individual_settings_open_the_wizard_directly(configured, answers, screen):
+    from conftest import make_individual
+    make_individual()
+    answers(lambda kw: ui.settings_menu, lambda kw: (answers.kw.setdefault("first", kw), None)[1], QUIT)
+    ui.menu()
+    assert answers.asked[1][1] == "Who files the Form 1s?"                     # no Settings: choice for an individual

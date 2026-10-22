@@ -4,7 +4,8 @@
 Normally run through the menu: ./atf (src/ui.py). These commands are the plain CLI underneath it:
   fill-5320 [row] [--date MM/DD/YYYY]
         Stamp caliber (4d), serial (4e), signature date and CLEO line onto the user's completed
-        forms/5320.23.pdf -> out/5320.23_<serial>.pdf. No row: all unfiled rows.
+        forms/5320.23.pdf -> out/5320.23_<serial>.pdf. No row: all unfiled rows. Other responsible persons in the
+        trust: their own template (forms/5320.23_<name>.pdf) -> out/5320.23_<serial>.<name>.pdf (their CLEO line is kept).
   fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]
         Open eForms, wait for the user to log in, open a new Form 1, then run the steps in
         data/mapping.yaml. No row: the first row in data/suppressors.csv not marked filed.
@@ -332,11 +333,21 @@ def export_inventory(dest=None):
 
 
 # ---------- 5320.23 PDF ----------
-def _find_5320(serial, warn=False):
-    """Newest generated 5320.23 for a serial (5320.23_<serial>.pdf, or the older 5320.23_<row>_<serial>.pdf)."""
-    hits = sorted(OUT.glob(f"5320.23*_{serial}.pdf"), key=lambda p: p.stat().st_mtime)
+# Each responsible person signs their own 5320.23. Yours is forms/5320.23.pdf; another responsible person's template is
+# forms/5320.23_<tag>.pdf (`template` in their settings entry) and is stamped to out/5320.23_<serial>.<tag>.pdf.
+def _rp_tag(person):
+    """'5320.23_jane-doe.pdf' -> 'jane-doe' (None = you)."""
+    return Path(person["template"]).stem.split("_", 1)[-1] if person else None
+
+
+def _find_5320(serial, warn=False, person=None):
+    """Newest generated 5320.23 for a serial (5320.23_<serial>.pdf, or the older 5320.23_<row>_<serial>.pdf);
+    with person (another responsible person's settings entry), theirs: 5320.23_<serial>.<tag>.pdf."""
+    pattern = f"5320.23_{serial}.{_rp_tag(person)}.pdf" if person else f"5320.23*_{serial}.pdf"
+    hits = sorted(OUT.glob(pattern), key=lambda p: p.stat().st_mtime)
     if not hits:
-        sys.exit(f"No generated 5320.23 for serial {serial}; run fill-5320 first.")
+        who = f" of the responsible person titled {person.get('title', '')!r}" if person else ""  # (no names on screen)
+        sys.exit(f"No generated 5320.23{who} for serial {serial}; run fill-5320 first.")
     if warn and len(hits) > 1:
         emit("info", f"({len(hits)} 5320.23 files for {serial}; using the newest: {hits[-1].name})")
     return hits[-1]
@@ -359,17 +370,21 @@ def cmd_fields(args):
         print(f"{name}\t{f.get('/FT')}\t{f.get('/_States_', '')}")
 
 
-def stamp_5320(row, when, out_dir=None):
+def stamp_5320(row, when, out_dir=None, person=None):
     """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23.
-    Old values are redacted (text removed), photo/signature untouched. Returns (path, keys not found after)."""
+    Old values are redacted (text removed), photo/signature untouched. Returns (path, keys not found after).
+    person: another responsible person's settings entry: their template, and their CLEO line is left as they made it
+    (item 5 is the CLEO where THEY live; the CLEO in your settings is yours)."""
     import pymupdf
     out_dir = Path(out_dir or OUT)
     out_dir.mkdir(exist_ok=True)
     # (page, key) -- located by searching the template, so layout changes are caught
-    targets = [(0, "4d"), (0, "4e"), (1, "date"), (0, "cleo")]
-    cl = load_trust()["cleo"]
-    new = {"4d": row["caliber"], "4e": row["serial_number"], "date": when, "cleo": f"{cl['official']}, {cl['title']}"}
-    doc = pymupdf.open(FORMS / "5320.23.pdf")
+    targets = [(0, "4d"), (0, "4e"), (1, "date")] + ([] if person else [(0, "cleo")])
+    new = {"4d": row["caliber"], "4e": row["serial_number"], "date": when}
+    if not person:
+        cl = load_trust()["cleo"]
+        new["cleo"] = f"{cl['official']}, {cl['title']}"
+    doc = pymupdf.open(FORMS / (person["template"] if person else "5320.23.pdf"))
     boxes = {}
     for pg, k in targets:
         boxes[k] = _find_value_box(doc[pg], k)
@@ -379,11 +394,16 @@ def stamp_5320(row, when, out_dir=None):
     for pg, k in targets:
         x0, _, _, y1 = boxes[k]
         doc[pg].insert_text((x0, y1 - 2.5), str(new[k]), fontname="helv", fontsize=8)
-    dest = out_dir / f"5320.23_{row['serial_number']}.pdf"
+    dest = out_dir / (f"5320.23_{row['serial_number']}.{_rp_tag(person)}.pdf" if person else f"5320.23_{row['serial_number']}.pdf")
     doc.save(dest)
     chk = pymupdf.open(dest)  # re-read: each new value must be in the text layer where it was stamped
     missing = [k for pg, k in targets if not chk[pg].search_for(str(new[k]), clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
     return dest, missing
+
+
+def stamp_all(row, when, out_dir=None):
+    """Stamp the 5320.23 of every responsible person (you first) for one row: [(path, keys not found after)]."""
+    return [stamp_5320(row, when, out_dir)] + [stamp_5320(row, when, out_dir, p) for p in other_rps(load_trust())]
 
 
 def cmd_fill_5320(args):
@@ -397,8 +417,8 @@ def cmd_fill_5320(args):
             continue
         if args.row is None and row["status"] in SKIP:
             continue
-        dest, missing = stamp_5320(row, when)
-        print("wrote", dest, f"  !! NOT FOUND after stamping: {', '.join(missing)}" if missing else "")
+        for dest, missing in stamp_all(row, when):
+            print("wrote", dest, f"  !! NOT FOUND after stamping: {', '.join(missing)}" if missing else "")
     print("Verify each PDF visually before use.")
 
 
@@ -499,6 +519,32 @@ def read_template(path):
     out.update({f"cleo.address.{k}": v for k, v in addr.items()})
     birth = first(_near(p2, "State of Birth", (20, 250), (0, 15))).upper()
     out["responsible_persons.0.place_of_birth.state"] = next((v for v in US_STATES.values() if v.upper() == birth), "")
+    return {k: v for k, v in out.items() if v and not re.search(r"\d{3}-?\d{2}-?\d{4}", v)}
+
+
+NAME_SUFFIXES = ["JR", "SR", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]  # the portal's "Cadence" options
+
+
+def read_person(path):
+    """Another responsible person's answers on their signed 5320.23, as {key in their settings entry: value}:
+    name (3a), home address (3a), email (3c), DOB, state of birth. Never the SSN (see read_template)."""
+    import pymupdf
+    p1 = pymupdf.open(path)[0]
+    pre = read_template(path)
+    out = {k.split(".", 2)[2]: v for k, v in pre.items() if k.startswith("responsible_persons.0.")}
+    lines = [sp["text"].strip() for sp in _near(p1, "3b.", (-300, -10), (8, 45))]  # name / street / city ST zip
+    words = lines[0].replace(",", " ").split() if lines else []
+    if words and words[-1].strip(".").upper() in NAME_SUFFIXES and len(words) > 2:
+        out["suffix"] = words.pop().strip(".").upper()
+    if len(words) >= 2:
+        out["first_name"], out["last_name"], out["middle_name"] = words[0], words[-1], " ".join(words[1:-1])
+    addr = _split_address(lines[-1]) if len(lines) > 1 else {}
+    if len(lines) > 2 and addr:  # "STREET" / "CITY ST ZIP": the city is the whole last-line prefix
+        addr["street"], addr["city"] = " ".join(lines[1:-1]), " ".join(filter(None, [addr["street"], addr["city"]]))
+    out.update({f"home_address.{k}": v for k, v in addr.items()})
+    email = [sp["text"].strip() for sp in _near(p1, "3c.", (-5, 250), (5, 30)) if "@" in sp["text"]]
+    if email:
+        out["email"] = email[0]
     return {k: v for k, v in out.items() if v and not re.search(r"\d{3}-?\d{2}-?\d{4}", v)}
 
 
@@ -1212,6 +1258,14 @@ COMMON_REQUIRED = [
 TRUST_REQUIRED = [("trust.name", "trust name"), ("responsible_persons.0.title", "your title in the trust (e.g. Settlor)"),
                   ("files.trust_document", "trust document PDF")]
 REQUIRED = TRUST_REQUIRED + COMMON_REQUIRED  # (trust filing; kept for callers that list everything)
+# Another responsible person in the trust (responsible_persons[1:]): nothing comes from an eForms account, so the
+# name and address are typed into the portal's "Add Responsible Person" popup. middle_name, suffix, email are optional.
+OTHER_RP_REQUIRED = [
+    ("title", "title in the trust"), ("first_name", "first name"), ("last_name", "last name"), ("dob", "date of birth"),
+    ("sex", "sex"), ("race", "race"), ("place_of_birth.state", "state of birth"), ("home_address.street", "street address"),
+    ("home_address.zip", "ZIP"), ("home_address.city", "city"), ("home_address.state", "state of residence"),
+    ("eft", "fingerprint file (.eft)"), ("photo", "photo"), ("template", "signed 5320.23 template"),
+]
 
 
 def applicant_type(trust):
@@ -1223,6 +1277,11 @@ def answers_11(trust):
     """Saved answers to questions 11.A-11.M.1 as {id: 'No'|'Yes'} (individual filing)."""
     saved = ((trust or {}).get("individual") or {}).get("answers") or {}
     return {q: str(saved.get(q) or "").strip().title() for q, _ in QUESTIONS_11}
+
+
+def other_rps(trust):
+    """The trust's other responsible persons (settings entries after yours). Individuals have none."""
+    return list((trust or {}).get("responsible_persons") or [])[1:] if applicant_type(trust) == "trust" else []
 
 
 def _get(d, path):
@@ -1260,6 +1319,14 @@ def settings_problems(trust=None):
             probs.append(f"{desc} not found: {v}")
     if kind == "trust" and not (FORMS / "5320.23.pdf").is_file():
         probs.append("no 5320.23 template at forms/5320.23.pdf")
+    for n, person in enumerate(other_rps(trust), 2):  # numbered, not named: these lines show on the menu's home screen
+        probs += [f"responsible person {n}: missing {desc}" for path, desc in OTHER_RP_REQUIRED
+                  if not str(_get(person, path) or "").strip()]
+        for key, desc in (("eft", "fingerprint file"), ("photo", "photo")):
+            if person.get(key) and not Path(person[key]).is_file():
+                probs.append(f"responsible person {n}: {desc} not found: {person[key]}")
+        if person.get("template") and not (FORMS / person["template"]).is_file():
+            probs.append(f"responsible person {n}: no 5320.23 template at forms/{person['template']}")
     return probs
 
 
@@ -1288,11 +1355,33 @@ def _row_context(trust, item):
            "overall_length": item.get("overall_length") or str(fa.get("overall_length") or "12"), "description": fa["description"],
            "form_5320_path": str(out_pdf), "photo_path": f.get("photo"), "eft_path": f.get("eft"),
            "trust_doc_path": f.get("trust_document"), "trust_doc_desc": f.get("trust_document_desc") or "TRUST",
-           "docs": [{"doc_path": d["path"], "doc_desc": d["description"]} for d in trust.get("docs") or []]}
+           # file names as the portal lists them once added, quoted for a :has-text() selector
+           "trust_doc_file": json.dumps(Path(f.get("trust_document") or "").name),
+           "docs": [{"doc_path": d["path"], "doc_desc": d["description"], "doc_file": json.dumps(Path(d["path"]).name)}
+                    for d in trust.get("docs") or []]}
+    others = [_other_rp_context(p, n, item) for n, p in enumerate(other_rps(trust), 2)]
+    ctx.update({"other_rps": others, "has_other_rps": "yes" if others else "", "rp_count": str(1 + len(others))})
     return ctx
 
 
+def _other_rp_context(person, n, item):
+    """Placeholders for one other responsible person (mapping `repeat: other_rps`); the same rp_* names as yours."""
+    middle, addr = str(person.get("middle_name") or "").strip(), person["home_address"]
+    detail = "NO MIDDLE NAME" if not middle else "INITIAL ONLY" if len(middle.strip(".")) == 1 else "FULL MIDDLE NAME"
+    return {"rp_n": str(n), "rp_edit": f"{n - 1}Edit",  # row n-1 of the portal's list (yours is 0Edit)
+            "rp_title": person["title"], "rp_first_name": person["first_name"], "rp_middle_detail": detail,
+            "rp_middle_name": middle, "rp_last_name": person["last_name"], "rp_suffix": str(person.get("suffix") or ""),
+            "rp_email": str(person.get("email") or ""), "rp_street": addr["street"], "rp_zip": str(addr["zip"]),
+            # dropdowns: the portal lists these uppercased
+            "rp_city": addr["city"].upper(), "rp_state": addr["state"].upper(), "rp_residence_state": addr["state"].upper(),
+            "rp_dob": person["dob"], "rp_race": person["race"], "rp_sex": person["sex"].upper(),
+            "rp_birth_state": person["place_of_birth"]["state"].upper(),
+            "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
+            "photo_path": person["photo"], "eft_path": person["eft"]}
+
+
 _current_step = ""
+_recent_steps = []  # the last steps run (with their values), saved with a failing page
 
 
 def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
@@ -1328,6 +1417,7 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             emit("step", f"(skipping {s['tag']} step)")
             continue
         emit("step", f"{act} {sel or ''} {val or ''}")
+        _recent_steps[:] = _recent_steps[-24:] + [f"{act} {sel or ''} {val or ''}".strip()]
         if dry:
             continue
         loc = page.locator(sel) if sel else None
@@ -1340,14 +1430,14 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             except Exception:
                 emit("step", "    (not present; skipping)")
             continue
-        if act == "fill": loc.fill(val)
+        if act == "fill": _fill(page, loc, val, sel)
         elif act == "select": _select(page, loc, val, sel)
         elif act == "check": _tick(page, sel)
         elif act == "click": loc.click()
         elif act == "upload": loc.set_input_files(val)
-        elif act == "pause": ask(f"  >> {s.get('note', 'Do this step manually in the browser')} then press Enter... ")
+        elif act == "pause": ask(f"  >> {str(s.get('note', 'Do this step manually in the browser')).format(**ctx_vals)} then press Enter... ")
         elif act == "expect":  # compare a read-only field against the intended value; never changes anything
-            got = _shown_value(loc)
+            got = str(loc.count()) if s.get("count") else _shown_value(loc)  # count: how many elements match
             # exact: whole-value match (e.g. citizenship "US", which a token match would also find in "NON-US")
             ok = got.lower() == val.strip().lower() if s.get("exact") else _token_match(val, got)
             emit("expect", f"    {'OK ' if ok else 'MISMATCH'} expected {val!r} got {got!r}",
@@ -1395,11 +1485,13 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
         elif act == "wait_for": loc.first.wait_for(state=s.get("state", "attached"), timeout=int(val or 30000))
 
 
-_SELECTED_JS = "e => e.tagName === 'SELECT' ? ((e.options[e.selectedIndex] || {}).text || '').trim() : (e.value || '').trim()"
+_SELECTED_JS = ("e => e.tagName === 'SELECT' ? ((e.options[e.selectedIndex] || {}).text || '').trim()"
+                " : ('value' in e ? (e.value || '') : (e.innerText || '')).trim()")  # (e.g. a row of a list: its text)
 
 
 def _shown_value(loc):
-    """What a field shows: a dropdown's selected option text (its hidden value may be a code), else its value."""
+    """What a field shows: a dropdown's selected option text (its hidden value may be a code), else its value
+    (an element that has no value, such as a table row: its text)."""
     return (loc.evaluate(_SELECTED_JS) or "").strip()
 
 
@@ -1430,6 +1522,37 @@ def _select(page, loc, val, sel=""):
         page.wait_for_timeout(500)
         if not _kept(loc, val):
             raise RuntimeError(f"the page shows {_shown_value(loc)!r} instead of {val!r}")
+
+
+def _fill(page, loc, val, sel=""):
+    """Type into a field. The same id can also be a dropdown, or a wrapper around the real input (the trust's "Add
+    Responsible Person" popup: #title was not an <input> on the first live try): pick the option / fill the inner field."""
+    tag = loc.evaluate("e => e.isContentEditable ? 'textarea' : e.tagName.toLowerCase()")
+    if tag in ("input", "textarea"):
+        loc.fill(val)
+    elif tag == "select":
+        _select(page, loc, val, sel)
+    else:
+        inner = loc.locator("input:not([type=hidden]), textarea, select")
+        if not inner.count():
+            raise RuntimeError(f"{sel} is a <{tag}> with no field inside it")
+        _fill(page, inner.first, val, sel)
+
+
+def _save_failure(page):
+    """Record the page a step failed on, to fix the step: out/failed_<time>.jsonl (fields, labels, dialogs, like a
+    capture) and .html (the open dialogs, else the page). Holds page text with your details: keep it to yourself."""
+    try:
+        OUT.mkdir(exist_ok=True)
+        stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
+        _log_capture(OUT / f"failed_{stamp}.jsonl", {**_dump_page(page), "failed_step": _current_step, "last_steps": _recent_steps})
+        html = page.evaluate("""() => { const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+            const els = [...document.querySelectorAll('.modal, [role=dialog], .ui-dialog, [class*=modal]')].filter(vis);
+            return els.filter(e => !els.some(o => o !== e && o.contains(e))).map(e => e.outerHTML).join('\\n<hr>\\n'); }""")
+        (OUT / f"failed_{stamp}.html").write_text(html or page.content(), encoding="utf-8")
+        emit("info", f"(this page was saved to out/failed_{stamp}.jsonl and .html, to fix the step)")
+    except Exception as e:  # never let the record hide the failure itself
+        emit("warn", f"could not save the failing page ({str(e).splitlines()[0] if str(e) else type(e).__name__})")
 
 
 def _check_picks(page, picks, rounds=2):
@@ -1483,6 +1606,8 @@ def _file_one(page, args, trust, steps, rows, idx):
         _run_steps(page, steps, ctx_vals, args.dry, bad, skip_tags={"ssn"} if args.skip_ssn else ())
     except Exception as e:
         emit("error", f"\n*** STEP FAILED: {_current_step}: {str(e).splitlines()[0]} ***")
+        if page is not None:
+            _save_failure(page)
         ask("Browser left open on the failing page. Look at it, then press Enter to log out and close... ")
         sys.exit(1)
     if bad:
@@ -1547,6 +1672,8 @@ def file_rows(rows, todo, args):
         _row_context(trust, rows[i])
         if applicant_type(trust) == "trust":
             probs += _check_5320(_find_5320(rows[i]["serial_number"], warn=True), rows[i], today)
+            for person in other_rps(trust):
+                probs += _check_5320(_find_5320(rows[i]["serial_number"], person=person), rows[i], today)
     if args.dry:
         for i in todo:
             emit("row", f"\n=== Row {i + 1}: serial {rows[i]['serial_number']} (dry run) ===",
