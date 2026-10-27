@@ -245,9 +245,10 @@ def inventory_flow():
             where = "data/suppressors.csv"
         if cond:
             con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in {where})[/]")
-        choices = [questionary.Choice(f"Show {label.lower()}", key) for key, (label, _) in filters.items() if key != view]
+        views = [questionary.Choice(label, key) for key, (label, _) in filters.items() if key != view]
         if view != "sbrs" and atf.load_sbrs():
-            choices.append(questionary.Choice("Show SBRs", "sbrs"))
+            views.append(questionary.Choice("SBRs", "sbrs"))
+        choices = [questionary.Choice("Show another view…", "show")]
         if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
@@ -257,10 +258,10 @@ def inventory_flow():
         what = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
         if what in (None, "back"):
             return
-        if callable(what):
-            what()
+        if what == "show":
+            view = questionary.select("Show:", choices=views + [questionary.Choice("Back", view)]).ask() or view
         else:
-            view = what
+            what()
 
 
 def open_file(path):
@@ -332,6 +333,63 @@ def builds_flow():
         _record_builds(todo)
     elif what == "change":
         _change_build(built)
+
+
+def build_serial_flow():
+    """Which serial to use for a build: the caliber (from the inventory) and the build's length -> the first approved, not
+    built suppressor of that caliber approved at that length or longer. Then, optionally, record it as built."""
+    rows = atf.load_rows()
+    cals = {}
+    for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
+        if r["caliber"]:
+            cals.setdefault(atf.caliber_key(r["caliber"]), r["caliber"])
+    if not cals:
+        con.print("  [yellow]No suppressors in the inventory yet.[/]")
+        return pause()
+    choices = []
+    for key, label in sorted(cals.items(), key=lambda kv: atf.serial_key(kv[0])):
+        free = atf.available_for_build(rows, label, 0)
+        longest = max((atf._num(r["overall_length"]) for r in free), default=None)
+        choices.append(questionary.Choice(f"{label}  ({len(free)} approved, not built; up to {longest:g}\")" if free else label, label,
+                                          disabled=None if free else "none approved and not built"))
+    cal = questionary.select("Caliber of the build:", choices=choices + [questionary.Choice("Back", "back")]).ask()
+    if cal in (None, "back"):
+        return
+    length = questionary.text("Overall length of the build (inches):", validate=_inches).ask()
+    if length is None:
+        return
+    fits = atf.available_for_build(rows, cal, float(length))
+    unknown = [r["serial_number"] for r in rows if r["status"] == "approved" and not atf.is_built(r) and not r["overall_length"]
+               and atf.caliber_key(r["caliber"]) == atf.caliber_key(cal)]
+    if unknown:
+        con.print(f"  [yellow]Left out, no recorded length: {escape(', '.join(unknown))}[/] [dim](set it in data/suppressors.csv)[/]")
+    if not fits:
+        con.print(f"  [yellow]No approved, not built caliber {escape(cal)} suppressor is {escape(length.strip())}\" or longer.[/]")
+        return pause()
+    desc = lambda r: (f"{r['serial_number']}  ({r['overall_length']}\", approved {r['approved_date']}"  # noqa: E731
+                      + (", ⚠ conditions" if r["conditions"] else "") + ")")
+    con.print(f"  [green]✔[/] Next serial for a caliber {escape(cal)}, {escape(length.strip())}\" build: [bold]{escape(fits[0]['serial_number'])}[/]"
+              f" [dim]({escape(fits[0]['overall_length'])}\" approved {escape(fits[0]['approved_date'])})[/]")
+    if fits[0]["conditions"]:
+        con.print(f"  [yellow]⚠ approved with conditions: {escape(fits[0]['conditions'])}[/]")
+    if len(fits) > 1:
+        con.print(f"  [dim]{len(fits) - 1} more fit: {escape(', '.join(r['serial_number'] for r in fits[1:6]))}"
+                  f"{' …' if len(fits) > 6 else ''}[/]")
+    what = questionary.select("Record it as built now?", choices=[
+        questionary.Choice(f"Record {fits[0]['serial_number']} as built", fits[0]["serial_number"])]
+        + ([questionary.Choice("Record a different one of these…", "other")] if len(fits) > 1 else [])
+        + [questionary.Choice("Not now", "back")]).ask()
+    if what == "other":
+        what = questionary.select("Which one?", choices=[questionary.Choice(desc(r), r["serial_number"]) for r in fits]
+                                  + [questionary.Choice("Back", "back")]).ask()
+    if what in (None, "back"):
+        return
+    design = _ask_design(serial=what)
+    if design is None or not questionary.confirm(f"Record {what} as built{' (' + design + ')' if design else ''}?", default=True).ask():
+        return
+    atf.record_builds({what: design})
+    con.print(f"  [green]✔[/] Recorded {escape(what)} as built")
+    pause()
 
 
 def _record_builds(todo):
@@ -1135,6 +1193,8 @@ def menu():
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
         choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
+        if any(r["status"] == "approved" and not atf.is_built(r) for r in rows):
+            choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if queued:
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         choices += [

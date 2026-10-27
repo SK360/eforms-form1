@@ -40,6 +40,7 @@ compares them with your records.
 
 ![Inventory](docs/screenshots/05-inventory.png)
 ![SBR inventory](docs/screenshots/06-sbrs.png)
+![Finding the serial for a build](docs/screenshots/11-build-serial.png)
 ![Recording builds](docs/screenshots/10-builds.png)
 ![Check approvals](docs/screenshots/07-approvals.png)
 
@@ -149,14 +150,18 @@ stray keypress can't start anything). Then:
 - **Edit or remove a queued suppressor**: fix a serial, caliber or length, or take it out of the queue. Filed and
   approved ones are your record of what was submitted, so they can't be changed here.
 - **Inventory**: every suppressor in serial order (A1, A2 … A10) with caliber, length, status (queued, filed,
-  approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. Filter by Approved /
-  In progress / Queued / Built / Approved, not built, or **Show SBRs** for your approved SBRs. From there you can also
+  approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. **Show another view**
+  filters by Approved / In progress / Queued / Built / Approved, not built, or shows your approved SBRs. From there you can also
   open any approved Form 1 PDF and **export to Excel** (`out/inventory_<date>.xlsx`, with an SBRs sheet). The home
   screen shows a one-line summary.
 - **Record builds** (in Inventory): mark approved suppressors as built, with what each one is. Name them as a range
   and/or list (`A101-A110, A115`) or tick them in a list; it then asks the design of each one (typed in, e.g. "PCC
   Short"), shows them all, and saves when you confirm. Only approved suppressors can be marked built. The design can
   be changed, or the build record cleared, later.
+- **Building one? Find the serial to use**: pick the caliber (from your inventory) and type the overall length of what
+  you're building; it gives the first approved, not built serial of that caliber approved at that length **or longer**
+  (an approval for 12" is good for a 5" build), lists the others that fit, and can record it as built right there.
+  Calibers match exactly (`.22` = `22`); approvals with no recorded length are left out and named.
 - **File N queued suppressors**: pick the rows and say whether you want to type your SSN on each form. Trusts: it
   makes each suppressor's 5320.23, dated today. One confirmation lists the batch and says whether you're filing as
   your trust or as an individual (with your saved answers to questions 11.A-11.M); confirming is your "I affirm" and

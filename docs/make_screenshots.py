@@ -127,9 +127,10 @@ def open_select(msg, titles, at=0):
 
 def menu_titles(rows):
     queued = [r["serial_number"] for r in rows if r["status"] not in atf.SKIP]
+    unbuilt = any(r["status"] == "approved" and not atf.is_built(r) for r in rows)
     return ([f"File {len(queued)} queued suppressors ({', '.join(queued)})"] if queued else []) + [
-        "Inventory", "Add suppressors", "Edit or remove a queued suppressor", "Check approvals on eForms", "Settings",
-        "Advanced…", "Quit"]
+        "Inventory", "Add suppressors"] + (["Building one? Find the serial to use"] if unbuilt else []) + [
+        "Edit or remove a queued suppressor", "Check approvals on eForms", "Settings", "Advanced…", "Quit"]
 
 
 # ---------- the screens ----------
@@ -202,16 +203,23 @@ def shot_inventory():
     ui.con.print(ui.inventory_table(rows, f"[bold]Inventory[/] · All ({len(rows)})"))
     ui.con.print(f"  {ui.summary(rows)}")
     ui.con.print("  [yellow]⚠ approved with conditions: A101[/] [dim](conditions are in data/suppressors.csv)[/]")
-    open_select("Inventory:", ["Show approved", "Show in progress", "Show queued", "Show built", "Show approved, not built",
-                               "Show SBRs", "Edit or remove a queued suppressor", "Record builds",
+    open_select("Inventory:", ["Show another view…", "Edit or remove a queued suppressor", "Record builds",
                                "Open an approved PDF", "Export to Excel", "Back"])
 
 
 def shot_sbrs():
     sbrs = atf.load_sbrs()
-    answered("Inventory:", "Show SBRs")
+    answered("Inventory:", "Show another view…")
+    answered("Show:", "SBRs")
     ui.con.print(ui.sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
     ui.con.print(f"  {ui.sbr_summary(sbrs)}")
+
+
+def shot_build_serial():
+    """Which serial for a 5" 22 build: A105 and A106 are approved at 12" and not built yet."""
+    answered("What next?", "Building one? Find the serial to use")
+    script("22", "5", "back")
+    ui.build_serial_flow()
 
 
 def shot_builds():
@@ -285,7 +293,8 @@ def shot_individual():
 
 
 SHOTS = [("01-home", shot_home), ("02-add", shot_add), (None, shot_file),  # shot_file makes 03-file and 04-filing
-         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs), ("10-builds", shot_builds),
+         ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs),
+         ("11-build-serial", shot_build_serial), ("10-builds", shot_builds),  # before 10: that one builds A105-A106
          ("07-approvals", shot_approvals),
          (None, shot_individual)]  # 08-individual-confirm, 09-individual-readback (last: it switches the settings)
 

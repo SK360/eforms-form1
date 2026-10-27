@@ -53,7 +53,11 @@ plain CLI, kept for debugging/scripting:
   control_number, conditions (from approvals), built ("yes" | ""; `is_built`), design (free text: what it is, e.g.
   "PCC Short"). Builds: `record_builds({serial: design})` / `record_build(serials, design)` (APPROVED rows only, else ValueError and nothing saved; a Form 1 must be
   approved before making), `clear_build`, `serials_in("A101-A110, A115")`; menu
-  Inventory > Record builds (`builds_flow`), views Built / Approved, not built (`build_table`). Deliberately NOT
+  Inventory > Record builds (`builds_flow`), views Built / Approved, not built (`build_table`). Home "Building one?
+  Find the serial to use" (`build_serial_flow`, shown while any approved row isn't built): caliber picked from the
+  inventory's calibers (`caliber_key`: case, leading dot ignored) + build length -> `available_for_build` = approved,
+  not built, same caliber, recorded length >= build length (a longer approval covers a shorter build; no length = left
+  out and named), serial order; the first is "next"; can record it (or another fit) as built. Deliberately NOT
   tracked (the user's call): build date, print file, marked/engraved (markings are printed with the part). The
   design is typed every time, separately for each serial (no pick-from-previous list; one batch is not one design),
   all shown together, saved only on the confirmation. `load_rows()` tolerates older files with fewer columns.
@@ -97,7 +101,7 @@ plain CLI, kept for debugging/scripting:
   All user-facing output goes through `emit(kind, text, **data)` and prompts through `ask(prompt)`; the CLI prints,
   the menu (`src/ui.py` `Progress`) renders them (page ticks from `section`, read-back table from `expect` events, a
   code/PIN panel on `banner`).
-- `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters; `open_approved_flow` via
+- `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters behind one "Show another view…"; `open_approved_flow` via
   `atf.approved_pdf_for`, `export_flow` -> `atf.export_inventory()` .xlsx (openpyxl), `edit_queued_flow`: queued rows
   only; filed/approved are locked), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
   counts up the last digit group; any clash = nothing added), `resolve_flow`, `approvals_flow`, `settings_flow`

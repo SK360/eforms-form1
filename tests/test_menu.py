@@ -169,7 +169,7 @@ def test_inventory_screen(configured, answers, screen):
          "conditions": "MARKING"},
         {"serial_number": "T11", "caliber": "9", "status": "filed", "filed_date": "10/01/2026", "application_number": "900000011"},
         {"serial_number": "T12", "caliber": "9", "status": ""}])
-    answers(pick("Inventory"), "approved", "back", QUIT)
+    answers(pick("Inventory"), "show", "approved", "back", QUIT)
     ui.menu()
     out = screen.getvalue()
     full = out.split("Inventory · All (4)")[1].split("Inventory · Approved")[0]
@@ -282,7 +282,7 @@ def _sbrs():
 def test_sbr_inventory_view_and_summary(configured, answers, screen):
     _inventory_rows()
     _sbrs()
-    answers(pick("Inventory"), "sbrs", "back", QUIT)
+    answers(pick("Inventory"), "show", "sbrs", "back", QUIT)
     ui.menu()
     out = screen.getvalue()
     view = out.split("Inventory · SBRs (2)")[1].split("eForms Form 1")[0]
@@ -350,12 +350,69 @@ def test_record_build_from_the_list(configured, answers, screen):
     _approved_run()
     atf.record_build(["T1", "T2", "T3"], "PCC Short")
     answers(pick("Inventory"), pick("Record builds"), pick("Record builds"), "", lambda kw: ["T4"], "Rimfire 12in", True,
-            pick("Show built"), "back", QUIT)
+            pick("Show another"), pick("Built"), "back", QUIT)
     ui.menu()
     rows = {r["serial_number"]: r for r in atf.load_rows()}
     assert rows["T4"]["design"] == "Rimfire 12in" and rows["T1"]["design"] == "PCC Short"
     out = screen.getvalue()
     assert "Inventory · Built (4)" in out and "4 built" in out
+
+
+def _mixed_lengths():
+    """Made up: 22s of different lengths and states, a 9 that's only filed, a 30 that's built."""
+    atf.save_rows([{"serial_number": s, "caliber": c, "overall_length": n, "status": st, "approved_date": "10/15/2026",
+                    "built": b, "conditions": cond}
+                   for s, c, n, st, b, cond in (("T1", "22", "12", "approved", "yes", ""), ("T2", ".22", "5", "approved", "", ""),
+                                                ("T3", "22", "", "approved", "", ""), ("T10", "22", "12", "approved", "", "Mark it"),
+                                                ("T11", "22", "6.5", "approved", "", ""), ("T12", "22", "12", "filed", "", ""),
+                                                ("N1", "9", "12", "filed", "", ""), ("H1", "30", "12", "approved", "yes", ""))])
+
+
+def test_available_for_build():
+    rows = [{"serial_number": s, "caliber": c, "overall_length": n, "status": st, "built": b}
+            for s, c, n, st, b in (("T10", "22", "12", "approved", ""), ("T2", ".22", "5", "approved", ""), ("T3", "22", "", "approved", ""),
+                                   ("T4", "22", "12", "approved", "yes"), ("T5", "22", "12", "filed", ""), ("T6", "9", "12", "approved", ""))]
+    serials = lambda cal, n: [r["serial_number"] for r in atf.available_for_build(rows, cal, n)]  # noqa: E731
+    assert serials("22", 5) == ["T2", "T10"]          # serial order; ".22" = "22"; no length, built, filed: left out
+    assert serials(".22", 5.5) == ["T10"] and serials("22", 12) == ["T10"] and serials("22", 12.5) == []
+    assert serials("9", 3) == ["T6"] and serials("45", 3) == []
+
+
+def test_find_the_serial_for_a_build(configured, answers, screen):
+    _mixed_lengths()
+    seen = {}
+
+    def caliber(kw):
+        seen["cals"] = [(str(c.title), c.disabled) for c in kw["choices"]]
+        return "22"
+    answers(pick("Building one?"), caliber, "6", pick("Record T10"), "PCC Short", True, QUIT)
+    ui.menu()
+    out, rows = screen.getvalue(), {r["serial_number"]: r for r in atf.load_rows()}
+    assert seen["cals"] == [("9", "none approved and not built"), ('22  (3 approved, not built; up to 12")', None),
+                            ("30", "none approved and not built"), ("Back", None)]          # natural order
+    assert 'Next serial for a caliber 22, 6" build: T10' in out and "⚠ approved with conditions: Mark it" in out
+    assert "1 more fit: T11" in out and "Left out, no recorded length: T3" in out
+    assert (rows["T10"]["built"], rows["T10"]["design"]) == ("yes", "PCC Short") and not atf.is_built(rows["T11"])
+
+
+def test_build_serial_pick_another_or_none(configured, answers, screen):
+    _mixed_lengths()
+    answers(pick("Building one?"), "22", "4", pick("Record a different"), pick("T11"), "", True,
+            pick("Building one?"), "22", "13",
+            pick("Building one?"), "22", "4", pick("Not now"), QUIT)
+    ui.menu()
+    out, rows = screen.getvalue(), {r["serial_number"]: r for r in atf.load_rows()}
+    assert 'Next serial for a caliber 22, 4" build: T2' in out and "2 more fit: T10, T11" in out
+    assert [s for s, r in rows.items() if atf.is_built(r)] == ["T1", "T11", "H1"]
+    assert 'No approved, not built caliber 22 suppressor is 13" or longer.' in out
+
+
+def test_no_build_item_when_nothing_to_build(configured, answers):
+    queue(("S1", "9"))
+    seen = {}
+    answers(lambda kw: (seen.setdefault("menu", [str(c.title) for c in kw["choices"]]), "quit")[1])
+    ui.menu()
+    assert not any(t.startswith("Building one?") for t in seen["menu"])
 
 
 def test_change_and_clear_build(configured, answers, screen):

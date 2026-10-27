@@ -105,6 +105,20 @@ def record_build(serials, design=""):
     return record_builds({s: design for s in serials})
 
 
+def caliber_key(caliber):
+    """Calibers compare case-insensitively and without a leading dot (".22" = "22")."""
+    return caliber.strip().upper().lstrip(".")
+
+
+def available_for_build(rows, caliber, length):
+    """Approved, not built suppressors of `caliber` approved at `length` inches or LONGER (an approved 12" is good for a
+    5" build), in serial order: the first one is the next to use. Rows with no recorded length are left out."""
+    want = caliber_key(caliber)
+    fits = [r for r in rows if r["status"] == "approved" and not is_built(r) and caliber_key(r["caliber"]) == want
+            and _num(r["overall_length"]) is not None and _num(r["overall_length"]) >= float(length)]
+    return sorted(fits, key=lambda r: serial_key(r["serial_number"]))
+
+
 def clear_build(serial):
     """Undo a build record (marked built by mistake)."""
     rows = load_rows()
