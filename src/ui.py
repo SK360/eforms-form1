@@ -1230,7 +1230,7 @@ def move_flow():
 
 
 def _connect_server():
-    address = questionary.text("Your server's address on your home network (like 192.168.1.138):").ask()
+    address = questionary.text("Your server's address on your home network (like 192.168.1.50):").ask()
     if not address:
         return
     try:

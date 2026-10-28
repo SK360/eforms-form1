@@ -28,7 +28,7 @@ class Unreachable(ServerError):
 
 
 def normalize(address):
-    """"192.168.1.138" -> https://192.168.1.138:8765; a tailnet name (*.ts.net) -> port 443; a full URL as given."""
+    """"192.168.1.50" -> https://192.168.1.50:8765; a tailnet name (*.ts.net) -> port 443; a full URL as given."""
     address = address.strip().rstrip("/")
     if not address:
         raise ServerError("Enter the server's address.")

@@ -205,9 +205,21 @@ Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one 
 number, filed date, approval date, eForm ID, control number and any approval conditions. The app keeps it up to date;
 you can also open it in Excel (close it again before filing). `out/submissions.csv` is a log of every filing.
 
+## Optional: an inventory server
+Not needed, and most people won't want it. If you'd like your inventory in one central place on an always-on machine
+at home (a Proxmox container, Docker, any Linux box), with daily backups, a change history and a phone page that's
+always available to every paired phone, the helper can keep it on your own **inventory server** instead of in
+`data/suppressors.csv`. Filing and Check approvals still run on your computer and work the same way; your settings,
+templates and files never leave it. It works on your home network alone (no internet, no VPN needed), you can try it
+with made-up data first, and you can move your inventory back at any time.
+
+Why you might (or might not) want it, what it does and how to set it up: [server/README.md](server/README.md).
+Settings > **Where your inventory lives** connects to one.
+
 ## Your data stays local
 Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (your logged-in session), which are
-never committed. **Never zip or copy this folder to share it**; share the git repository instead.
+never committed. **Never zip or copy this folder to share it**; share the git repository instead. (If you choose an
+inventory server, your inventory and approval PDFs live on that machine, at home, instead.)
 
 ## Troubleshooting
 - Start with **Settings > Check my setup**: most problems before a filing (a moved or online-only file, a template

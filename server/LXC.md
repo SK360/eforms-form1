@@ -1,7 +1,8 @@
 # Inventory server on Proxmox (LXC)
 
-Optional. The helper works without it; this is for keeping one inventory on a home server that your PC and phone
-both use, at its address on your home network. Nothing else is needed: no domain, no port forwarding, no Tailscale
+Optional. The helper works without it ([README.md](README.md) explains what the server is for and whether you'd
+want it); this is how to install it, for keeping one inventory on a home server that your PC and phone both use, at
+its address on your home network. Nothing else is needed: no domain, no port forwarding, no Tailscale
 (that's an optional extra for reaching it away from home, at the end). Try it with made-up data first (`demo`
 below); your real inventory moves only when you choose to (section 5).
 
@@ -59,7 +60,7 @@ A phone trusts that CA once; after that, `https://<its-address>:8765` opens with
 (The CA can only vouch for home-network addresses and names, so it can't be misused for real websites. Its key
 never leaves the server.)
 
-1. On the phone, open `https://<its-address>:8765` (for example `https://192.168.1.138:8765`). The first time,
+1. On the phone, open `https://<its-address>:8765` (for example `https://192.168.1.50:8765`). The first time,
    Safari warns that the connection isn't private: tap Show Details, then visit this website.
 2. Open **Trust this server on this device** and follow it: download the certificate, then on an iPhone
    Settings › Profile Downloaded › Install, **and then turn it on**: Settings › General › About › Certificate Trust

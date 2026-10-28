@@ -118,12 +118,12 @@ def connect(fake, addresses=None):
 
 
 def test_addresses():
-    assert remote.normalize("192.168.1.138") == "https://192.168.1.138:8765"
+    assert remote.normalize("192.168.1.50") == "https://192.168.1.50:8765"
     assert remote.normalize(" atf-inventory.tail1234.ts.net/ ") == "https://atf-inventory.tail1234.ts.net:443"
     assert remote.normalize("https://inv.home.arpa") == "https://inv.home.arpa:443"
     assert remote.normalize("10.0.0.5:9000") == "https://10.0.0.5:9000"
     with pytest.raises(remote.ServerError):
-        remote.normalize("http://192.168.1.138")
+        remote.normalize("http://192.168.1.50")
 
 
 def test_probe_and_pair(fake):

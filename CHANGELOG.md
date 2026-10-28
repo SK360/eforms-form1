@@ -20,6 +20,16 @@ the new copy.
   suppressors built (with their design) or clear that, while you walk through your safes. Served from your computer
   only while it's open; nothing goes to the internet. **Run the installer again** after updating (`./install.sh`,
   Windows `.\install.cmd`) for the QR code; without it the link is printed instead.
+- **Optional inventory server** (`server/`; see [server/README.md](server/README.md)). Completely optional: nothing
+  changes unless you set one up. For keeping your inventory in one place on an always-on machine at home (Proxmox,
+  Docker, Linux): daily backups and restore, a history of every change (builds excepted: when something was built is
+  never recorded), the phone page always available to every paired phone with live updates, and the same inventory on
+  every paired device. Settings > **Where your inventory lives** connects the helper (pairing code, certificate
+  check), moves your inventory there (checked field by field first; **Try it first** changes nothing) and back.
+  Filing and Check approvals work with it, with extra safety: the server must confirm "pending" before Sign & Submit,
+  and filing results are kept on your computer until the server has them. Home network only: no internet, no
+  Tailscale or VPN needed (optional for away from home). Tested on a Proxmox container with an iPhone and a Mac,
+  including a real move and a real filing; Check approvals through the server and Windows not yet tried for real.
 
 ## 1.0.0 (2026-10-27)
 
