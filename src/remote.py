@@ -1,8 +1,10 @@
 """Talking to the optional inventory server (server/, design doc "Inventory server design"). Standard library only.
 
-The server answers at its home-network address with its own certificate, which this side pins by fingerprint (saved
-when pairing; the server's page shows it under Devices to compare), and may also have a tailnet name with a normally
-trusted certificate. Addresses are tried in order; the first that answers is used for the rest of the run. A server
+The server answers at its home-network address with a certificate signed by its own small CA (server/atf_server/
+tls.py). Pairing saves that CA (its fingerprint is compared with the server page's Devices first), and from then on
+only certificates it signed are accepted, so the server can renew its certificate (a new address) without re-pairing.
+(A server from before its CA existed is pinned by its certificate's fingerprint instead.) An optional tailnet name
+with a normally trusted certificate also works; no tailnet is needed. Addresses are tried in order; the first that answers is used for the rest of the run. A server
 whose id isn't the one paired with is never used (a different machine at that address).
 """
 import hashlib
@@ -43,9 +45,28 @@ def _fingerprint(der):
     return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
 
 
-def _connect(address, pinned, timeout):
-    """An HTTPS connection whose certificate is the pinned one, or (for a tailnet name) one trusted the normal way."""
+def _connect(address, pinned, timeout, ca=None):
+    """An HTTPS connection whose certificate the server's CA signed (or, without a CA, is the pinned one), else one
+    trusted the normal way (a tailnet name)."""
     u = urlparse(address)
+    if ca:
+        own = ssl.create_default_context(cadata=ca)
+        own.check_hostname = False  # the server's addresses may change; only certificates its own CA signed pass
+        conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=own)
+        try:
+            conn.connect()
+            return conn
+        except ssl.SSLError:
+            conn.close()
+        except OSError as e:
+            raise Unreachable(f"No answer at {address} ({_why(e)}).")
+        strict = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=ssl.create_default_context())
+        try:
+            strict.connect()
+            return strict
+        except (OSError, ssl.SSLError):
+            raise Unreachable(f"The server at {address} isn't the one this computer paired with (its certificate wasn't "
+                              "signed by that server's CA). If the server was rebuilt, connect again in Settings.")
     loose = ssl.create_default_context()
     loose.check_hostname, loose.verify_mode = False, ssl.CERT_NONE
     conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=loose)
@@ -105,8 +126,9 @@ def _json(status, kind, data):
 
 
 def probe(address, timeout=TIMEOUT):
-    """Before pairing: who answers at `address`, and its certificate fingerprint (to compare with the server's page).
-    Returns {"address", "fingerprint", "server_id", "name", "version", "api"}."""
+    """Before pairing: who answers at `address`, its CA and the CA's fingerprint (to compare with the server's page).
+    Returns {"address", "fingerprint", "ca" (PEM, or None for an older server: then fingerprint is its certificate's),
+    "server_id", "name", "version", "api"}."""
     address = normalize(address)
     u = urlparse(address)
     loose = ssl.create_default_context()
@@ -120,13 +142,21 @@ def probe(address, timeout=TIMEOUT):
     hello = _json(*_call(conn, "GET", "/api/hello"))
     if "server_id" not in hello:
         raise ServerError(f"Something answers at {address}, but it isn't an inventory server.")
-    return {"address": address, "fingerprint": fingerprint, **{k: hello.get(k) for k in ("server_id", "name", "version", "api")}}
+    ca = None
+    conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=loose)
+    status, _, data = _call(conn, "GET", "/ca.crt")
+    if status == 200 and data.startswith(b"-----BEGIN CERTIFICATE-----"):
+        ca = data.decode("ascii")
+        fingerprint = _fingerprint(ssl.PEM_cert_to_DER_cert(ca))
+        _connect(address, None, timeout, ca).close()  # the certificate it serves really is signed by that CA
+    return {"address": address, "fingerprint": fingerprint, "ca": ca,
+            **{k: hello.get(k) for k in ("server_id", "name", "version", "api")}}
 
 
 def pair(found, code, name, timeout=TIMEOUT):
     """Trade a pairing code (from the server's page: Devices > Add a device) for this computer's key, on the server
     `probe` found. Returns {"key", "device_id", "server_id"}."""
-    out = _json(*_call(_connect(found["address"], found["fingerprint"], timeout), "POST", "/api/pair",
+    out = _json(*_call(_connect(found["address"], found["fingerprint"], timeout, found.get("ca")), "POST", "/api/pair",
                        {"code": str(code).strip(), "name": name}))
     if out.get("server_id") != found["server_id"]:
         raise ServerError("A different server answered while pairing; nothing was saved.")
@@ -137,8 +167,9 @@ class Server:
     """A paired server: its id, addresses (in order), pinned fingerprint and this computer's key."""
     working = {}  # server_id -> the address that answered this run
 
-    def __init__(self, server_id, addresses, fingerprint, key, timeout=TIMEOUT):
+    def __init__(self, server_id, addresses, fingerprint, key, timeout=TIMEOUT, ca=None):
         self.server_id, self.addresses, self.fingerprint, self.key = server_id, list(addresses), fingerprint, key
+        self.ca = ca
         self.timeout = timeout
 
     def _request(self, method, path, body=None):
@@ -149,14 +180,14 @@ class Server:
             try:
                 if address != first:
                     try:
-                        hello = _json(*_call(_connect(address, self.fingerprint, self.timeout), "GET", "/api/hello"))
+                        hello = _json(*_call(_connect(address, self.fingerprint, self.timeout, self.ca), "GET", "/api/hello"))
                     except Unreachable:
                         raise
                     except ServerError:
                         hello = {}
                     if hello.get("server_id") != self.server_id:
                         raise Unreachable(f"A different server answers at {address}; it isn't used.")
-                result = _call(_connect(address, self.fingerprint, self.timeout), method, path, body, self.key)
+                result = _call(_connect(address, self.fingerprint, self.timeout, self.ca), method, path, body, self.key)
             except Unreachable as e:
                 Server.working.pop(self.server_id, None)
                 problems.append(str(e))

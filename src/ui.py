@@ -1175,8 +1175,9 @@ def _connect_server():
                   f"update {newer} first.[/]")
         return pause()
     con.print(f"  Found [bold]{escape(found['name'] or 'an inventory server')}[/] (server {escape(found['version'] or '?')}) at "
-              f"{escape(found['address'])}.\n  Its certificate fingerprint:\n  [bold]{escape(found['fingerprint'])}[/]\n"
-              "  [dim]On the server's page (your phone): Devices > Server certificate shows the one it really has.[/]")
+              f"{escape(found['address'])}.\n  Its {'certificate authority' if found.get('ca') else 'certificate'} fingerprint:\n"
+              f"  [bold]{escape(found['fingerprint'])}[/]\n"
+              "  [dim]On the server's page (your phone): Devices shows the one it really has (or the server's log).[/]")
     if not questionary.confirm("Do they match?", default=False, auto_enter=False).ask():
         con.print("  Not connected. [dim](If they differ, something else answered at that address.)[/]")
         return pause()
@@ -1199,7 +1200,8 @@ def _connect_server():
         con.print(f"  [red]✖ Not connected: {escape(str(e))}[/]")
         return pause()
     atf.save_server_settings({"server_id": found["server_id"], "name": found["name"], "addresses": [found["address"]] + others,
-                              "fingerprint": found["fingerprint"], "key": paired["key"], "device_id": paired["device_id"],
+                              "fingerprint": found["fingerprint"], "ca": found.get("ca"), "key": paired["key"],
+                              "device_id": paired["device_id"],
                               "this_computer": name.strip() or "PC", "paired": date.today().strftime("%m/%d/%Y")})
     try:
         rows, sbrs = atf.load_rows(), atf.load_sbrs()

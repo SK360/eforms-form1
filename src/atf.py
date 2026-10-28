@@ -250,7 +250,7 @@ def _token_match(want, got):
 
 # ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
 # ---------- Inventory server (optional: server/, connected in Settings > Where your inventory lives) ----------
-# data/server.yaml = the paired server (id, addresses, pinned certificate fingerprint, this computer's key). While it
+# data/server.yaml = the paired server (id, addresses, its CA and fingerprint, this computer's key). While it
 # exists, the inventory is the server's: this version reads it (load_rows / load_sbrs) and refuses to change it
 # (save_rows / save_sbrs raise ServerReadOnly); this computer's CSVs are left as they are and not used. When the
 # server can't be reached, the last data seen (data/server_cache.json) is shown, marked offline and read-only.
@@ -300,7 +300,7 @@ def forget_server():
 def _server(settings=None):
     import remote
     s = settings or server_settings()
-    return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"])
+    return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"], ca=s.get("ca"))
 
 
 def _server_inventory():

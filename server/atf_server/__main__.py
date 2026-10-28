@@ -3,7 +3,7 @@
   serve            run the server (HTTPS with its own certificate on port 8765; --http behind a proxy only)
   pair-code        a 6-digit code to pair a device, valid 5 minutes (the first device, or when none is at hand)
   devices          list paired devices;  revoke <id>  removes one
-  fingerprint      the certificate fingerprint the app pins (also on the page under Devices)
+  fingerprint      the server's CA fingerprint (what phones and the app trust; also on the page under Devices)
   import <folder>  load an app folder's inventory (data/*.csv, out/approved/) into an EMPTY server; reads only
   demo             fill an empty server with a made-up inventory (A101...) to try it
   backup           a backup now into <data>/backups (the server also makes one each day, keeping 30)
@@ -59,13 +59,13 @@ def serve(args):
     finally:
         conn.close()
     ssl = {}
-    fingerprint = ""
+    ca = None
     if not args.http:
-        cert, key = tls.ensure_certificate(folder / "tls", names=filter(None, (os.environ.get("ATF_NAMES") or "").split(",")))
-        ssl, fingerprint = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, tls.fingerprint(cert)
-        print(f"Certificate fingerprint: {fingerprint}", flush=True)
+        cert, key = tls.ensure_certificate(folder / "tls", names=(os.environ.get("ATF_NAMES") or "").split(","))
+        ssl, ca = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, tls.ca_path(folder / "tls")
+        print(f"Server CA fingerprint: {tls.fingerprint(ca)}\nHTTPS for: {', '.join(tls.addresses())}", flush=True)
     threading.Thread(target=_daily_backups, args=(folder,), daemon=True).start()
-    app = create_app(folder, name=os.environ.get("ATF_SERVER_NAME") or "ATF inventory", fingerprint=fingerprint)
+    app = create_app(folder, name=os.environ.get("ATF_SERVER_NAME") or "ATF inventory", ca=ca)
     uvicorn.run(app, host=args.host, port=args.port, access_log=False, proxy_headers=False, **ssl)
 
 
@@ -103,7 +103,8 @@ def main(argv=None):
             db.revoke(conn, args.device_id, "server console")
             print("Removed.")
         elif args.cmd == "fingerprint":
-            print(tls.fingerprint(tls.ensure_certificate(folder / "tls")[0]))
+            tls.ensure_certificate(folder / "tls", names=(os.environ.get("ATF_NAMES") or "").split(","))
+            print(tls.fingerprint(tls.ca_path(folder / "tls")))
         elif args.cmd in ("import", "demo"):
             sup, sbrs, pdfs = db.read_app_folder(args.folder) if args.cmd == "import" else demo.inventory()
             counts = db.import_inventory(conn, folder / "approved", sup, sbrs, pdfs, device=f"server console ({args.cmd})")

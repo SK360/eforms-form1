@@ -14,7 +14,7 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from . import __version__, db
+from . import __version__, db, tls
 
 API_VERSION = 1
 COOKIE = "atf_device"
@@ -40,7 +40,8 @@ def _last4(v):
     return f"…{v[-4:]}" if v else ""
 
 
-def create_app(data_dir, page=None, name="ATF inventory", fingerprint=""):
+def create_app(data_dir, page=None, name="ATF inventory", ca=None):
+    """ca: the server's CA certificate (tls.py), offered at /ca.crt for phones to trust; None = plain HTTP (tests)."""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path, pdf_dir = data_dir / "inventory.db", data_dir / "approved"
@@ -51,6 +52,8 @@ def create_app(data_dir, page=None, name="ATF inventory", fingerprint=""):
     finally:
         conn.close()
     page = Path(page) if page else find_page()
+    ca_pem = Path(ca).read_text(encoding="ascii") if ca else ""
+    fingerprint = tls.fingerprint_pem(ca_pem) if ca_pem else ""
     app = FastAPI(title=name, version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
 
     @contextmanager
@@ -104,12 +107,21 @@ def create_app(data_dir, page=None, name="ATF inventory", fingerprint=""):
         """A permanent address per suppressor (later printed as a QR label): opens the page at that serial."""
         return RedirectResponse(f"/#{quote(serial, safe='')}", status_code=302)
 
+    @app.get("/ca.crt")
+    def ca_certificate():
+        """The server's CA, to trust once on a phone (no pairing needed: a certificate is public; its key never leaves
+        the server). iPhone: Safari offers it as a profile; Android: Settings > Security > install a CA certificate."""
+        if not ca_pem:
+            return JSONResponse({"error": "This server runs without HTTPS."}, status_code=404)
+        return Response(ca_pem, media_type="application/x-x509-ca-cert",
+                        headers={"Content-Disposition": 'attachment; filename="atf-inventory-ca.crt"'})
+
     @app.get("/api/hello")
     def hello(request: Request, conn=Depends(get_db)):
         auth = request.headers.get("authorization", "")
         key = auth[7:].strip() if auth.lower().startswith("bearer ") else request.cookies.get(COOKIE, "")
         return {"server_id": server_id, "name": name, "version": __version__, "api": API_VERSION,
-                "paired": db.device_for_key(conn, key) is not None}
+                "paired": db.device_for_key(conn, key) is not None, "ca_fingerprint": fingerprint}
 
     @app.post("/api/pair")
     def pair(request: Request, body: dict, conn=Depends(get_db)):

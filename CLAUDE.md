@@ -138,16 +138,25 @@ plain CLI, kept for debugging/scripting:
   the image), auth = `Authorization: Bearer` (the app) or the HttpOnly cookie a browser gets when pairing; POSTs
   must be JSON (CSRF); `/api/inventory` = the PC page's shape + `can_build: false` + `server`; `/api/rows` = full CSV
   shape. The page, when `data.server` is set: pairing screen on 401, history per serial, Devices (`#:devices`: add a
-  device = code, remove = tap twice), Export CSV. `tls.py`: its own certificate (app pins the fingerprint, phase 2).
+  device = code, remove = tap twice), Export CSV. **No tailnet is ever required** (the user's rule, 2026-10-28):
+  everything, the phone page included, works at the home-network address; Tailscale (`tailscale serve`) is an
+  optional second address. `tls.py`: the server's own CA (`tls/ca.pem`, key 0600, 20 years, critical name
+  constraints = private IP ranges + .local/.lan/.home.arpa/.internal/localhost, so a stolen key can't vouch for real
+  sites) signs its server certificate (800 days, Apple's 825 limit; SAN = this machine's private addresses +
+  host.local/.lan/.home.arpa + ATF_NAMES; re-issued at start when an address is new, it's due, or it wasn't signed
+  by this CA, e.g. phase 1's self-signed one; the CA stays). `/ca.crt` (no auth) + the page's "Trust this server"
+  (`trustHelp`, only on the server's own HTTPS, not *.ts.net): a phone installs the CA once, then no warnings.
   CLI `python -m atf_server serve|pair-code|devices|revoke|fingerprint|import <app folder>|demo|backup`. Deploy:
   `server/Dockerfile` (repo-root context), `compose.yaml`, `atf-inventory.service`, `LXC.md`. Tests: `server/tests`
   (`server/.venv/bin/python -m pytest -q tests` from server/; root `pytest.ini` keeps the app's run to tests/); CI
   job `server` also builds and starts the image.
   **Phase 2 (the app reads from the server):** `src/remote.py` (stdlib only): `normalize` (bare address -> port
-  8765, *.ts.net -> 443), `probe` (unverified connect: fingerprint + /api/hello), `pair`, `Server` (addresses in
-  order, first that answers is kept in `Server.working` for the run; a non-pinned cert is accepted only if it verifies
-  normally (tailnet name); a different server_id at an address = skipped; `Unreachable` falls through to the next
-  address, other refusals don't). `data/server.yaml` (server id, addresses, fingerprint, key, device_id; chmod 600)
+  8765, *.ts.net -> 443), `probe` (unverified connect: /api/hello + /ca.crt; fingerprint = the CA's; checks the
+  served certificate really is signed by it; an older server without /ca.crt = its certificate's fingerprint), `pair`, `Server` (addresses in
+  order, first that answers is kept in `Server.working` for the run; with `ca` only certificates that CA signed
+  pass (hostname not checked: addresses change), else the pinned fingerprint; failing that, one that verifies
+  normally (a tailnet name); a different server_id at an address = skipped; `Unreachable` falls through to the next
+  address, other refusals don't). `data/server.yaml` (server id, addresses, fingerprint, ca, key, device_id; chmod 600)
   = server mode: `load_rows`/`load_sbrs` read `/api/rows` (reused 2 s), cached to `data/server_cache.json`, shown
   with `SERVER_STATE` online/offline (offline = last data seen, read-only; nothing seen = `remote.ServerError`,
   the menu offers Try again / Settings); `save_rows`/`save_sbrs` raise `ServerReadOnly` (so do record_builds etc.);

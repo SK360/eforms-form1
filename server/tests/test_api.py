@@ -1,6 +1,6 @@
 """The HTTP API: who may read what, pairing, the page, PDFs, export, Devices. Phase 1 has no inventory writes."""
 from conftest import pair_device
-from atf_server import db
+from atf_server import db, tls
 
 
 def test_unpaired_gets_only_the_page_and_hello(client):
@@ -14,6 +14,9 @@ def test_unpaired_gets_only_the_page_and_hello(client):
         r = client.get(path)
         assert r.status_code == 401 and r.json()["pair"] is True, path
     assert client.get("/api/inventory", headers={"Authorization": "Bearer nope"}).status_code == 401
+    ca = client.get("/ca.crt")                                         # to trust on a phone: public, no pairing
+    assert ca.status_code == 200 and ca.headers["content-type"] == "application/x-x509-ca-cert"
+    assert tls.fingerprint_pem(ca.text) == hello["ca_fingerprint"]
     r = client.get("/s/A101", follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"] == "/#A101"
 
@@ -36,14 +39,14 @@ def test_writes_must_be_json(client, filled):
     assert client.post("/api/build", json={"serial": "A101", "built": False}).status_code in (401, 404, 405)
 
 
-def test_inventory_for_the_page(client, auth):
+def test_inventory_for_the_page(client, auth, ca_fp):
     data = client.get("/api/inventory", headers=auth).json()
     a101 = data["suppressors"][0]
     assert (a101["serial"], a101["status"], a101["built"], a101["design"], a101["pdf"]) == ("A101", "approved", True, "PCC Short", True)
     assert a101["application"] == "…0101" and a101["eform"] == "…0101"           # last 4, like the menu
     assert {r["status"] for r in data["suppressors"]} == {"approved", "filed", "queued"}
     assert [s["serial"] for s in data["sbrs"]] == ["R1", "R2"] and data["sbrs"][0]["pdf"] is True
-    assert data["can_build"] is False and data["server"]["fingerprint"] == "AB:CD" and data["server"]["device"] == "PC"
+    assert data["can_build"] is False and data["server"]["fingerprint"] == ca_fp and data["server"]["device"] == "PC"
 
 
 def test_full_rows_history_pdf_export(client, auth, filled):
@@ -61,10 +64,10 @@ def test_full_rows_history_pdf_export(client, auth, filled):
     assert export.text == db.export_csv(filled) and "attachment" in export.headers["content-disposition"]
 
 
-def test_devices(client, auth, filled):
+def test_devices(client, auth, filled, ca_fp):
     other_id, other_key = pair_device(filled, "iPhone")
     d = client.get("/api/devices", headers=auth).json()
-    assert [x["name"] for x in d["devices"]] == ["PC", "iPhone"] and d["you"] == 1 and d["fingerprint"] == "AB:CD"
+    assert [x["name"] for x in d["devices"]] == ["PC", "iPhone"] and d["you"] == 1 and d["fingerprint"] == ca_fp
     code = client.post("/api/devices/code", headers=auth, json={}).json()
     assert len(code["code"]) == 6 and code["minutes"] == db.PAIR_MINUTES
     assert client.post(f"/api/devices/{other_id}/revoke", headers=auth, json={}).json() == {"ok": True}

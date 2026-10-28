@@ -186,6 +186,20 @@ async function loadHistory(serial) {
 
 // Pairing: a browser that isn't paired gets this instead of the inventory. The code comes from Devices on a paired
 // device, or the server's pair-code command; the key comes back as a cookie this page never sees.
+// "Trust this server": the server's own CA, installed once per phone, so its home-network address opens without
+// warnings (no tailnet or domain needed). Not shown at a tailnet name (Tailscale's certificate is trusted already).
+const OWN_HTTPS = location.protocol === "https:" && !location.hostname.endsWith(".ts.net");
+function trustHelp(fingerprint) {
+  if (!OWN_HTTPS) return "";
+  return `<details class="hist" id="trust"><summary><b>Trust this server on this device</b> <span class="sub">(once: no more security warning here)</span></summary>
+    <p class="hint" style="margin:8px 0">1. <a href="/ca.crt" id="cadl">Download its certificate</a> and allow the download.<br>
+    2. iPhone/iPad: Settings › Profile Downloaded › Install. Then Settings › General › About › Certificate Trust Settings:
+    turn on <b>ATF inventory server CA</b>.<br>Android: open the file, or Settings › Security › Install a certificate › CA certificate.<br>
+    3. Reload this page.</p>
+    ${fingerprint ? `<div class="fp">${esc(fingerprint)}</div><div class="sub">Its fingerprint: the same as the server's log and the app on your PC show.</div>` : ""}
+  </details>`;
+}
+
 function showPair() {
   document.body.classList.add("pairing"); document.body.classList.remove("detail");
   const ua = navigator.userAgent, guess = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android phone" : "Browser";
@@ -193,7 +207,8 @@ function showPair() {
     <p class="hint">On a paired device, open Devices and tap Add a device, or run <code>pair-code</code> on the server. Enter that code here.</p>
     <div class="design"><input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" aria-label="Pairing code"></div>
     <div class="design"><input id="devname" value="${esc(guess)}" placeholder="Name, like iPhone" aria-label="Name for this device">
-      <button class="save" id="pairbtn" type="button">Pair</button></div>`;
+      <button class="save" id="pairbtn" type="button">Pair</button></div>${trustHelp("")}`;
+  fetch("/api/hello").then(r => r.json()).then(h => { if ($("trust") && h.ca_fingerprint) $("trust").outerHTML = trustHelp(h.ca_fingerprint); }).catch(() => {});
   $("pairbtn").onclick = async () => {
     const res = await fetch("/api/pair", {method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({code: $("code").value.trim(), name: $("devname").value.trim()})});
@@ -219,8 +234,8 @@ async function renderDevices() {
       <div class="sub">Enter it on the new device within ${pairCode.minutes} minutes. It works once.</div>`
       : `<button class="save" id="addDevice" type="button">Add a device</button>
       <div class="sub" style="margin-top:8px">Shows a code to enter on the new device (a phone, or the app on your PC).</div>`}</div>
-    <div class="hist"><h2>Server certificate</h2><div class="fp">${esc(d.fingerprint || "(plain HTTP: no certificate)")}</div>
-      <div class="sub">The app shows this when you pair your PC: they should match.</div></div>`;
+    <div class="hist"><h2>Server certificate authority</h2><div class="fp">${esc(d.fingerprint || "(plain HTTP: no certificate)")}</div>
+      <div class="sub">The app shows this when you pair your PC: they should match.</div></div>${trustHelp("")}`;
   $("back").onclick = showList;
   if ($("addDevice")) $("addDevice").onclick = async () => {
     const r = await fetch("/api/devices/code", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});

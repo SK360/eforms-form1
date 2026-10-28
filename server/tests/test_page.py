@@ -7,17 +7,17 @@ import time
 import pytest
 
 from conftest import PAGE, pair_device
-from atf_server import db
+from atf_server import db, tls
 
 
 @pytest.fixture
-def running(filled, data_dir):
+def running(filled, data_dir, tls_dir):
     import uvicorn
     from atf_server.app import create_app
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(create_app(data_dir, page=PAGE, fingerprint="AB:CD:EF"), host="127.0.0.1",
+    server = uvicorn.Server(uvicorn.Config(create_app(data_dir, page=PAGE, ca=tls.ca_path(tls_dir)), host="127.0.0.1",
                                            port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -31,7 +31,7 @@ def running(filled, data_dir):
 
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_pair_and_browse(running, filled, engine):
+def test_pair_and_browse(running, filled, engine, ca_fp):
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as pw:
         try:
@@ -68,7 +68,8 @@ def test_pair_and_browse(running, filled, engine):
         pair_device(filled, "Old phone")
         page.click("#devlink")                                          # Devices
         page.wait_for_selector(".devs .kv")
-        assert "Test phone (this one)" in page.inner_text(".devs") and "AB:CD:EF" in page.inner_text("#detailView")
+        assert "Test phone (this one)" in page.inner_text(".devs") and ca_fp in page.inner_text("#detailView")
+        assert page.locator("#trust").count() == 0                     # plain HTTP here: nothing to trust
         page.click("#addDevice")
         page.wait_for_selector("#paircode")
         assert len(page.inner_text("#paircode")) == 6
@@ -86,3 +87,42 @@ def test_pair_and_browse(running, filled, engine):
         page.reload()
         page.wait_for_selector("#pairbtn")
         browser.close()
+
+
+def test_trust_this_server_over_https(https_running, ca_fp):
+    """At the server's own HTTPS address (no tailnet), the pairing screen offers its CA to trust once."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page(ignore_https_errors=True, viewport={"width": 390, "height": 844})
+        page.set_default_timeout(5000)
+        page.goto(https_running)
+        page.wait_for_selector("#trust .fp", state="attached")         # folded; the fingerprint comes from /api/hello
+        assert page.text_content("#trust .fp") == ca_fp
+        page.click("#trust summary")
+        assert "Certificate Trust Settings" in page.inner_text("#trust")
+        with page.expect_download() as d:
+            page.click("#cadl")
+        assert tls.fingerprint_pem(open(d.value.path()).read()) == ca_fp
+        browser.close()
+
+
+@pytest.fixture
+def https_running(filled, data_dir, tls_dir):
+    import uvicorn
+    from atf_server.app import create_app
+    cert, key = tls.ensure_certificate(tls_dir)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(create_app(data_dir, page=PAGE, ca=tls.ca_path(tls_dir)), host="127.0.0.1",
+                                           port=port, log_level="warning", ssl_certfile=str(cert), ssl_keyfile=str(key)))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.05)
+    yield f"https://127.0.0.1:{port}"
+    server.should_exit = True
+    thread.join(5)

@@ -8,7 +8,7 @@ import pytest
 SERVER = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVER))
 
-from atf_server import db, demo  # noqa: E402
+from atf_server import db, demo, tls  # noqa: E402
 
 PAGE = SERVER.parent / "src" / "phone.html"
 
@@ -35,10 +35,22 @@ def filled(conn, data_dir):
 
 
 @pytest.fixture
-def client(filled, data_dir):
+def tls_dir(tmp_path):
+    """The server's CA and certificate, as a server makes them at first start."""
+    tls.ensure_certificate(tmp_path / "tls")
+    return tmp_path / "tls"
+
+
+@pytest.fixture
+def ca_fp(tls_dir):
+    return tls.fingerprint(tls.ca_path(tls_dir))
+
+
+@pytest.fixture
+def client(filled, data_dir, tls_dir):
     from fastapi.testclient import TestClient
     from atf_server.app import create_app
-    return TestClient(create_app(data_dir, page=PAGE, fingerprint="AB:CD"))
+    return TestClient(create_app(data_dir, page=PAGE, ca=tls.ca_path(tls_dir)))
 
 
 def pair_device(conn, name="PC"):

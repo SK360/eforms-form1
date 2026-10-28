@@ -1,5 +1,6 @@
 """The app with an inventory server (phase 2: reads only), against a small fake server over HTTPS with a test-only
-certificate (tests/fixtures/test_server_*.pem). The real server's side of the same calls is in server/tests."""
+certificates: test_ca*.pem = a CA and a server certificate it signed (servers now), test_server_*.pem = a self-signed
+one (servers from before their CA). The real server's side of the same calls is in server/tests."""
 import json
 import socket
 import ssl
@@ -24,13 +25,25 @@ SBRS = [{"serial_number": "R1", "caliber": "9", "model": "PCC", "barrel_length":
 QUIT = lambda kw: "quit"  # noqa: E731
 
 
-def _fingerprint():
-    der = ssl.PEM_cert_to_DER_cert((FIX / "test_server_cert.pem").read_text())
-    return remote._fingerprint(der)
+CA = (FIX / "test_ca.pem").read_text()
+
+
+def _fingerprint(name="test_ca.pem"):
+    return remote._fingerprint(ssl.PEM_cert_to_DER_cert((FIX / name).read_text()))
 
 
 @pytest.fixture
 def fake():
+    yield from _fake(own_ca=True)
+
+
+@pytest.fixture
+def old_fake():
+    """A server from before its CA: a self-signed certificate and no /ca.crt."""
+    yield from _fake(own_ca=False)
+
+
+def _fake(own_ca):
     """A fake inventory server on 127.0.0.1 (HTTPS). Pairing code 123456 gives key "k1" (device 7)."""
     state = {"calls": [], "server_id": SID}
 
@@ -55,6 +68,8 @@ def fake():
             state["calls"].append(("GET", self.path))
             if self.path == "/api/hello":
                 return self._send(200, {"server_id": state["server_id"], "name": "Test server", "version": "0.1.0", "api": 1})
+            if self.path == "/ca.crt" and own_ca:
+                return self._send(200, CA.encode(), "application/x-x509-ca-cert")
             if not self._authed():
                 return
             if self.path == "/api/rows":
@@ -75,7 +90,8 @@ def fake():
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), H)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(FIX / "test_server_cert.pem", FIX / "test_server_key.pem")
+    name = "test_ca_server" if own_ca else "test_server"
+    ctx.load_cert_chain(FIX / f"{name}_cert.pem", FIX / f"{name}_key.pem")
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     state["address"] = f"https://127.0.0.1:{server.server_address[1]}"
@@ -93,7 +109,7 @@ def _dead_address():
 
 def connect(fake, addresses=None):
     atf.save_server_settings({"server_id": SID, "name": "Test server", "addresses": addresses or [fake["address"]],
-                              "fingerprint": _fingerprint(), "key": "k1", "device_id": 7})
+                              "fingerprint": _fingerprint(), "ca": CA, "key": "k1", "device_id": 7})
 
 
 def test_addresses():
@@ -107,7 +123,7 @@ def test_addresses():
 
 def test_probe_and_pair(fake):
     found = remote.probe(fake["address"])
-    assert found["fingerprint"] == _fingerprint() and found["server_id"] == SID and found["api"] == 1
+    assert found["fingerprint"] == _fingerprint() and found["ca"] == CA and found["server_id"] == SID and found["api"] == 1
     with pytest.raises(remote.ServerError, match="wrong"):
         remote.pair(found, "000000", "PC")
     assert remote.pair(found, " 123456 ", "PC") == {"key": "k1", "device_id": 7, "server_id": SID}
@@ -116,18 +132,27 @@ def test_probe_and_pair(fake):
 
 
 def test_only_the_paired_server_is_used(fake):
-    wrong_cert = remote.Server(SID, [fake["address"]], "AA:BB", "k1")
+    other_ca = (FIX / "test_server_cert.pem").read_text()             # a certificate this server's wasn't signed by
     with pytest.raises(remote.Unreachable, match="isn't the one this computer paired with"):
-        wrong_cert.rows()
-    first_dead = remote.Server(SID, [_dead_address(), fake["address"]], _fingerprint(), "k1", timeout=2)
+        remote.Server(SID, [fake["address"]], "AA:BB", "k1", ca=other_ca).rows()
+    first_dead = remote.Server(SID, [_dead_address(), fake["address"]], _fingerprint(), "k1", timeout=2, ca=CA)
     assert first_dead.rows() == (ROWS, SBRS) and first_dead.address == fake["address"]
     fake["server_id"] = "0" * 32                                   # a different server at that address now
     remote.Server.working.clear()
     with pytest.raises(remote.Unreachable, match="different server"):
-        remote.Server(SID, [fake["address"]], _fingerprint(), "k1").rows()
+        remote.Server(SID, [fake["address"]], _fingerprint(), "k1", ca=CA).rows()
     fake["server_id"] = SID
     with pytest.raises(remote.ServerError, match="doesn't know this computer"):
-        remote.Server(SID, [fake["address"]], _fingerprint(), "wrong key").rows()
+        remote.Server(SID, [fake["address"]], _fingerprint(), "wrong key", ca=CA).rows()
+
+
+def test_an_older_server_is_pinned_by_its_certificate(old_fake):
+    found = remote.probe(old_fake["address"])
+    assert found["ca"] is None and found["fingerprint"] == _fingerprint("test_server_cert.pem")
+    assert remote.pair(found, "123456", "PC")["key"] == "k1"
+    assert remote.Server(SID, [old_fake["address"]], found["fingerprint"], "k1").rows() == (ROWS, SBRS)
+    with pytest.raises(remote.Unreachable, match="isn't the one"):
+        remote.Server(SID, [old_fake["address"]], "AA:BB", "k1").rows()
 
 
 def test_reads_come_from_the_server(fake, configured):
@@ -190,6 +215,7 @@ def test_menu_connects_shows_the_server_and_switches_back(fake, configured, answ
     assert "A101" in out and "On your server" in out and "read-only" in out
     saved = atf.server_settings()
     assert saved["key"] == "k1" and saved["addresses"] == [fake["address"]] and saved["fingerprint"] == _fingerprint()
+    assert saved["ca"] == CA and "certificate authority fingerprint" in out
     assert atf.SUPP.read_bytes() == local
 
     answers(pick("Inventory"), lambda kw: "back" if not any(str(c.title).startswith(("Record builds", "Edit or remove",

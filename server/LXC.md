@@ -1,18 +1,20 @@
 # Inventory server on Proxmox (LXC)
 
 Optional. The helper works without it; this is for keeping one inventory on a home server that your PC and phone
-both use. Phase 1 (this version) is **read-only with made-up data**: try it before any real records move.
+both use, at its address on your home network. Nothing else is needed: no domain, no port forwarding, no Tailscale
+(that's an optional extra for reaching it away from home, at the end). This version is **read-only with made-up
+data**: try it before any real records move.
 
 ## 1. The container
 
 In Proxmox, create a container:
 
-- Template: **Debian 13** (Debian 12 works too). **Unprivileged**. Hostname `atf-inventory` (this becomes its tailnet name).
+- Template: **Debian 13** (Debian 12 works too). **Unprivileged**. Hostname `atf-inventory`.
 - 1 core, 512 MB memory, 4 GB disk is plenty.
 - Network: DHCP, then give it a **DHCP reservation** on your router so its address never changes.
 - Leave **nesting** on (Options > Features; Proxmox's default, and needed for Docker inside it).
 
-Tailscale needs the TUN device. On Proxmox 8.1 or newer: `pct set <id> --dev0 /dev/net/tun` on the host (or
+Only if you'll add Tailscale later: it needs the TUN device. On Proxmox 8.1 or newer: `pct set <id> --dev0 /dev/net/tun` on the host (or
 Resources > Add > Device Passthrough), then restart the container. On older versions, add to
 `/etc/pve/lxc/<id>.conf` instead:
 
@@ -33,7 +35,7 @@ cd /opt/atf-inventory && git checkout server
 python3 -m venv server/.venv && server/.venv/bin/pip install -r server/requirements.txt
 cp server/atf-inventory.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now atf-inventory
-journalctl -u atf-inventory -n 20      # shows the first pairing code and the certificate fingerprint
+journalctl -u atf-inventory -n 20      # the first pairing code, the server's CA fingerprint, its addresses
 ```
 
 Made-up inventory to try it with (only into an empty server):
@@ -50,26 +52,44 @@ database before any schema change).
 With nesting on and Docker installed in the container: `cd /opt/atf-inventory/server && docker compose up -d`, then
 `docker compose logs` for the pairing code and `docker compose exec inventory python -m atf_server demo` for made-up data.
 
-## 3. Tailscale (the phone, at home and away)
+## 3. Your phone, on your home Wi-Fi
+
+The server makes its own small certificate authority (CA) at first start and signs its HTTPS certificate with it.
+A phone trusts that CA once; after that, `https://<its-address>:8765` opens without warnings, encrypted and checked.
+(The CA can only vouch for home-network addresses and names, so it can't be misused for real websites. Its key
+never leaves the server.)
+
+1. On the phone, open `https://<its-address>:8765` (for example `https://192.168.1.138:8765`). The first time,
+   Safari warns that the connection isn't private: tap Show Details, then visit this website.
+2. Open **Trust this server on this device** and follow it: download the certificate, then on an iPhone
+   Settings › Profile Downloaded › Install, and Settings › General › About › Certificate Trust Settings › turn on
+   **ATF inventory server CA**. (Android: install it as a CA certificate under Settings › Security.) Its fingerprint
+   is in `journalctl -u atf-inventory` to compare. Reload: no more warning.
+3. Pair: enter the code from `journalctl -u atf-inventory` (made at first start, valid 5 minutes). A new one any time:
+   `/opt/atf-inventory/server/atf-server pair-code`. After that, more devices are added from the page:
+   Devices > Add a device.
+4. Safari › Share › Add to Home Screen gives it an icon.
+
+The app on your PC connects to the same address (Settings › Where your inventory lives) and trusts the same CA.
+Keep the DHCP reservation: the server renews its certificate when its address changes, and the CA stays the same,
+but the app and the phone's bookmark use the address.
+
+## 4. Optional: Tailscale (away from home)
+
+Only if you use Tailscale and want the phone page away from home. Everything above works without it.
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
+curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
+apt update && apt install -y tailscale
 tailscale up
 tailscale serve --bg https+insecure://localhost:8765
 ```
 
-The server is then at `https://atf-inventory.<your-tailnet>.ts.net` with a real certificate. In the Tailscale admin
-console, an access rule can limit it to your own devices.
-
-## 4. Pair your phone
-
-1. On the phone (on the tailnet), open `https://atf-inventory.<your-tailnet>.ts.net`. It asks for a pairing code.
-2. Enter the code from `journalctl -u atf-inventory` (made at first start, valid 5 minutes). A new one any time:
-   `/opt/atf-inventory/server/atf-server pair-code`
-3. After that, more devices are added from the page: Devices > Add a device.
-
-The local address (`https://<its-ip>:8765`) is for the app on your PC (phase 2), which checks the server's certificate
-by its fingerprint. A browser there warns about that certificate; use the tailnet name in browsers.
+(Debian 12: replace `trixie` with `bookworm`.) Tailscale asks you to approve the machine and, the first time, to
+enable Serve for your tailnet. The server is then also at `https://atf-inventory.<your-tailnet>.ts.net` with
+Tailscale's certificate (no CA to trust there); a phone pairs once per address. In the Tailscale admin console, an
+access rule can limit it to your own devices.
 
 ## Firewall (optional)
 
