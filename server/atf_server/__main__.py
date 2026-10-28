@@ -7,6 +7,8 @@
   import <folder>  load an app folder's inventory (data/*.csv, out/approved/) into an EMPTY server; reads only
   demo             fill an empty server with a made-up inventory (A101...) to try it
   backup           a backup now into <data>/backups (the server also makes one each day, keeping 30)
+  restore <file>   replace the database with a backup (the current one is backed up first)
+  reset            remove the whole inventory (after a backup); devices and certificates stay. Asks you to type RESET
 """
 import argparse
 import logging
@@ -86,6 +88,10 @@ def main(argv=None):
     i.add_argument("folder", help="the app's folder (with data/suppressors.csv)")
     sub.add_parser("demo")
     sub.add_parser("backup")
+    rs = sub.add_parser("restore")
+    rs.add_argument("file")
+    rz = sub.add_parser("reset")
+    rz.add_argument("--yes", action="store_true", help="don't ask (scripts)")
     p.set_defaults(host=os.environ.get("ATF_HOST", "0.0.0.0"), port=int(os.environ.get("ATF_PORT", "8765")), http=False)
     args = p.parse_args(argv)
     try:
@@ -109,6 +115,17 @@ def main(argv=None):
             sup, sbrs, pdfs = db.read_app_folder(args.folder) if args.cmd == "import" else demo.inventory()
             counts = db.import_inventory(conn, folder / "approved", sup, sbrs, pdfs, device=f"server console ({args.cmd})")
             print(f"Imported {counts['suppressors']} suppressors, {counts['sbrs']} SBRs, {counts['pdfs']} approval PDFs.")
+        elif args.cmd == "restore":
+            saved = db.restore(conn, args.file, folder / "backups")
+            print(f"Restored {Path(args.file).name}: {len(db.rows(conn))} suppressors, {len(db.sbrs(conn))} SBRs. "
+                  f"The database before it: {saved}")
+        elif args.cmd == "reset":
+            n = len(db.rows(conn))
+            if not args.yes and input(f"Remove the whole inventory on this server ({n} suppressors, its SBRs, approval "
+                                      "PDFs and their history)? A backup is made first. Type RESET: ").strip() != "RESET":
+                print("Nothing removed.")
+                return 1
+            print(f"Removed. Backup of what was there: {db.reset(conn, folder / 'approved', folder / 'backups')}")
         elif args.cmd == "backup":
             print(db.backup(conn, folder / "backups", label=time.strftime("%Y-%m-%d-%H%M%S")))
         conn.close()

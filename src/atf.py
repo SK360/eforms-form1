@@ -386,6 +386,165 @@ def _server_inventory():
     return data
 
 
+# ---------- Moving the inventory to the server and back (phase 4) ----------
+# Moving: this computer's CSVs and approval PDFs go to an EMPTY server in one import; the app reads everything back and
+# compares every field of every row and every PDF's checksum; any difference = the import is taken back and nothing
+# here changes. Only on an exact match are the CSVs renamed (suppressors.moved-to-server-<date>.csv: kept, never
+# deleted) and the server used. try_only does all of it and then takes the import back. Copying back writes the
+# server's inventory into this computer's CSVs (any non-empty one renamed first) and fetches PDFs it doesn't have.
+
+def _read_csv(path):
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def _write_csv(path, cols, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(sorted(rows, key=lambda r: serial_key(r["serial_number"])))
+    tmp.replace(path)
+
+
+def _move_aside(path, word):
+    """suppressors.csv -> suppressors.<word>-<date>.csv (-2, -3 ... if taken). Returns the new name."""
+    stem = f"{path.stem}.{word}-{datetime.now():%Y-%m-%d}"
+    dest, n = path.with_name(stem + path.suffix), 2
+    while dest.exists():
+        dest, n = path.with_name(f"{stem}-{n}{path.suffix}"), n + 1
+    path.replace(dest)
+    return dest.name
+
+
+def local_for_move():
+    """This computer's own inventory, read from its files whatever mode it's in: (suppressors, sbrs, pdfs), the PDFs
+    as {eform_id, serial, path} (out/approved/index.csv, plus files named after a serial that aren't in it)."""
+    sup = [{c: (r.get(c) or "").strip() for c in COLS} for r in _read_csv(SUPP)]
+    sbrs = [{c: (r.get(c) or "").strip() for c in SBR_COLS} for r in _read_csv(_sbrs_path())]
+    folder = OUT / "approved"
+    by_eform = {r["eform_id"]: r["serial_number"] for r in sup + sbrs if r["eform_id"]}
+    serials = {r["serial_number"].upper(): r["serial_number"] for r in sup + sbrs}
+    pdfs, used = [], set()
+    for eform, name in (_approved_index(folder).items() if folder.exists() else []):
+        path = folder / name
+        if path.is_file():
+            stem = re.sub(r"_\d+$", "", path.stem)
+            pdfs.append({"eform_id": eform, "serial": by_eform.get(eform) or serials.get(stem.upper(), ""), "path": path})
+            used.add(name)
+    for path in sorted(folder.glob("*.pdf")) if folder.exists() else []:
+        if path.name not in used and path.stem.upper() in serials:
+            pdfs.append({"eform_id": None, "serial": serials[path.stem.upper()], "path": path})
+    return sup, sbrs, pdfs
+
+
+def _norm(rows, cols):
+    out = {}
+    for r in rows:
+        n = {}
+        for c in cols:
+            v = (r.get(c) or "").strip()
+            if c in ("status", "built"):
+                v = v.lower()
+            if c.endswith("_date") and v:
+                try:
+                    v = datetime.strptime(v, "%m/%d/%Y").strftime("%m/%d/%Y")
+                except ValueError:
+                    pass
+            n[c] = v
+        out[(n["serial_number"].upper(), n["eform_id"] if cols is SBR_COLS else "")] = n
+    return out
+
+
+def _differences(here, there, cols, what):
+    """Every field that differs between this computer's rows and the server's (by serial; SBRs by serial + eForm ID)."""
+    a, b = _norm(here, cols), _norm(there, cols)
+    problems = []
+    for k in sorted(set(a) | set(b), key=lambda k: serial_key(k[0])):
+        if k not in b:
+            problems.append(f"{what} {a[k]['serial_number']}: not on the server")
+        elif k not in a:
+            problems.append(f"{what} {b[k]['serial_number']}: on the server but not on this computer")
+        else:
+            problems += [f"{what} {a[k]['serial_number']}: {c} is {a[k][c]!r} here, {b[k][c]!r} on the server"
+                         for c in cols if a[k][c] != b[k][c]]
+    return problems
+
+
+def move_to_server(try_only=False):
+    """Move this computer's inventory to the (empty, connected) server; see above. Returns {suppressors, built, sbrs,
+    pdfs, problems, moved, renamed}."""
+    import base64
+    import hashlib
+    import remote
+    if not server_settings():
+        raise remote.ServerError("Connect to your server first (Settings > Where your inventory lives).")
+    server = _server()
+    sup, sbrs, pdfs = local_for_move()
+    if not sup and not sbrs:
+        raise remote.ServerError("There's no inventory on this computer to move.")
+    files = [(p, p["path"].read_bytes()) for p in pdfs]
+    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "pdfs": len(files)}
+    server.post("/api/import", {"suppressors": sup, "sbrs": sbrs, "pdfs": [
+        {"eform_id": p["eform_id"], "serial": p["serial"], "data": base64.b64encode(d).decode("ascii")} for p, d in files]})
+    try:
+        got_sup, got_sbrs = server.rows()
+        problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "SBR")
+        sent = sorted((p["eform_id"] or "", hashlib.sha256(d).hexdigest()) for p, d in files)
+        if sent != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
+            problems.append("Approval PDFs: what the server stored isn't what was sent")
+    except BaseException:
+        server.post("/api/import/undo", {})
+        raise
+    finally:
+        _FETCHED.clear()
+    if problems or try_only:
+        server.post("/api/import/undo", {})
+        return dict(counts, problems=problems, moved=False, renamed=[])
+    renamed = [_move_aside(p, "moved-to-server") for p in (SUPP, _sbrs_path()) if p.exists()]
+    return dict(counts, problems=[], moved=True, renamed=renamed)
+
+
+def copy_from_server():
+    """Write the server's inventory into this computer's CSVs (a non-empty one is renamed first: .replaced-by-server-
+    <date>.csv) and fetch the approval PDFs this computer doesn't have; then read it back and compare. Doesn't
+    disconnect. Returns {suppressors, sbrs, pdfs (fetched), renamed, problems}."""
+    import hashlib
+    server = _server()
+    sup, sbrs = server.rows()
+    listed = server.get("/api/pdfs")["pdfs"]
+    renamed = []
+    for path, rows, cols in ((SUPP, sup, COLS), (_sbrs_path(), sbrs, SBR_COLS)):
+        if _read_csv(path):
+            renamed.append(_move_aside(path, "replaced-by-server"))
+        _write_csv(path, cols, rows)
+    folder = OUT / "approved"
+    folder.mkdir(parents=True, exist_ok=True)
+    index = _approved_index(folder)
+    have = {hashlib.sha256(f.read_bytes()).hexdigest() for f in folder.glob("*.pdf")}
+    fetched = 0
+    for p in listed:
+        if p["sha256"] in have:
+            continue
+        data = server.pdf_file(p["sha256"])
+        base = re.sub(r"[^A-Za-z0-9._-]", "_", p["serial"]) or f"eForm-{p['eform_id'] or p['sha256'][:12]}"
+        name, n = f"{base}.pdf", 2
+        while (folder / name).exists():
+            name, n = f"{base}_{n}.pdf", n + 1
+        (folder / name).write_bytes(data)
+        if p["eform_id"]:
+            index[p["eform_id"]] = name
+        have.add(p["sha256"])
+        fetched += 1
+    _save_approved_index(folder, index)
+    problems = (_differences(_read_csv(SUPP), sup, COLS, "Suppressor")
+                + _differences(_read_csv(_sbrs_path()), sbrs, SBR_COLS, "SBR"))
+    return {"suppressors": len(sup), "sbrs": len(sbrs), "pdfs": fetched, "renamed": renamed, "problems": problems}
+
+
 def _sbrs_path():  # looked up when used (not at import), so it always follows DATA
     return DATA / "sbrs.csv"
 

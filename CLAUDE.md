@@ -176,7 +176,19 @@ plain CLI, kept for debugging/scripting:
   `edit_queued`, `remove_queued` (local: load/save as before; the menu's add/edit flows use them) call `_server_op`
   (fresh request_id; version from `_seen_version` = the last read, or the row's own `version`). Menu in server mode:
   everything except File, Resolve a pending row, Check approvals, Advanced and Open on my phone (filing and
-  approvals = phase 5; `save_rows` still raises `ServerReadOnly` for them).
+  approvals = phase 5; `save_rows` still raises `ServerReadOnly` for them). **Phase 4 (moving):**
+  `atf.move_to_server(try_only)`: `local_for_move()` (the CSVs + out/approved PDFs, read directly whatever the mode)
+  -> `POST /api/import` (empty server only; PDFs base64) -> read back `/api/rows` + `/api/pdfs`, `_differences`
+  field by field (`_norm`: status/built lower, dates padded; SBRs keyed by serial + eForm ID) and PDF checksums ->
+  any difference or try_only = `POST /api/import/undo` (server: allowed only while `meta import_mark` = the newest
+  change; empties the server again) -> else the CSVs are renamed `.moved-to-server-<date>.csv` (`_move_aside`, never
+  deleted). `copy_from_server()`: writes the CSVs (a non-empty one renamed `.replaced-by-server-<date>.csv` first),
+  fetches PDFs it doesn't have by checksum (`GET /api/pdfs/<sha>`) into out/approved + index, compares. Menu:
+  Settings > Where your inventory lives offers Move (when the server is empty), and on switching back Copy first /
+  Keep. Server console: `reset` (type RESET; backup first; devices/certs stay) and `restore <file>`. Tests:
+  `tests/test_move.py` runs the REAL server from server/.venv in a temp folder (skipped without it) for the round
+  trip; `server/tests/test_move.py`. The test sandbox uses its own MonkeyPatch (a test's `monkeypatch.undo()` once
+  pointed atf at the real data/); use `monkeypatch.context()` in tests.
   Settings > Where your inventory lives (`server_flow`): connect (address, compare fingerprint with the server
   page's Devices, optional tailnet name, name "PC", pairing code) / Test the connection / Use this computer's
   inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:

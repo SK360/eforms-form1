@@ -294,6 +294,7 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
     ({"eform_id", "serial", "data"}). All or nothing; refused unless the server is empty. Returns the counts."""
     pdf_dir = Path(pdf_dir)
     at = now()
+    written = []  # PDF files this import added: removed again if it fails
     conn.execute("BEGIN IMMEDIATE")
     try:
         if not is_empty(conn):
@@ -338,6 +339,7 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
                 tmp = target.with_suffix(".tmp")
                 tmp.write_bytes(data)
                 tmp.replace(target)
+                written.append(target)
             try:
                 conn.execute("INSERT INTO approval_pdfs (eform_id, serial, sha256, size, received_at) VALUES (?, ?, ?, ?, ?)",
                              (p.get("eform_id") or None, p.get("serial") or "", digest, len(data), at))
@@ -345,11 +347,94 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
                 raise Refused(f"approval PDF for eForm {p.get('eform_id')}: {_why(e)}")
             stored += 1
         _bump(conn)
+        set_meta(conn, "import_mark", str(last_change(conn)))  # undo_import is allowed while this is still the newest
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        for f in written:
+            f.unlink(missing_ok=True)
+        raise
+    return {"suppressors": len(suppressors), "sbrs": len(sbr_rows), "pdfs": stored}
+
+
+def pdfs(conn):
+    """Every stored approval PDF: eform_id, serial, sha256, size (what the app compares after moving)."""
+    return [{"eform_id": p["eform_id"] or "", "serial": p["serial"], "sha256": p["sha256"], "size": p["size"]}
+            for p in conn.execute("SELECT * FROM approval_pdfs ORDER BY id")]
+
+
+def _wipe(conn, history_where):
+    """Inside a transaction: the inventory tables emptied, and the history rows matching `history_where`."""
+    for table in ("suppressors", "sbrs", "approval_pdfs", "requests"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.execute("DROP TRIGGER history_no_delete")
+    conn.execute(f"DELETE FROM history WHERE {history_where}")
+    conn.execute("CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, "
+                 "'history is append-only'); END")
+    conn.execute("DELETE FROM meta WHERE key = 'import_mark'")
+    _bump(conn)
+
+
+def undo_import(conn, pdf_dir):
+    """Take back an import that nothing has changed since (the app's move found a difference, or was a try-out):
+    the server is empty again, as before the import."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        mark = meta(conn, "import_mark")
+        if not mark or int(mark) != last_change(conn):
+            raise Refused("Something changed on the server since the import, so it can't be taken back from here.")
+        files = [r[0] for r in conn.execute("SELECT sha256 FROM approval_pdfs")]
+        _wipe(conn, "operation = 'import'")
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    for sha in files:
+        (Path(pdf_dir) / f"{sha}.pdf").unlink(missing_ok=True)
+
+
+def reset(conn, pdf_dir, backups):
+    """Server console only: remove the whole inventory (suppressors, SBRs, approval PDFs, their history) after a
+    backup. Devices, the server's id and its certificates stay. For clearing made-up data before a real move."""
+    saved = backup(conn, backups, label=f"before-reset-{datetime.now():%Y-%m-%d-%H%M%S}")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _wipe(conn, "serial IS NOT NULL")
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    return {"suppressors": len(suppressors), "sbrs": len(sbr_rows), "pdfs": stored}
+    for f in Path(pdf_dir).glob("*.pdf"):
+        f.unlink()
+    conn.execute("VACUUM")
+    return saved
+
+
+def restore(conn, source, backups):
+    """Server console only: replace the database with a backup (after backing up the current one). The approval PDF
+    files aren't in database backups; ones still on disk are found again by their checksum."""
+    source = Path(source)
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        version = src.execute("PRAGMA user_version").fetchone()[0]
+        if not src.execute("SELECT 1 FROM sqlite_master WHERE name = 'suppressors'").fetchone() or version < 1:
+            raise Refused(f"{source.name} isn't an inventory backup.")
+        if version > SCHEMA_VERSION:
+            raise Refused(f"{source.name} is from a newer server.")
+        saved = backup(conn, backups, label=f"before-restore-{datetime.now():%Y-%m-%d-%H%M%S}")
+        src.backup(conn)
+    finally:
+        src.close()
+    migrate(conn)
+    _bump_now(conn)
+    return saved
+
+
+def _bump_now(conn):
+    conn.execute("BEGIN IMMEDIATE")
+    _bump(conn)
+    conn.execute("COMMIT")
 
 
 def _why(error):

@@ -1130,9 +1130,20 @@ def server_flow():
             _connect_server()
         return
     con.print(f"  Your inventory: [bold]on your server[/] ({escape(', '.join(s['addresses']))})")
-    what = questionary.select("Server:", choices=[
+    with con.status("Asking your server…"):
+        try:
+            on_server = atf._server(s).rows()
+        except remote.ServerError as e:
+            on_server = None
+            con.print(f"  [yellow]{escape(str(e))}[/]")
+    here = atf.local_for_move()
+    server_empty = on_server is not None and not (on_server[0] or on_server[1])
+    what = questionary.select("Server:", choices=(
+        [questionary.Choice("Move this computer's inventory to the server", "move")] if server_empty and (here[0] or here[1]) else []) + [
         questionary.Choice("Test the connection", "test"), questionary.Choice("Use this computer's inventory again", "local"),
         questionary.Choice("Back", "back")]).ask()
+    if what == "move":
+        return move_flow()
     if what == "test":
         with con.status("Asking your server…"):
             try:
@@ -1143,9 +1154,25 @@ def server_flow():
                 con.print(f"  [red]✖ {escape(str(e))}[/]")
         pause()
     elif what == "local":
-        if not questionary.confirm("Use this computer's inventory again? It's as you left it; the server keeps its own.",
-                                   default=False, auto_enter=False).ask():
+        server_has = bool(on_server and (on_server[0] or on_server[1]))
+        how = questionary.select("Use this computer's inventory again:", choices=(
+            [questionary.Choice("Copy the server's inventory to this computer first", "copy")] if server_has else []) + [
+            questionary.Choice("Keep this computer's inventory as it is" + (
+                " (it's empty: your inventory is on the server)" if server_has and not here[0] else ""), "keep"),
+            questionary.Choice("Back", "back")]).ask()
+        if how in (None, "back"):
             return
+        if how == "copy":
+            with con.status("Copying your server's inventory to this computer…"):
+                rep = atf.copy_from_server()
+            if rep["problems"]:
+                con.print("  [red]✖ The copy on this computer doesn't match the server, so you're still connected:[/]")
+                for line in rep["problems"][:10]:
+                    con.print(f"    {escape(line)}")
+                return pause()
+            con.print(f"  [green]✔[/] Copied: {rep['suppressors']} suppressors, {rep['sbrs']} SBRs, {rep['pdfs']} approval PDFs "
+                      "fetched; checked field by field." + (f" Kept the earlier files as {escape(', '.join(rep['renamed']))}."
+                                                            if rep["renamed"] else ""))
         try:
             atf._server(s).post(f"/api/devices/{s['device_id']}/revoke", {})
             removed = True
@@ -1156,6 +1183,46 @@ def server_flow():
                   + (" This computer was removed from the server's Devices." if removed else
                      " [yellow]Remove this computer under Devices on the server's page (it couldn't be reached).[/]"))
         pause()
+
+
+def move_flow():
+    """Move this computer's inventory to the (empty) server: try it first, or move it. See atf.move_to_server."""
+    sup, sbrs, pdfs = atf.local_for_move()
+    built = sum(1 for r in sup if atf.is_built(r))
+    con.print(Panel(f"This moves your inventory to your server: [bold]{len(sup)} suppressors[/] ({built} built), "
+                    f"[bold]{len(sbrs)} SBRs[/], [bold]{len(pdfs)} approval PDFs[/].\n"
+                    "Every field of every row and every PDF is checked on the server before anything changes here.\n"
+                    "Only then are this computer's inventory files renamed (…moved-to-server-<date>.csv: kept, not\n"
+                    "deleted) and the server used from then on. Any difference: the server is emptied again and\n"
+                    "nothing here changes. Settings > Where your inventory lives can copy it back any time.",
+                    title="Move your inventory to your server", border_style="cyan", expand=False))
+    how = questionary.select("Move it:", choices=[
+        questionary.Choice("Try it first (moves it, checks it, takes it back: nothing changes)", "try"),
+        questionary.Choice("Move it now", "move"), questionary.Choice("Back", "back")]).ask()
+    if how in (None, "back"):
+        return
+    if how == "move" and not questionary.confirm(f"Move {len(sup)} suppressors and {len(sbrs)} SBRs to your server now?",
+                                                 default=False, auto_enter=False).ask():
+        return
+    with con.status("Sending your inventory and checking it…"):
+        try:
+            rep = atf.move_to_server(try_only=how == "try")
+        except remote.ServerError as e:
+            con.print(f"  [red]✖ Nothing was moved: {escape(str(e))}[/]")
+            return pause()
+    what = f"{rep['suppressors']} suppressors ({rep['built']} built), {rep['sbrs']} SBRs, {rep['pdfs']} approval PDFs"
+    if rep["problems"]:
+        con.print(f"  [red]✖ The server's copy didn't match ({len(rep['problems'])} difference(s)), so nothing was moved "
+                  "and nothing here changed:[/]")
+        for line in rep["problems"][:10]:
+            con.print(f"    {escape(line)}")
+    elif not rep["moved"]:
+        con.print(f"  [green]✔ Everything matched:[/] {what}. The server was emptied again; nothing changed here.\n"
+                  "  Choose Move it now when you're ready.")
+    else:
+        con.print(f"  [green]✔ Moved and checked:[/] {what}. Your inventory is on your server now.\n"
+                  f"  [dim]This computer's files were renamed (kept): {escape(', '.join(rep['renamed']))}[/]")
+    pause()
 
 
 def _connect_server():
@@ -1208,6 +1275,12 @@ def _connect_server():
                   "  [dim]This computer's inventory is unchanged. Settings > Where your inventory lives switches back.[/]")
     except remote.ServerError as e:
         con.print(f"  [yellow]Paired, but reading the inventory failed: {escape(str(e))}[/]")
+        return pause()
+    here = atf.local_for_move()
+    if not rows and not sbrs and (here[0] or here[1]):
+        con.print("  Your server is empty.")
+        if questionary.confirm("Move this computer's inventory to it now (you can try it first)?", default=True).ask():
+            return move_flow()
     pause()
 
 

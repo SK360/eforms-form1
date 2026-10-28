@@ -2,8 +2,8 @@
 
 Optional. The helper works without it; this is for keeping one inventory on a home server that your PC and phone
 both use, at its address on your home network. Nothing else is needed: no domain, no port forwarding, no Tailscale
-(that's an optional extra for reaching it away from home, at the end). This version is **read-only with made-up
-data**: try it before any real records move.
+(that's an optional extra for reaching it away from home, at the end). Try it with made-up data first (`demo`
+below); your real inventory moves only when you choose to (section 5).
 
 ## 1. The container
 
@@ -103,14 +103,32 @@ nft add chain inet atf input '{ type filter hook input priority 0; policy accept
 nft add rule inet atf input tcp dport 8765 ip saddr != { 127.0.0.1, 192.168.1.0/24 } drop
 ```
 
-## Backups
+## 5. Moving your inventory to the server
+
+1. If you tried it with made-up data, empty it first (a backup is made; devices and certificates stay):
+   `/opt/atf-inventory/server/atf-server reset` and type RESET.
+2. In the app: Settings › Where your inventory lives › connect (if you haven't), then **Move this computer's
+   inventory to the server**. **Try it first** sends everything, checks every field of every row and every approval
+   PDF, and takes it back: nothing changes. **Move it now** does the same and, only on an exact match, renames this
+   computer's files (`data/suppressors.moved-to-server-<date>.csv`, `data/sbrs.moved-to-server-<date>.csv`; kept,
+   never deleted) and uses the server from then on. Any difference: the server is emptied again and nothing on the
+   computer changes. The approval PDFs stay in `out/approved/` on the computer as well.
+3. Back to the computer any time: Settings › Where your inventory lives › Use this computer's inventory again ›
+   **Copy the server's inventory to this computer first** (checked the same way; the server keeps its copy).
+
+Filing and Check approvals still use the computer's own inventory in this version: switch back for those.
+
+## Backups and the restore drill
 
 The server copies the database into `<data>/backups/` once a day (the last 30 are kept), safely while it runs.
 Proxmox snapshots or Proxmox Backup Server of the whole container cover the PDFs and certificate too.
-`atf-server backup` makes one now.
+`atf-server backup` makes one now; `atf-server restore <file>` puts one back (the current database is backed up
+first). Do it once as a drill after moving: `backup`, then `restore` that file, then check the counts in the app.
+The approval PDF files aren't in the database backups: Proxmox's cover them.
 
 ## Commands
 
 `/opt/atf-inventory/server/atf-server --help` (as root: it runs them as the atf user with the data folder
-`/var/lib/atf-inventory`): pair-code, devices, revoke <id>, fingerprint, import <app folder>, demo, backup.
+`/var/lib/atf-inventory`): pair-code, devices, revoke <id>, fingerprint, import <app folder>, demo, backup,
+restore <file>, reset.
 With Docker: `docker compose exec inventory python -m atf_server <command>`.

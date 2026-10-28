@@ -212,6 +212,12 @@ class Server:
         out = self.get("/api/rows")
         return out["suppressors"], out["sbrs"]
 
+    def pdf_file(self, sha256):
+        """A stored approval PDF by its checksum (from GET /api/pdfs)."""
+        status, kind, data = self._request("GET", f"/api/pdfs/{sha256}")
+        _json(status, kind, data)
+        return data
+
     def pdf(self, serial):
         """The approval PDF's bytes for a serial, or None if the server has none."""
         status, kind, data = self._request("GET", f"/pdf/{quote(serial, safe='')}")

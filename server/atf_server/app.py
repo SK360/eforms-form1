@@ -7,6 +7,8 @@ approvals come later). /api/events tells open pages when anything changed (serve
 browser gets when it pairs. Request logs name the method, path, device and status, never keys or bodies.
 """
 import asyncio
+import base64
+import binascii
 import logging
 from contextlib import contextmanager
 from datetime import datetime
@@ -180,6 +182,35 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
     def export(me=Depends(device), conn=Depends(get_db)):
         return Response(db.export_csv(conn), media_type="text/csv; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="inventory_{datetime.now():%Y-%m-%d}.csv"'})
+
+    @app.post("/api/import")
+    def do_import(body: dict, me=Depends(device), conn=Depends(get_db)):
+        """The app's move to the server: the whole inventory at once ({suppressors, sbrs} in the app's CSV shape,
+        pdfs: [{eform_id, serial, data (base64)}]), into an empty server only, all or nothing."""
+        try:
+            files = [{"eform_id": p.get("eform_id"), "serial": p.get("serial") or "", "data": base64.b64decode(p["data"], validate=True)}
+                     for p in body.get("pdfs") or []]
+        except (KeyError, TypeError, ValueError, binascii.Error):
+            raise db.Refused("An approval PDF in the import couldn't be read.")
+        return db.import_inventory(conn, pdf_dir, body.get("suppressors") or [], body.get("sbrs") or [], files,
+                                   device=me["name"])
+
+    @app.post("/api/import/undo")
+    def undo_import(me=Depends(device), conn=Depends(get_db)):
+        """Take back the last import while nothing has changed since (the app found a difference, or a try-out)."""
+        db.undo_import(conn, pdf_dir)
+        return {"ok": True}
+
+    @app.get("/api/pdfs")
+    def list_pdfs(me=Depends(device), conn=Depends(get_db)):
+        return {"pdfs": db.pdfs(conn)}
+
+    @app.get("/api/pdfs/{sha}")
+    def pdf_file(sha: str, me=Depends(device)):
+        path = pdf_dir / f"{sha}.pdf"
+        if len(sha) != 64 or not all(c in "0123456789abcdef" for c in sha) or not path.is_file():
+            return JSONResponse({"error": "No such PDF."}, status_code=404)
+        return FileResponse(path, media_type="application/pdf")
 
     @app.post("/api/ops/{name}")
     def operation(name: str, body: dict, me=Depends(device), conn=Depends(get_db)):

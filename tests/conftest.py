@@ -35,9 +35,12 @@ FIXTURE_SSN = "123-45-6789"
 
 
 @pytest.fixture(autouse=True)
-def sandbox(tmp_path, monkeypatch):
+def sandbox(tmp_path):
     """Empty data/out/forms folders; atf points at them. Restores atf.emit/ask (the menu swaps them).
-    autouse: EVERY test runs here, including one that forgets to ask for it (data/ is the user's only copy)."""
+    autouse: EVERY test runs here, including one that forgets to ask for it (data/ is the user's only copy).
+    Its own MonkeyPatch, not the test's: a test calling monkeypatch.undo() once pointed the app back at the real
+    folders (2026-10-28, it read the real server.yaml); now only this fixture's teardown undoes the sandbox."""
+    monkeypatch = pytest.MonkeyPatch()
     for d in ("data", "out", "forms", "files"):
         (tmp_path / d).mkdir()
     for name, sub in (("DATA", "data"), ("OUT", "out"), ("FORMS", "forms")):
@@ -52,6 +55,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(atf, "ask", atf.ask)
     monkeypatch.setattr(builtins, "input", lambda *a: "")
     yield tmp_path
+    monkeypatch.undo()
     # guard: a test must never touch the real data/ folder (personal records)
     after = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     assert after == before, f"a test changed the real data/ folder: {sorted(set(after.items()) ^ set(before.items()))}"
