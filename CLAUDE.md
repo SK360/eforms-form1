@@ -143,6 +143,21 @@ plain CLI, kept for debugging/scripting:
   `server/Dockerfile` (repo-root context), `compose.yaml`, `atf-inventory.service`, `LXC.md`. Tests: `server/tests`
   (`server/.venv/bin/python -m pytest -q tests` from server/; root `pytest.ini` keeps the app's run to tests/); CI
   job `server` also builds and starts the image.
+  **Phase 2 (the app reads from the server):** `src/remote.py` (stdlib only): `normalize` (bare address -> port
+  8765, *.ts.net -> 443), `probe` (unverified connect: fingerprint + /api/hello), `pair`, `Server` (addresses in
+  order, first that answers is kept in `Server.working` for the run; a non-pinned cert is accepted only if it verifies
+  normally (tailnet name); a different server_id at an address = skipped; `Unreachable` falls through to the next
+  address, other refusals don't). `data/server.yaml` (server id, addresses, fingerprint, key, device_id; chmod 600)
+  = server mode: `load_rows`/`load_sbrs` read `/api/rows` (reused 2 s), cached to `data/server_cache.json`, shown
+  with `SERVER_STATE` online/offline (offline = last data seen, read-only; nothing seen = `remote.ServerError`,
+  the menu offers Try again / Settings); `save_rows`/`save_sbrs` raise `ServerReadOnly` (so do record_builds etc.);
+  `approved_pdf_for` fetches into `out/server-pdfs/`; backfill is skipped; Check my setup has an "Inventory server"
+  line instead of the local inventory check. Menu in server mode: Inventory (views, PDFs, Excel), Settings, Quit only.
+  Settings > Where your inventory lives (`server_flow`): connect (address, compare fingerprint with the server
+  page's Devices, optional tailnet name, name "PC", pairing code) / Test the connection / Use this computer's
+  inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:
+  `tests/test_server_mode.py` (fake HTTPS server, `tests/fixtures/test_server_*.pem` test-only cert) and
+  `server/tests/test_app_client.py` (remote.py against the real server).
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
   settings (settings_problems minus the file lines), each file via `_check_file` (exists, `_online_only`: Windows

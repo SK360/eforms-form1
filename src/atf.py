@@ -82,8 +82,11 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
 
 
 def load_rows():
-    with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
-        rows = list(csv.DictReader(f))
+    if server_settings():
+        rows = [dict(r) for r in _server_inventory()[0]]
+    else:
+        with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
+            rows = list(csv.DictReader(f))
     for r in rows:
         for c in COLS:  # older files have fewer columns
             r[c] = (r.get(c) or "").strip()
@@ -165,6 +168,8 @@ def backfill_filed_dates(rows=None):
     """Fill filed_date for filed rows from out/submissions.csv (the filing log). Saves only if something changed."""
     log = OUT / "submissions.csv"
     rows = load_rows() if rows is None else rows
+    if server_settings():  # the server's records aren't changed from here (yet)
+        return rows
     if not log.exists() or not any(r["status"] in ("filed", "pending", "approved") and not r["filed_date"] for r in rows):
         return rows
     first = {}
@@ -183,6 +188,8 @@ def backfill_filed_dates(rows=None):
 
 
 def save_rows(rows):
+    if server_settings():
+        raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = SUPP.with_suffix(".csv.tmp")  # write-then-rename so a crash can't leave a half-written queue
     with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
@@ -242,6 +249,87 @@ def _token_match(want, got):
 
 
 # ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
+# ---------- Inventory server (optional: server/, connected in Settings > Where your inventory lives) ----------
+# data/server.yaml = the paired server (id, addresses, pinned certificate fingerprint, this computer's key). While it
+# exists, the inventory is the server's: this version reads it (load_rows / load_sbrs) and refuses to change it
+# (save_rows / save_sbrs raise ServerReadOnly); this computer's CSVs are left as they are and not used. When the
+# server can't be reached, the last data seen (data/server_cache.json) is shown, marked offline and read-only.
+SERVER_READ_ONLY = ("Your inventory is on your server, and this version only shows it there. To file, add, record "
+                    "builds or check approvals, use this computer's inventory: Settings > Where your inventory lives.")
+SERVER_STATE = {}  # after a read: {"online": bool, "address", "problem", "seen"}
+_FETCHED = {}
+
+
+class ServerReadOnly(Exception):
+    pass
+
+
+def _server_path():  # looked up when used (tests point DATA elsewhere)
+    return DATA / "server.yaml"
+
+
+def _server_cache_path():
+    return DATA / "server_cache.json"
+
+
+def server_settings():
+    p = _server_path()
+    return (yaml.safe_load(p.read_text(encoding="utf-8")) or None) if p.exists() else None
+
+
+def save_server_settings(settings):
+    p = _server_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    try:
+        p.chmod(0o600)  # holds this computer's key
+    except OSError:
+        pass
+    _FETCHED.clear()
+
+
+def forget_server():
+    """Back to this computer's inventory: the server settings and the offline copy go (the CSVs were never changed)."""
+    for p in (_server_path(), _server_cache_path()):
+        if p.exists():
+            p.unlink()
+    _FETCHED.clear()
+    SERVER_STATE.clear()
+
+
+def _server(settings=None):
+    import remote
+    s = settings or server_settings()
+    return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"])
+
+
+def _server_inventory():
+    """(suppressors, sbrs) from the server; reused for 2 s (one screen reads both). Unreachable: the last data seen."""
+    import time
+    import remote
+    if _FETCHED and time.monotonic() - _FETCHED["at"] < 2:
+        return _FETCHED["data"]
+    server = _server()
+    try:
+        data = server.rows()
+    except remote.ServerError as e:
+        cache = _server_cache_path()
+        if not cache.exists():
+            SERVER_STATE.update(online=False, address=None, problem=str(e), seen=None)
+            raise
+        saved = json.loads(cache.read_text(encoding="utf-8"))
+        SERVER_STATE.update(online=False, address=None, problem=str(e), seen=saved["seen"])
+        data = (saved["suppressors"], saved["sbrs"])
+    else:
+        seen = datetime.now().strftime("%m/%d/%Y %H:%M")
+        tmp = _server_cache_path().with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"seen": seen, "suppressors": data[0], "sbrs": data[1]}), encoding="utf-8")
+        tmp.replace(_server_cache_path())
+        SERVER_STATE.update(online=True, address=server.address, problem=None, seen=seen)
+    _FETCHED.update(at=time.monotonic(), data=data)
+    return data
+
+
 def _sbrs_path():  # looked up when used (not at import), so it always follows DATA
     return DATA / "sbrs.csv"
 
@@ -255,10 +343,13 @@ def is_sbr(record):
 
 
 def load_sbrs():
-    if not _sbrs_path().exists():
+    if server_settings():
+        rows = [dict(r) for r in _server_inventory()[1]]
+    elif not _sbrs_path().exists():
         return []
-    with _sbrs_path().open(newline="", encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
+    else:
+        with _sbrs_path().open(newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
     for r in rows:
         for c in SBR_COLS:
             r[c] = (r.get(c) or "").strip()
@@ -266,6 +357,8 @@ def load_sbrs():
 
 
 def save_sbrs(rows):
+    if server_settings():
+        raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = _sbrs_path().with_suffix(".csv.tmp")
     with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SBR_COLS, extrasaction="ignore")
@@ -302,7 +395,20 @@ def record_sbrs(records):
 
 
 def approved_pdf_for(row):
-    """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None."""
+    """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None.
+    With a server: the server's copy, fetched into out/server-pdfs/ (the copy there is used while it's unreachable)."""
+    if server_settings():
+        import remote
+        path = OUT / "server-pdfs" / (re.sub(r"[^A-Za-z0-9._-]", "_", row["serial_number"]) + ".pdf")
+        try:
+            data = _server().pdf(row["serial_number"])
+        except remote.ServerError:
+            return path if path.is_file() else None
+        if data is None:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
     folder = OUT / "approved"
     name = _approved_index(folder).get(row.get("eform_id", "")) if folder.exists() else None
     for candidate in filter(None, [name, f"{row['serial_number']}.pdf"]):
@@ -1457,7 +1563,17 @@ def check_setup():
             c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
                  ("ok", c[1], "stamps correctly (test serial, today's date)", c[3]))
         out += [c] if c else []
-    if SUPP.exists():
+    if server_settings():
+        import remote
+        s = server_settings()
+        try:
+            server = _server(s)
+            sup, sbrs = server.rows()
+            out.append(("ok", "Inventory server", f"reachable at {server.address} · {len(sup)} suppressors, {len(sbrs)} SBRs",
+                        server.address))
+        except remote.ServerError as e:
+            out.append(("fail", "Inventory server", str(e), ", ".join(s["addresses"])))
+    elif SUPP.exists():
         rows = load_rows()
         pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
         try:

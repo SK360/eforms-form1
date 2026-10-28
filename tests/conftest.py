@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import atf  # noqa: E402
 import ui  # noqa: E402
+import remote  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320.pdf"
 TODAY = date.today().strftime("%m/%d/%Y")
@@ -42,6 +43,9 @@ def sandbox(tmp_path, monkeypatch):
     for name, sub in (("DATA", "data"), ("OUT", "out"), ("FORMS", "forms")):
         monkeypatch.setattr(atf, name, tmp_path / sub)
     monkeypatch.setattr(atf, "SUPP", tmp_path / "data" / "suppressors.csv")
+    monkeypatch.setattr(atf, "_FETCHED", {})          # the inventory server's per-run state (server mode)
+    monkeypatch.setattr(atf, "SERVER_STATE", {})
+    monkeypatch.setattr(remote.Server, "working", {})
     real_data = ROOT / "data"
     before = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     monkeypatch.setattr(atf, "emit", atf.emit)

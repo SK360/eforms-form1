@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 import atf
+import remote
 
 con = Console(highlight=False)
 STATUS = {"approved": "[green]✔ approved[/]", "filed": "[blue]● filed[/]", "pending": "[bold yellow]⚠ pending[/]",
@@ -167,6 +168,19 @@ def home(rows):
     con.clear()
     con.print(queue_table(rows, title=f"[bold]eForms Form 1[/] [dim]v{atf.__version__}[/]"))  # no trust name: the screen gets shared
     con.print(f"  {summary(rows)}")
+    server_line()
+
+
+def server_line():
+    """With an inventory server: where the data came from (or that it's the offline copy). Nothing without one."""
+    if not atf.server_settings():
+        return
+    st = atf.SERVER_STATE
+    if st.get("online"):
+        con.print(f"  [dim]On your server ({escape(st.get('address') or '')}) · read-only in this version[/]")
+    elif st.get("seen"):
+        con.print(f"  [yellow]⚠ Your server can't be reached: this is the last data seen ({escape(st['seen'])}), read-only.[/]"
+                  f"\n  [dim]{escape(st.get('problem') or '')}[/]")
 
 
 def _days(date_str):
@@ -234,7 +248,7 @@ def inventory_flow():
             sbrs = atf.load_sbrs()
             con.print(sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
             con.print(f"  {sbr_summary(sbrs)}")
-            cond, where = [r["serial_number"] for r in sbrs if r["conditions"]], "data/sbrs.csv"
+            cond, where = [r["serial_number"] for r in sbrs if r["conditions"]], "on your server" if atf.server_settings() else "in data/sbrs.csv"
         else:
             name, keep = filters[view]
             shown = [r for r in rows if keep(r)]
@@ -242,19 +256,25 @@ def inventory_flow():
             con.print(table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
             con.print(f"  {summary(rows)}")
             cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
-            where = "data/suppressors.csv"
+            where = "in data/suppressors.csv"
+        if atf.server_settings():
+            where = "on your server"
+            server_line()
         if cond:
-            con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are in {where})[/]")
+            con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are {where})[/]")
         views = [questionary.Choice(label, key) for key, (label, _) in filters.items() if key != view]
         if view != "sbrs" and atf.load_sbrs():
             views.append(questionary.Choice("SBRs", "sbrs"))
         choices = [questionary.Choice("Show another view…", "show")]
-        if any(r["status"] == "" for r in rows):
+        server = atf.server_settings()  # read-only from the server in this version; its own page is the phone's
+        if any(r["status"] == "" for r in rows) and not server:
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
-            choices.append(questionary.Choice("Record builds", builds_flow))
+            if not server:
+                choices.append(questionary.Choice("Record builds", builds_flow))
             choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
-        choices.append(questionary.Choice("Open on my phone (same Wi-Fi)", phone_flow))
+        if not server:
+            choices.append(questionary.Choice("Open on my phone (same Wi-Fi)", phone_flow))
         choices.append(questionary.Choice("Export to Excel", export_flow))
         what = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
         if what in (None, "back"):
@@ -1089,10 +1109,105 @@ def settings_menu():
         questionary.Choice("All settings (you, your 5320.23 template, CLEO, firearm, files)" if trust_filing else
                            "All settings (you, your answers, CLEO, firearm, files)", settings_flow)]
         + ([questionary.Choice(f"Other responsible persons in the trust ({len(atf.other_rps(t))})", rps_flow)] if trust_filing else [])
-        + [questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
+        + [questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
+           questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
            questionary.Choice("Back", "back")]).ask()
     if callable(what):
         what()
+
+
+def server_flow():
+    """Settings > Where your inventory lives: this computer (the default) or your own inventory server (server/LXC.md).
+    Connecting pairs this computer with the server; it doesn't change or move this computer's inventory."""
+    s = atf.server_settings()
+    if not s:
+        con.print(Panel("Your inventory can live on your own inventory server (a small server at home: server/LXC.md in the\n"
+                        "helper's folder) instead of this computer. Connecting doesn't change or move this computer's\n"
+                        "inventory. While connected, the menu shows the server's inventory, read-only in this version;\n"
+                        "you can switch back here any time.", title="Where your inventory lives", border_style="cyan", expand=False))
+        what = questionary.select("Your inventory:", choices=[
+            questionary.Choice("Keep it on this computer", "back"), questionary.Choice("Connect to my server", "connect")]).ask()
+        if what == "connect":
+            _connect_server()
+        return
+    con.print(f"  Your inventory: [bold]on your server[/] ({escape(', '.join(s['addresses']))})")
+    what = questionary.select("Server:", choices=[
+        questionary.Choice("Test the connection", "test"), questionary.Choice("Use this computer's inventory again", "local"),
+        questionary.Choice("Back", "back")]).ask()
+    if what == "test":
+        with con.status("Asking your server…"):
+            try:
+                server = atf._server(s)
+                sup, sbrs = server.rows()
+                con.print(f"  [green]✔[/] Your server answers at {escape(server.address)}: {len(sup)} suppressors, {len(sbrs)} SBRs.")
+            except remote.ServerError as e:
+                con.print(f"  [red]✖ {escape(str(e))}[/]")
+        pause()
+    elif what == "local":
+        if not questionary.confirm("Use this computer's inventory again? It's as you left it; the server keeps its own.",
+                                   default=False, auto_enter=False).ask():
+            return
+        try:
+            atf._server(s).post(f"/api/devices/{s['device_id']}/revoke", {})
+            removed = True
+        except remote.ServerError:
+            removed = False
+        atf.forget_server()
+        con.print("  [green]✔[/] This computer's inventory is used again."
+                  + (" This computer was removed from the server's Devices." if removed else
+                     " [yellow]Remove this computer under Devices on the server's page (it couldn't be reached).[/]"))
+        pause()
+
+
+def _connect_server():
+    address = questionary.text("Your server's address on your home network (like 192.168.1.138):").ask()
+    if not address:
+        return
+    with con.status("Looking for your server…"):
+        try:
+            found = remote.probe(address)
+        except remote.ServerError as e:
+            con.print(f"  [red]✖ {escape(str(e))}[/]")
+            return pause()
+    if found["api"] != remote.API:
+        newer = "the helper" if (found["api"] or 0) > remote.API else "the server"
+        con.print(f"  [red]✖ That server speaks version {escape(str(found['api']))} and this helper speaks {remote.API}: "
+                  f"update {newer} first.[/]")
+        return pause()
+    con.print(f"  Found [bold]{escape(found['name'] or 'an inventory server')}[/] (server {escape(found['version'] or '?')}) at "
+              f"{escape(found['address'])}.\n  Its certificate fingerprint:\n  [bold]{escape(found['fingerprint'])}[/]\n"
+              "  [dim]On the server's page (your phone): Devices > Server certificate shows the one it really has.[/]")
+    if not questionary.confirm("Do they match?", default=False, auto_enter=False).ask():
+        con.print("  Not connected. [dim](If they differ, something else answered at that address.)[/]")
+        return pause()
+    other = questionary.text("Its tailnet name, if it has one (optional; Enter to skip):").ask()
+    if other is None:
+        return
+    try:
+        others = [remote.normalize(other)] if other.strip() else []
+    except remote.ServerError as e:
+        con.print(f"  [red]✖ {escape(str(e))}[/]")
+        return pause()
+    name = questionary.text("A name for this computer (shown under Devices):", default="PC").ask()
+    code = name and questionary.text("Pairing code (on the server's page: Devices > Add a device):",
+                                     validate=lambda v: bool(re.fullmatch(r"\s*\d{6}\s*", v)) or "Enter the 6 digits").ask()
+    if not code:
+        return
+    try:
+        paired = remote.pair(found, code, name.strip() or "PC")
+    except remote.ServerError as e:
+        con.print(f"  [red]✖ Not connected: {escape(str(e))}[/]")
+        return pause()
+    atf.save_server_settings({"server_id": found["server_id"], "name": found["name"], "addresses": [found["address"]] + others,
+                              "fingerprint": found["fingerprint"], "key": paired["key"], "device_id": paired["device_id"],
+                              "this_computer": name.strip() or "PC", "paired": date.today().strftime("%m/%d/%Y")})
+    try:
+        rows, sbrs = atf.load_rows(), atf.load_sbrs()
+        con.print(f"  [green]✔ Connected:[/] the menu now shows your server's inventory ({len(rows)} suppressors, {len(sbrs)} SBRs).\n"
+                  "  [dim]This computer's inventory is unchanged. Settings > Where your inventory lives switches back.[/]")
+    except remote.ServerError as e:
+        con.print(f"  [yellow]Paired, but reading the inventory failed: {escape(str(e))}[/]")
+    pause()
 
 
 def check_setup_flow():
@@ -1112,7 +1227,9 @@ def check_setup_flow():
         con.print(f"  {f'[red]{fails} to fix[/]' if fails else ''}{' · ' if fails and warns else ''}"
                   f"{f'[yellow]{warns} to look at[/]' if warns else ''}  [dim]({escape(cli)} check-setup shows the file paths)[/]")
     else:
-        con.print("  [green]✔ Everything a filing needs is in place.[/] [dim]Logging in to eForms isn't checked.[/]")
+        con.print("  [green]✔ Everything a filing needs is in place.[/] [dim]Logging in to eForms isn't checked.[/]"
+                  + ("\n  [dim]Filing uses this computer's inventory: Settings > Where your inventory lives switches back.[/]"
+                     if atf.server_settings() else ""))
     pause()
 
 
@@ -1203,11 +1320,25 @@ def menu():
     atf.emit, atf.ask = P.emit, P.ask
     if not (atf.DATA / "trust.yaml").exists():
         settings_flow(first=True)
-    if not atf.SUPP.exists():
-        atf.save_rows([])
-    atf.backfill_filed_dates()
+    if not atf.server_settings():
+        if not atf.SUPP.exists():
+            atf.save_rows([])
+        atf.backfill_filed_dates()
     while True:
-        rows = atf.load_rows()
+        server = atf.server_settings()
+        try:
+            rows = atf.load_rows()
+        except remote.ServerError as e:  # unreachable, and nothing seen yet to show
+            con.clear()
+            con.print(f"[bold]eForms Form 1[/] [dim]v{atf.__version__}[/]\n  [red]✖ Your inventory server can't be reached: "
+                      f"{escape(str(e))}[/]")
+            what = questionary.select("What next?", choices=[questionary.Choice("Try again", "again"),
+                                      questionary.Choice("Settings", settings_menu), questionary.Choice("Quit", "quit")]).ask()
+            if what in (None, "quit"):
+                return
+            if callable(what):
+                what()
+            continue
         home(rows)
         probs = atf.settings_problems()
         if probs:
@@ -1215,20 +1346,21 @@ def menu():
         queued = [r["serial_number"] for r in rows if r["status"] not in atf.SKIP]
         pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
         choices = []
+        if server:  # read-only from the server in this version
+            pending = queued = []
         if pending:
             choices.append(questionary.Choice(f"⚠ Resolve a pending row ({', '.join(pending)})", resolve_flow))
         if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
-        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
-        if any(r["status"] == "approved" and not atf.is_built(r) for r in rows):
+        choices += [questionary.Choice("Inventory", inventory_flow)] + ([] if server else [questionary.Choice("Add suppressors", add_flow)])
+        if any(r["status"] == "approved" and not atf.is_built(r) for r in rows) and not server:
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if queued:
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
-        choices += [
-                    questionary.Choice("Check approvals on eForms", approvals_flow),
-                    questionary.Choice("Settings", settings_menu),
-                    questionary.Choice("Advanced…", advanced_flow),
+        choices += ([] if server else [questionary.Choice("Check approvals on eForms", approvals_flow)]) + [
+                    questionary.Choice("Settings", settings_menu)] + ([] if server else [
+                    questionary.Choice("Advanced…", advanced_flow)]) + [
                     questionary.Choice("Quit", "quit")]
         what = questionary.select("What next?", choices=choices).ask()
         if what in (None, "quit"):
@@ -1243,6 +1375,10 @@ def menu():
         except KeyboardInterrupt:
             P.finish()
             con.print("\n  [yellow]Stopped.[/]")
+            pause()
+        except (atf.ServerReadOnly, remote.ServerError) as e:
+            P.finish()
+            con.print(f"  [yellow]{escape(str(e))}[/]")
             pause()
         except Exception as e:  # anything unexpected: a short message, the details in a file, and back to the menu
             P.finish()
