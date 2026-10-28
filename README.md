@@ -36,13 +36,12 @@ are shown in the confirmation, then read back on the verify page, with your citi
 ![Read-back as an individual](docs/screenshots/09-individual-readback.png)
 
 **Inventory** (suppressors and SBRs) and **Check approvals**, which reads your approved Form 1s from eForms and
-compares them with your records.
+compares them with your records. Your inventory on your phone: see [Your inventory in a browser](#your-inventory-in-a-browser-phone-or-computer).
 
 ![Inventory](docs/screenshots/05-inventory.png)
 ![SBR inventory](docs/screenshots/06-sbrs.png)
 ![Finding the serial for a build](docs/screenshots/11-build-serial.png)
 ![Check my setup](docs/screenshots/12-check-setup.png)
-<img src="docs/screenshots/13-phone-list.png" alt="Inventory on a phone" width="260"> <img src="docs/screenshots/14-phone-detail.png" alt="One suppressor on a phone" width="260">
 ![Recording builds](docs/screenshots/10-builds.png)
 ![Check approvals](docs/screenshots/07-approvals.png)
 
@@ -166,14 +165,8 @@ stray keypress can't start anything). Then:
   and/or list (`A101-A110, A115`) or tick them in a list; it then asks the design of each one (typed in, e.g. "PCC
   Short"), shows them all, and saves when you confirm. Only approved suppressors can be marked built. The design can
   be changed, or the build record cleared, later.
-- **Open on my phone** (in Inventory, or `./atf serve`): shows a QR code; scan it with your phone's camera (same
-  Wi-Fi) and your inventory opens in the phone's browser. Search by typing a serial's digits on the number pad (`83`
-  finds A083) or by design, filter (built, not built, waiting, SBRs), see each one's details and open its approval
-  PDF, and switch **Built** on or off with its design, for walking through your safes and bags. That switch is the
-  only thing it can change, and only for approved suppressors. Nothing goes to the internet: the page comes from
-  your computer while you leave it open, and the link (with a key made for that run) stops working when you press
-  Enter. Safari's Share > Add to Home Screen makes it open like an app. If the phone can't connect, allow Python
-  through your computer's firewall when asked.
+- **Open on my phone** (in Inventory, or `./atf serve`): your inventory in your phone's browser, from a QR code. See
+  [Your inventory in a browser](#your-inventory-in-a-browser-phone-or-computer).
 - **Building one? Find the serial to use**: pick the caliber (from your inventory) and type the overall length of what
   you're building; it gives the first approved, not built serial of that caliber approved at that length **or longer**
   (an approval for 12" is good for a 5" build), lists the others that fit, and can record it as built right there.
@@ -199,6 +192,57 @@ stray keypress can't start anything). Then:
   capture portal pages if ATF changes the site.
 
 Ctrl-C is safe at any point: it logs you out of eForms first (eForms allows one session at a time).
+
+## Your inventory in a browser (phone or computer)
+The same page shows your inventory in any browser: a phone at the safe, a tablet, another computer. It looks the same
+both ways; what differs is where it comes from.
+
+<img src="docs/screenshots/13-phone-list.png" alt="Inventory on a phone" width="260"> <img src="docs/screenshots/14-phone-detail.png" alt="One suppressor on a phone" width="260">
+
+On it: search by typing a serial's digits on the number pad (`83` finds A083), or switch to letters (ABC) to search
+by design; filter (All, Built, Not built, Waiting, Queued, SBRs); open one to see its details and its approval PDF;
+and switch **Built** on or off with its design, for walking through your safes and bags. That switch is the only
+thing the page can change, and only for approved suppressors. On a wide screen the list and the details sit side by
+side. In Safari, Share > Add to Home Screen gives it an icon.
+
+### From the helper: Inventory > Open on my phone
+Nothing to set up. The helper shows a QR code: scan it with your phone's camera (the phone must be on the same Wi-Fi)
+and the page opens. `./atf serve` does the same from the command line.
+
+![Open on my phone](docs/screenshots/15-phone-qr.png)
+
+- It works **only while you leave it open**: press Enter in the helper and the link stops working. Each time you open
+  it, the link carries a new key, so an old link or a screenshot of the QR code is no use later.
+- It's plain HTTP on your home network, from your computer. Nothing goes to the internet.
+- If the phone can't connect, allow Python through your computer's firewall when it asks.
+
+### From your inventory server (optional)
+If you set up the optional [inventory server](server/README.md), the page is **always there** at
+`https://<the server's address>:8765`, for every phone you pair, whether or not your computer is on. On top of the
+above it shows each suppressor's history, updates by itself when anything changes (on another phone or the helper),
+and has a Devices page. You set it up once per phone:
+
+1. **Open the address.** The first time, the browser warns that the connection isn't private (the server has its own
+   certificate). On an iPhone: Show Details, then visit this website.
+2. **Trust the server, once** (optional, but it stops that warning for good): open **Trust this server on this
+   device** and follow it. Download the certificate. On an iPhone, Settings > Profile Downloaded > Install, **then
+   turn it on** in Settings > General > About > Certificate Trust Settings > ATF inventory server CA (installing alone
+   isn't enough). On Android, install it as a CA certificate under Settings > Security. Close the tab and open the
+   address again.
+3. **Pair it**: enter a 6-digit code made under **Devices > Add a device** on a phone that's already paired (or with
+   `atf-server pair-code` on the server, for the first one). Give it a name so you'll recognise it.
+
+<img src="docs/screenshots/16-server-pair.png" alt="Pairing a phone with the server, Trust this server open" width="260"> <img src="docs/screenshots/17-server-detail.png" alt="A suppressor with its history" width="260"> <img src="docs/screenshots/18-server-devices.png" alt="Devices, with a pairing code" width="260">
+
+- **Devices** lists every paired phone and computer; **Remove** (tap twice) cuts one off at once, for a lost phone.
+- A browser pairs per address: if you also reach the server another way (for example through your own VPN), pair
+  there too.
+- **History** lists what happened to a suppressor and from which device. When something was built is never recorded:
+  only whether it's built, and its design.
+- Away from home it works only if you add your own VPN; nothing needs one.
+
+The helper on your computer connects to the server separately: Settings > **Where your inventory lives** (see the
+[server's page](server/README.md)).
 
 ## Your records
 `data/suppressors.csv` is your inventory, one row per suppressor: caliber, serial, overall length, status, application

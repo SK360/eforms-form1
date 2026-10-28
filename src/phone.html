@@ -57,6 +57,7 @@ a{color:var(--accent);text-decoration:none}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
 #toast.show{opacity:1}
 .foot{margin:14px 4px 2px;font-size:14px;color:var(--muted)}.foot button{border:0;background:none;padding:0;color:var(--accent);font-size:14px;cursor:pointer}
+.build .sub,.hist .sub{white-space:normal}  /* explanations wrap; list rows keep one line */
 .hint{font-size:15px;color:var(--muted);margin:0 4px 8px}.hint code{font-family:var(--mono);font-size:14px}
 .hist{margin-top:16px}.hist h2,.devs h2{font-size:15px;font-weight:600;margin:0 0 2px}
 .code{font-family:var(--mono);font-size:40px;font-weight:600;letter-spacing:6px;margin:8px 0 2px}
