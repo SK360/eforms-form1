@@ -193,9 +193,11 @@ function trustHelp(fingerprint) {
   if (!OWN_HTTPS) return "";
   return `<details class="hist" id="trust"><summary><b>Trust this server on this device</b> <span class="sub">(once: no more security warning here)</span></summary>
     <p class="hint" style="margin:8px 0">1. <a href="/ca.crt" id="cadl">Download its certificate</a> and allow the download.<br>
-    2. iPhone/iPad: Settings › Profile Downloaded › Install. Then Settings › General › About › Certificate Trust Settings:
-    turn on <b>ATF inventory server CA</b>.<br>Android: open the file, or Settings › Security › Install a certificate › CA certificate.<br>
-    3. Reload this page.</p>
+    2. iPhone/iPad: Settings › Profile Downloaded › Install.<br>
+    3. <b>Then turn it on</b> (installing alone isn't enough): Settings › General › About › Certificate Trust Settings
+    (at the bottom) › <b>ATF inventory server CA</b>.<br>
+    Android instead: open the file, or Settings › Security › Install a certificate › CA certificate.<br>
+    4. Close this tab (or Safari) and open this address again: no "Not Secure" any more.</p>
     ${fingerprint ? `<div class="fp">${esc(fingerprint)}</div><div class="sub">Its fingerprint: the same as the server's log and the app on your PC show.</div>` : ""}
   </details>`;
 }

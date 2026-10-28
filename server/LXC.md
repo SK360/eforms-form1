@@ -62,9 +62,10 @@ never leaves the server.)
 1. On the phone, open `https://<its-address>:8765` (for example `https://192.168.1.138:8765`). The first time,
    Safari warns that the connection isn't private: tap Show Details, then visit this website.
 2. Open **Trust this server on this device** and follow it: download the certificate, then on an iPhone
-   Settings › Profile Downloaded › Install, and Settings › General › About › Certificate Trust Settings › turn on
-   **ATF inventory server CA**. (Android: install it as a CA certificate under Settings › Security.) Its fingerprint
-   is in `journalctl -u atf-inventory` to compare. Reload: no more warning.
+   Settings › Profile Downloaded › Install, **and then turn it on**: Settings › General › About › Certificate Trust
+   Settings › **ATF inventory server CA** (installing the profile alone isn't enough; Safari keeps saying "Not
+   Secure"). Android: install it as a CA certificate under Settings › Security. Its fingerprint is in
+   `journalctl -u atf-inventory` to compare. Close the tab and open the address again: no more warning.
 3. Pair: enter the code from `journalctl -u atf-inventory` (made at first start, valid 5 minutes). A new one any time:
    `/opt/atf-inventory/server/atf-server pair-code`. After that, more devices are added from the page:
    Devices > Add a device.
