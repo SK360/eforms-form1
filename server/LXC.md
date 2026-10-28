@@ -7,12 +7,14 @@ both use. Phase 1 (this version) is **read-only with made-up data**: try it befo
 
 In Proxmox, create a container:
 
-- Template: **Debian 12**. **Unprivileged**. Hostname `atf-inventory` (this becomes its tailnet name).
+- Template: **Debian 13** (Debian 12 works too). **Unprivileged**. Hostname `atf-inventory` (this becomes its tailnet name).
 - 1 core, 512 MB memory, 4 GB disk is plenty.
 - Network: DHCP, then give it a **DHCP reservation** on your router so its address never changes.
-- Turn on **nesting** (Options > Features) only if you'll use Docker inside it.
+- Leave **nesting** on (Options > Features; Proxmox's default, and needed for Docker inside it).
 
-Tailscale needs the TUN device. On the Proxmox host, add to `/etc/pve/lxc/<id>.conf`, then restart the container:
+Tailscale needs the TUN device. On Proxmox 8.1 or newer: `pct set <id> --dev0 /dev/net/tun` on the host (or
+Resources > Add > Device Passthrough), then restart the container. On older versions, add to
+`/etc/pve/lxc/<id>.conf` instead:
 
 ```
 lxc.cgroup2.devices.allow: c 10:200 rwm
@@ -24,7 +26,7 @@ lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 In the container's console:
 
 ```bash
-apt update && apt install -y git python3-venv
+apt update && apt install -y git python3-venv curl
 useradd --system --home /var/lib/atf-inventory --create-home atf
 git clone https://github.com/SK360/eforms-form1.git /opt/atf-inventory
 cd /opt/atf-inventory && git checkout server
@@ -37,7 +39,7 @@ journalctl -u atf-inventory -n 20      # shows the first pairing code and the ce
 Made-up inventory to try it with (only into an empty server):
 
 ```bash
-sudo -u atf env ATF_DATA=/var/lib/atf-inventory /opt/atf-inventory/server/.venv/bin/python -m atf_server demo
+/opt/atf-inventory/server/atf-server demo
 ```
 
 Updating later: `cd /opt/atf-inventory && git pull && systemctl restart atf-inventory` (the server backs up the
@@ -63,7 +65,7 @@ console, an access rule can limit it to your own devices.
 
 1. On the phone (on the tailnet), open `https://atf-inventory.<your-tailnet>.ts.net`. It asks for a pairing code.
 2. Enter the code from `journalctl -u atf-inventory` (made at first start, valid 5 minutes). A new one any time:
-   `sudo -u atf env ATF_DATA=/var/lib/atf-inventory /opt/atf-inventory/server/.venv/bin/python -m atf_server pair-code`
+   `/opt/atf-inventory/server/atf-server pair-code`
 3. After that, more devices are added from the page: Devices > Add a device.
 
 The local address (`https://<its-ip>:8765`) is for the app on your PC (phase 2), which checks the server's certificate
@@ -84,9 +86,10 @@ nft add rule inet atf input tcp dport 8765 ip saddr != { 127.0.0.1, 192.168.1.0/
 
 The server copies the database into `<data>/backups/` once a day (the last 30 are kept), safely while it runs.
 Proxmox snapshots or Proxmox Backup Server of the whole container cover the PDFs and certificate too.
-`python -m atf_server backup` makes one now.
+`atf-server backup` makes one now.
 
 ## Commands
 
-`python -m atf_server --help`: serve, pair-code, devices, revoke <id>, fingerprint, import <app folder>, demo, backup.
-The data folder is `$ATF_DATA`.
+`/opt/atf-inventory/server/atf-server --help` (as root: it runs them as the atf user with the data folder
+`/var/lib/atf-inventory`): pair-code, devices, revoke <id>, fingerprint, import <app folder>, demo, backup.
+With Docker: `docker compose exec inventory python -m atf_server <command>`.

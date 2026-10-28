@@ -6,3 +6,4 @@ atf       text eol=lf
 *.yaml    text eol=lf
 *.pdf     binary
 .githooks/*  text eol=lf
+server/atf-server  text eol=lf
