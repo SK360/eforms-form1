@@ -177,7 +177,7 @@ def server_line():
         return
     st = atf.SERVER_STATE
     if st.get("online"):
-        con.print(f"  [dim]On your server ({escape(st.get('address') or '')}) · read-only in this version[/]")
+        con.print(f"  [dim]On your server ({escape(st.get('address') or '')}) · filing and approvals use this computer's inventory for now[/]")
     elif st.get("seen"):
         con.print(f"  [yellow]⚠ Your server can't be reached: this is the last data seen ({escape(st['seen'])}), read-only.[/]"
                   f"\n  [dim]{escape(st.get('problem') or '')}[/]")
@@ -266,12 +266,11 @@ def inventory_flow():
         if view != "sbrs" and atf.load_sbrs():
             views.append(questionary.Choice("SBRs", "sbrs"))
         choices = [questionary.Choice("Show another view…", "show")]
-        server = atf.server_settings()  # read-only from the server in this version; its own page is the phone's
-        if any(r["status"] == "" for r in rows) and not server:
+        server = atf.server_settings()  # with a server, its own page is the phone's
+        if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
-            if not server:
-                choices.append(questionary.Choice("Record builds", builds_flow))
+            choices.append(questionary.Choice("Record builds", builds_flow))
             choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
         if not server:
             choices.append(questionary.Choice("Open on my phone (same Wi-Fi)", phone_flow))
@@ -333,8 +332,7 @@ def edit_queued_flow():
         return
     if what == "remove":
         if questionary.confirm(f"Remove {r['serial_number']} from the queue?", default=False).ask():
-            del rows[i]
-            atf.save_rows(rows)
+            atf.remove_queued(r["serial_number"], r.get("version"))
             con.print(f"  [green]✔[/] Removed {escape(r['serial_number'])}")
             pause()
         return
@@ -346,8 +344,8 @@ def edit_queued_flow():
     v = questionary.text(label, default=r[what], validate=check).ask()
     if v is None:
         return
+    atf.edit_queued(r["serial_number"], {what: v.strip()}, r.get("version"))
     r[what] = v.strip()
-    atf.save_rows(rows)
     con.print(f"  [green]✔[/] Updated {escape(r['serial_number'])}")
     pause()
 
@@ -573,8 +571,9 @@ def add_flow():
         if n > 1 and not questionary.confirm(f"Add {serials[0]} – {serials[-1]} ({n} suppressors), caliber {cal.strip()}, "
                                              f"{length.strip()}\"?", default=True).ask():
             continue
-        rows += [{"caliber": cal.strip(), "serial_number": x, "overall_length": length.strip(), "status": ""} for x in serials]
-        atf.save_rows(rows)
+        new = [{"caliber": cal.strip(), "serial_number": x, "overall_length": length.strip(), "status": ""} for x in serials]
+        atf.add_queued(new)
+        rows += new
         con.print(f"  [green]✔[/] Added {what}, caliber {escape(cal.strip())}, {escape(length.strip())}\"")
         if not questionary.confirm("Add more?", default=False).ask():
             return
@@ -1348,17 +1347,15 @@ def menu():
         queued = [r["serial_number"] for r in rows if r["status"] not in atf.SKIP]
         pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
         choices = []
-        if server:  # read-only from the server in this version
-            pending = queued = []
-        if pending:
+        if pending and not server:  # filing and its pending rows stay with this computer's inventory for now
             choices.append(questionary.Choice(f"⚠ Resolve a pending row ({', '.join(pending)})", resolve_flow))
-        if queued:
+        if queued and not server:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
-        choices += [questionary.Choice("Inventory", inventory_flow)] + ([] if server else [questionary.Choice("Add suppressors", add_flow)])
-        if any(r["status"] == "approved" and not atf.is_built(r) for r in rows) and not server:
+        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
+        if any(r["status"] == "approved" and not atf.is_built(r) for r in rows):
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
-        if queued:
+        if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
         choices += ([] if server else [questionary.Choice("Check approvals on eForms", approvals_flow)]) + [
                     questionary.Choice("Settings", settings_menu)] + ([] if server else [

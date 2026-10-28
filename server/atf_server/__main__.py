@@ -66,7 +66,7 @@ def serve(args):
         print(f"Server CA fingerprint: {tls.fingerprint(ca)}\nHTTPS for: {', '.join(tls.addresses())}", flush=True)
     threading.Thread(target=_daily_backups, args=(folder,), daemon=True).start()
     app = create_app(folder, name=os.environ.get("ATF_SERVER_NAME") or "ATF inventory", ca=ca)
-    uvicorn.run(app, host=args.host, port=args.port, access_log=False, proxy_headers=False, **ssl)
+    uvicorn.run(app, host=args.host, port=args.port, access_log=False, proxy_headers=False, timeout_graceful_shutdown=3, **ssl)
 
 
 def main(argv=None):

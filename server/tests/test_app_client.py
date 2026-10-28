@@ -46,6 +46,14 @@ def test_the_app_pairs_and_reads(https, filled):
     assert len(sup) == 38 and sup[0]["serial_number"] == "A101" and sup[0]["built"] == "yes" and len(sbrs) == 2
     assert server.pdf("A101").startswith(b"%PDF") and server.pdf("A130") is None
     assert [d["name"] for d in db.devices(filled)] == ["PC"]
+    # the app's operations (src/atf.py _server_op): same names and bodies the server takes
+    server.post("/api/ops/set_built", {"request_id": "a1", "items": [{"serial": "A110", "design": "PCC", "version": 1}]})
+    server.post("/api/ops/add_queued", {"request_id": "a2", "rows": [{"serial_number": "A139", "caliber": "9", "overall_length": "12"}]})
+    server.post("/api/ops/edit_queued", {"request_id": "a3", "serial": "A139", "changes": {"caliber": "45"}, "version": 1})
+    server.post("/api/ops/remove_queued", {"request_id": "a4", "serial": "A139", "version": 2})
+    with pytest.raises(remote.ServerError, match="changed on another device"):
+        server.post("/api/ops/clear_built", {"request_id": "a5", "serial": "A110", "version": 1})
+    assert db.row(filled, "A110")["design"] == "PCC" and db.row(filled, "A139") is None
     server.post(f"/api/devices/{paired['device_id']}/revoke", {})
     remote.Server.working.clear()
     with pytest.raises(remote.ServerError, match="doesn't know this computer"):

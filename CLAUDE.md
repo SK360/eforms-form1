@@ -133,10 +133,17 @@ plain CLI, kept for debugging/scripting:
   columns; status queued/pending/filed/approved/disapproved/skip, "" in CSV = queued; ISO dates inside, MM/DD/YYYY
   out; built only while approved; version bumped by trigger), sbrs, approval_pdfs (files `<data>/approved/<sha256>.pdf`),
   history (append-only by trigger), devices (key hashes), meta (server_id, pair_code). Writes are named operations
-  in one transaction with a history row; phase 1 has only `import_inventory` (empty server only, all or nothing) and
+  in one transaction with a history row: `import_inventory` (empty server only, all or nothing) and, since phase 3,
+  `operate(conn, name, body, device)` with `OPERATIONS` set_built {items: [{serial, design, version}]} (approved
+  only, all or nothing), clear_built, add_queued {rows}, edit_queued {serial, changes, version} (queued only;
+  serial_number/caliber/overall_length), remove_queued. `version` given and stale = `Conflict` (409 + the rows as they
+  are now); `request_id` seen before = the stored answer (table `requests`, schema 2). `last_change` = max history id
+  (what `/api/events` watches, 1 s, so CLI writes show too). And
   pairing (6-digit code, 5 min, one use, 5 wrong tries kill it). `app.py`: the page is `src/phone.html` (copied into
   the image), auth = `Authorization: Bearer` (the app) or the HttpOnly cookie a browser gets when pairing; POSTs
-  must be JSON (CSRF); `/api/inventory` = the PC page's shape + `can_build: false` + `server`; `/api/rows` = full CSV
+  must be JSON (CSRF); `/api/inventory` = the PC page's shape + `version` + `can_build: true` + `server`; `POST /api/ops/<name>`;
+  `/api/events` (server-sent events: `change` when the history grows; the page reloads, but not over a design being
+  typed or a Keep/Clear question); `/api/rows` = full CSV
   shape. The page, when `data.server` is set: pairing screen on 401, history per serial, Devices (`#:devices`: add a
   device = code, remove = tap twice), Export CSV. **No tailnet is ever required** (the user's rule, 2026-10-28):
   everything, the phone page included, works at the home-network address; Tailscale (`tailscale serve`) is an
@@ -161,7 +168,11 @@ plain CLI, kept for debugging/scripting:
   with `SERVER_STATE` online/offline (offline = last data seen, read-only; nothing seen = `remote.ServerError`,
   the menu offers Try again / Settings); `save_rows`/`save_sbrs` raise `ServerReadOnly` (so do record_builds etc.);
   `approved_pdf_for` fetches into `out/server-pdfs/`; backfill is skipped; Check my setup has an "Inventory server"
-  line instead of the local inventory check. Menu in server mode: Inventory (views, PDFs, Excel), Settings, Quit only.
+  line instead of the local inventory check. **Phase 3:** `record_builds`, `clear_build` and the new `add_queued`,
+  `edit_queued`, `remove_queued` (local: load/save as before; the menu's add/edit flows use them) call `_server_op`
+  (fresh request_id; version from `_seen_version` = the last read, or the row's own `version`). Menu in server mode:
+  everything except File, Resolve a pending row, Check approvals, Advanced and Open on my phone (filing and
+  approvals = phase 5; `save_rows` still raises `ServerReadOnly` for them).
   Settings > Where your inventory lives (`server_flow`): connect (address, compare fingerprint with the server
   page's Devices, optional tailnet name, name "PC", pairing code) / Test the connection / Use this computer's
   inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:

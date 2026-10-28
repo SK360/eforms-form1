@@ -54,7 +54,7 @@ def test_pair_and_browse(running, filled, engine, ca_fp):
         page.wait_for_selector("#detailView .big")                     # paired: the page, opened at A101
         assert page.url.endswith("#A101") and page.is_visible("#detailView")
         detail = page.inner_text("#detailView")
-        assert "PCC Short" in detail and "Read-only on the server for now" in detail and page.is_disabled("#sw")
+        assert page.input_value("#design") == "PCC Short" and "Made, in your inventory" in detail and page.is_enabled("#sw")
         page.wait_for_selector("#hist .kv")
         assert "Added (import)" in page.inner_text("#hist")
         page.click("#back")
@@ -126,3 +126,46 @@ def https_running(filled, data_dir, tls_dir):
     yield f"https://127.0.0.1:{port}"
     server.should_exit = True
     thread.join(5)
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_builds_from_two_phones(running, filled, engine):
+    """Two paired phones: one marks a build, the other's page updates by itself (live updates), the history names the
+    phone; a page still showing an old version can't overwrite the newer change."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as pw:
+        try:
+            browser = getattr(pw, engine).launch()
+        except playwright.Error:
+            pytest.skip(f"Playwright {engine} isn't installed")
+        phones = []
+        for name in ("Phone one", "Phone two"):
+            page = browser.new_context(viewport={"width": 390, "height": 844}).new_page()
+            page.set_default_timeout(8000)
+            code, _ = db.new_pair_code(filled)
+            page.goto(running + "/s/A110")
+            page.fill("#code", code)
+            page.fill("#devname", name)
+            page.click("#pairbtn")
+            page.wait_for_selector("#sw[aria-checked='false']")
+            phones.append(page)
+        one, two = phones
+        one.click("#sw")                                                # one: built, then its design
+        one.wait_for_selector("#design")
+        one.fill("#design", "Rimfire 12in")
+        one.click("#save")
+        two.wait_for_selector("#sw[aria-checked='true']")               # two: updated without a reload
+        assert two.input_value("#design") == "Rimfire 12in"
+        two.wait_for_selector("#hist :text('Phone one')")
+        assert "Built · Rimfire 12in · Phone one" in two.inner_text("#hist")
+        two.evaluate("live.close()")                                    # two stops listening: it now shows an old version
+        one.click("#sw")
+        one.click("#clear")
+        one.wait_for_selector("#sw[aria-checked='false']")
+        two.fill("#design", "Pistol 9")
+        two.click("#save")                                              # based on the old version: refused, then shown
+        two.wait_for_selector("#sw[aria-checked='false']")
+        assert "another device" in two.inner_text("#toast")
+        row = db.row(filled, "A110")
+        assert (row["built"], row["design"]) == ("", "")
+        browser.close()

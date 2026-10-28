@@ -87,6 +87,11 @@ def _fake(own_ca):
                 return self._send(200, {"key": "k1", "device_id": 7, "server_id": state["server_id"]})
             if self._authed() and self.path == "/api/devices/7/revoke":
                 return self._send(200, {"ok": True})
+            if self._authed() and self.path.startswith("/api/ops/"):         # every row is at version 1 here
+                versions = [i.get("version") for i in body.get("items", [])] + [body.get("version")]
+                if any(v not in (None, 1) for v in versions):
+                    return self._send(409, {"error": "A101 was changed on another device since you looked.", "rows": []})
+                return self._send(200, {"ok": True, "rows": []})
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), H)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -163,10 +168,8 @@ def test_reads_come_from_the_server(fake, configured):
     assert atf.load_rows()[1]["status"] == "" and atf.is_built(atf.load_rows()[0])
     assert [r["serial_number"] for r in atf.load_sbrs()] == ["R1"]
     assert atf.SERVER_STATE["online"] and atf.SERVER_STATE["address"] == fake["address"]
-    with pytest.raises(atf.ServerReadOnly):
+    with pytest.raises(atf.ServerReadOnly):                         # no whole-file saves (filing, approvals)
         atf.save_rows(atf.load_rows())
-    with pytest.raises(atf.ServerReadOnly):
-        atf.record_builds({"A101": "Other"})
     assert atf.backfill_filed_dates() is not None
     pdf = atf.approved_pdf_for(atf.load_rows()[0])
     assert pdf.read_bytes() == b"%PDF-1.4 server copy" and pdf.parent == atf.OUT / "server-pdfs"
@@ -174,6 +177,36 @@ def test_reads_come_from_the_server(fake, configured):
     assert atf.SUPP.read_bytes() == local                          # never touched
     atf.forget_server()
     assert [r["serial_number"] for r in atf.load_rows()] == ["S1"]
+
+
+def _ops(fake):
+    """The operations sent, without their request ids (each must have its own)."""
+    sent = [c for c in fake["calls"] if c[0] == "POST" and c[1].startswith("/api/ops/")]
+    assert len({c[2]["request_id"] for c in sent}) == len(sent)
+    return [(c[1].rsplit("/", 1)[1], {k: v for k, v in c[2].items() if k != "request_id"}) for c in sent]
+
+
+def test_builds_and_queue_edits_are_server_operations(fake, configured):
+    connect(fake)
+    atf.load_rows()                                                # the versions the user is looking at
+    atf.record_builds({"A101": " Other "})
+    atf.load_rows()
+    atf.clear_build("a101")
+    atf.add_queued([{"serial_number": "A139", "caliber": "9", "overall_length": "12", "status": ""}])
+    atf.edit_queued("A136", {"caliber": "45"}, 1)
+    atf.remove_queued("A136", 1)
+    assert _ops(fake) == [
+        ("set_built", {"items": [{"serial": "A101", "design": "Other", "version": 1}]}),
+        ("clear_built", {"serial": "a101", "version": 1}),
+        ("add_queued", {"rows": [{"serial_number": "A139", "caliber": "9", "overall_length": "12"}]}),
+        ("edit_queued", {"serial": "A136", "changes": {"caliber": "45"}, "version": 1}),
+        ("remove_queued", {"serial": "A136", "version": 1})]
+    with pytest.raises(remote.ServerError, match="changed on another device"):
+        atf.edit_queued("A136", {"caliber": "45"}, 3)               # someone else changed it since
+    with pytest.raises(remote.ServerError, match="Not saved: your server can't be reached"):
+        connect(fake, [_dead_address()])
+        remote.Server.working.clear()
+        atf.remove_queued("A136", 1)
 
 
 def test_offline_shows_the_last_data_seen(fake, configured):
@@ -207,19 +240,20 @@ def test_menu_connects_shows_the_server_and_switches_back(fake, configured, answ
     queue(("S1", "9"))
     local = atf.SUPP.read_bytes()
     answers(pick("Settings"), pick("Where your inventory lives"), "connect", fake["address"], True, "", "PC", "123456",
-            lambda kw: "quit" if not any(str(c.title).startswith(("Add suppressors", "File ", "Check approvals", "Advanced"))
-                                         for c in kw["choices"]) else "unexpected")
+            lambda kw: "quit" if not any(str(c.title).startswith(("File ", "Check approvals", "Advanced", "⚠ Resolve"))
+                                         for c in kw["choices"]) and any(str(c.title) == "Add suppressors" for c in kw["choices"])
+            else "unexpected")
     ui.menu()
     out = screen.getvalue()
     assert _fingerprint() in out and "Connected:" in out and "2 suppressors, 1 SBRs" in out
-    assert "A101" in out and "On your server" in out and "read-only" in out
+    assert "A101" in out and "On your server" in out and "filing and approvals use this computer's inventory" in out
     saved = atf.server_settings()
     assert saved["key"] == "k1" and saved["addresses"] == [fake["address"]] and saved["fingerprint"] == _fingerprint()
     assert saved["ca"] == CA and "certificate authority fingerprint" in out
     assert atf.SUPP.read_bytes() == local
 
-    answers(pick("Inventory"), lambda kw: "back" if not any(str(c.title).startswith(("Record builds", "Edit or remove",
-                                                                                     "Open on my phone")) for c in kw["choices"]) else "unexpected",
+    answers(pick("Inventory"), lambda kw: "back" if not any(str(c.title).startswith("Open on my phone") for c in kw["choices"])
+            and any(str(c.title) == "Record builds" for c in kw["choices"]) else "unexpected",
             pick("Settings"), pick("Where your inventory lives"), "local", True, QUIT)
     ui.menu()
     assert atf.server_settings() is None and ("POST", "/api/devices/7/revoke", {}) in fake["calls"]

@@ -1,8 +1,10 @@
 """The inventory database: one SQLite file (WAL mode), rules enforced by constraints and triggers.
 
 Once the app is connected, the server is the only copy of the inventory (design doc: "Inventory server design"). Every
-write is a named operation that runs in one transaction together with its history row; there is no "replace the
-whole inventory" call. Phase 1 has one write: import, into an empty server. The schema version is PRAGMA user_version.
+write is a named operation (OPERATIONS; import, into an empty server only) that runs in one transaction together with
+its history row; there is no "replace the whole inventory" call. Each operation names the row versions it was based
+on (another device's change since = Conflict, nothing saved) and a request_id (the same request again = the first
+answer, not applied twice). The schema version is PRAGMA user_version.
 """
 import csv
 import hashlib
@@ -84,12 +86,26 @@ CREATE TABLE devices (
   created_at TEXT NOT NULL,
   last_seen TEXT,
   revoked_at TEXT);
+""", 2: """
+CREATE TABLE requests (
+  request_id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  response TEXT NOT NULL,
+  at TEXT NOT NULL);
 """}
 SCHEMA_VERSION = max(MIGRATIONS)
 
 
 class Refused(Exception):
     """An operation the rules don't allow (the API answers 400/409 with this text)."""
+
+
+class Conflict(Refused):
+    """The row changed since the caller read it (another device): nothing saved. .rows = how they are now."""
+
+    def __init__(self, text, rows):
+        super().__init__(text)
+        self.rows = rows
 
 
 def now():
@@ -330,6 +346,155 @@ def _why(error):
     if "UNIQUE" in text and "eform_id" in text:
         return "the eForm ID appears twice"
     return text
+
+
+# ---------- Operations (the only writes besides import) ----------
+
+def _inches(value, serial):
+    v = str(value or "").strip()
+    if not re.fullmatch(r"\d+(\.\d+)?", v):
+        raise Refused(f"{serial}: overall length must be a number of inches, like 12 or 6.5")
+    return v
+
+
+def _text(value, what, serial, required=True, limit=200):
+    v = re.sub(r"\s+", " ", str(value or "")).strip()
+    if required and not v:
+        raise Refused(f"{serial}: {what} is missing")
+    if len(v) > limit:
+        raise Refused(f"{serial}: {what} is too long")
+    return v
+
+
+def _current(conn, serial):
+    r = conn.execute("SELECT * FROM suppressors WHERE serial = ?", (str(serial).strip(),)).fetchone()
+    if r is None:
+        raise Refused(f"{serial} isn't in the inventory.")
+    return r
+
+
+def _check_version(conn, current, given):
+    if given is not None and int(given) != current["version"]:
+        raise Conflict(f"{current['serial']} was changed on another device since you looked. Nothing was saved; "
+                       "here is how it is now.", [row(conn, current["serial"])])
+
+
+def _set_built(conn, body, device, at, rid):
+    items = body.get("items") or []
+    if not items:
+        raise Refused("No suppressors given.")
+    rows = []
+    for item in items:
+        r = _current(conn, item.get("serial"))
+        _check_version(conn, r, item.get("version"))
+        if r["status"] != "approved":
+            raise Refused(f"{r['serial']} isn't approved, so it can't be marked built.")
+        rows.append((r, _text(item.get("design"), "design", r["serial"], required=False)))
+    for r, design in rows:
+        before = row(conn, r["serial"])
+        conn.execute("UPDATE suppressors SET built = 1, design = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+                     (design, at, device, r["id"]))
+        _log(conn, at, device, "set_built", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"]) for r, _ in rows]
+
+
+def _clear_built(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "approved":
+        raise Refused(f"{r['serial']} isn't approved.")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET built = 0, design = '', updated_at = ?, updated_by = ? WHERE id = ?",
+                 (at, device, r["id"]))
+    _log(conn, at, device, "clear_built", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+def _add_queued(conn, body, device, at, rid):
+    new = body.get("rows") or []
+    if not new:
+        raise Refused("No suppressors given.")
+    out, seen = [], set()
+    for n in new:
+        serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
+        if serial.upper() in seen or conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+            raise Refused(f"{serial} is already in the inventory. Nothing was added.")
+        seen.add(serial.upper())
+        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, updated_at, updated_by) "
+                     "VALUES (?, ?, ?, 'queued', ?, ?)",
+                     (serial, _text(n.get("caliber"), "caliber", serial, limit=40), _inches(n.get("overall_length"), serial),
+                      at, device))
+        _log(conn, at, device, "add_queued", serial, None, row(conn, serial), rid)
+        out.append(row(conn, serial))
+    return out
+
+
+def _edit_queued(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "queued":
+        raise Refused(f"{r['serial']} isn't queued: only queued suppressors can be changed.")
+    changes = body.get("changes") or {}
+    unknown = set(changes) - {"serial_number", "caliber", "overall_length"}
+    if unknown or not changes:
+        raise Refused(f"Can't change {', '.join(sorted(unknown)) or 'nothing'}.")
+    serial = _text(changes.get("serial_number", r["serial"]), "serial number", r["serial"], limit=40)
+    if serial.upper() != r["serial"].upper() and conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+        raise Refused(f"{serial} is already in the inventory.")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET serial = ?, caliber = ?, overall_length = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+                 (serial, _text(changes.get("caliber", r["caliber"]), "caliber", serial, limit=40),
+                  _inches(changes.get("overall_length", r["overall_length"]), serial), at, device, r["id"]))
+    _log(conn, at, device, "edit_queued", serial, before, row(conn, serial), rid)
+    return [row(conn, serial)]
+
+
+def _remove_queued(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "queued":
+        raise Refused(f"{r['serial']} isn't queued: only queued suppressors can be removed.")
+    before = row(conn, r["serial"])
+    conn.execute("DELETE FROM suppressors WHERE id = ?", (r["id"],))
+    _log(conn, at, device, "remove_queued", r["serial"], before, None, rid)
+    return []
+
+
+OPERATIONS = {"set_built": _set_built, "clear_built": _clear_built, "add_queued": _add_queued,
+              "edit_queued": _edit_queued, "remove_queued": _remove_queued}
+
+
+def operate(conn, name, body, device):
+    """Run one named operation in one transaction with its history. Returns {"ok", "rows": the rows as they are now}.
+    A request_id already seen returns that first answer again (a retry is never applied twice)."""
+    if name not in OPERATIONS:
+        raise Refused(f"Unknown operation: {name}")
+    rid = str(body.get("request_id") or "").strip()[:80] or None
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if rid:
+            done = conn.execute("SELECT operation, response FROM requests WHERE request_id = ?", (rid,)).fetchone()
+            if done:
+                conn.execute("ROLLBACK")
+                if done["operation"] != name:
+                    raise Refused("That request id was already used for something else.")
+                return json.loads(done["response"])
+        rows = OPERATIONS[name](conn, body, device, now(), rid)
+        out = {"ok": True, "rows": rows}
+        if rid:
+            conn.execute("INSERT INTO requests (request_id, operation, response, at) VALUES (?, ?, ?, ?)",
+                         (rid, name, json.dumps(out), now()))
+        conn.execute("COMMIT")
+        return out
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def last_change(conn):
+    """The newest history id: it grows with every change (what live pages watch)."""
+    return conn.execute("SELECT COALESCE(MAX(id), 0) FROM history").fetchone()[0]
 
 
 def _log(conn, at, device, operation, serial, before, after, request_id=None):

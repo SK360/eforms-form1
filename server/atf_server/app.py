@@ -1,10 +1,12 @@
 """The inventory server's HTTP API and web page (FastAPI).
 
-Phase 1 is read-only apart from pairing: the page (the same phone.html the PC serves with Inventory > Open on my
-phone), the inventory, a row's history, approval PDFs, a CSV export, and Devices. Every request except the page itself,
+The page (the same phone.html the PC serves with Inventory > Open on my phone), the inventory, a row's history,
+approval PDFs, a CSV export, Devices, and the named operations (db.OPERATIONS: builds and queue edits; filing and
+approvals come later). /api/events tells open pages when anything changed (server-sent events). Every request except the page itself,
 /api/hello, /api/pair and /s/<serial> needs a device key: `Authorization: Bearer <key>` (the app) or the cookie a
 browser gets when it pairs. Request logs name the method, path, device and status, never keys or bodies.
 """
+import asyncio
 import logging
 from contextlib import contextmanager
 from datetime import datetime
@@ -12,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from . import __version__, db, tls
 
@@ -83,6 +85,8 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
 
     @app.exception_handler(db.Refused)
     def refused(request, exc):
+        if isinstance(exc, db.Conflict):
+            return JSONResponse({"error": str(exc), "rows": exc.rows}, status_code=409)
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     @app.middleware("http")
@@ -138,14 +142,14 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
         sup = [{"serial": r["serial_number"], "caliber": r["caliber"], "length": r["overall_length"],
                 "status": r["status"].lower() or "queued", "filed": r["filed_date"], "approved": r["approved_date"],
                 "application": _last4(r["application_number"]), "eform": _last4(r["eform_id"]),
-                "conditions": r["conditions"], "built": r["built"] == "yes", "design": r["design"],
+                "conditions": r["conditions"], "built": r["built"] == "yes", "design": r["design"], "version": r["version"],
                 "pdf": r["status"] == "approved" and db.pdf_for(conn, r["serial_number"]) is not None}
                for r in db.rows(conn)]
         sbrs = [{"serial": r["serial_number"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
                  "model": r["model"], "barrel": r["barrel_length"], "approved": r["approved_date"],
                  "eform": _last4(r["eform_id"]), "conditions": r["conditions"],
                  "pdf": db.pdf_for(conn, r["serial_number"]) is not None} for r in db.sbrs(conn)]
-        return {"suppressors": sup, "sbrs": sbrs, "can_build": False,
+        return {"suppressors": sup, "sbrs": sbrs, "can_build": True,
                 "server": {"name": name, "id": server_id, "fingerprint": fingerprint, "device": me["name"]}}
 
     @app.get("/api/rows")
@@ -174,6 +178,34 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
     def export(me=Depends(device), conn=Depends(get_db)):
         return Response(db.export_csv(conn), media_type="text/csv; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="inventory_{datetime.now():%Y-%m-%d}.csv"'})
+
+    @app.post("/api/ops/{name}")
+    def operation(name: str, body: dict, me=Depends(device), conn=Depends(get_db)):
+        """One named change (db.OPERATIONS), recorded in the history under this device's name."""
+        return db.operate(conn, name, body, me["name"])
+
+    @app.get("/api/events")
+    async def events(request: Request, me=Depends(device)):
+        """Server-sent events: "change" whenever the history grows (any device, the console too), so open pages
+        reload. A comment line every 15 s keeps proxies from closing it."""
+        async def stream():
+            with opened() as c:
+                seen = db.last_change(c)
+            yield f"event: hello\ndata: {seen}\n\n"
+            quiet = 0
+            while not await request.is_disconnected():
+                await asyncio.sleep(1)
+                with opened() as c:
+                    now = db.last_change(c)
+                if now != seen:
+                    seen, quiet = now, 0
+                    yield f"event: change\ndata: {now}\n\n"
+                else:
+                    quiet += 1
+                    if quiet >= 15:
+                        quiet = 0
+                        yield ": still here\n\n"
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
     @app.get("/api/devices")
     def devices(me=Depends(device), conn=Depends(get_db)):

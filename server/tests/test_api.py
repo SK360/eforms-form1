@@ -46,7 +46,7 @@ def test_inventory_for_the_page(client, auth, ca_fp):
     assert a101["application"] == "…0101" and a101["eform"] == "…0101"           # last 4, like the menu
     assert {r["status"] for r in data["suppressors"]} == {"approved", "filed", "queued"}
     assert [s["serial"] for s in data["sbrs"]] == ["R1", "R2"] and data["sbrs"][0]["pdf"] is True
-    assert data["can_build"] is False and data["server"]["fingerprint"] == ca_fp and data["server"]["device"] == "PC"
+    assert data["can_build"] is True and a101["version"] == 1 and data["server"]["fingerprint"] == ca_fp and data["server"]["device"] == "PC"
 
 
 def test_full_rows_history_pdf_export(client, auth, filled):
@@ -62,6 +62,17 @@ def test_full_rows_history_pdf_export(client, auth, filled):
     assert client.get("/pdf/A130", headers=auth).status_code == 404                # filed, no approval yet
     export = client.get("/export.csv", headers=auth)
     assert export.text == db.export_csv(filled) and "attachment" in export.headers["content-disposition"]
+
+
+def test_operations(client, auth, filled):
+    r = client.post("/api/ops/set_built", headers=auth, json={"request_id": "x1", "items": [{"serial": "A110", "design": "PCC", "version": 1}]})
+    assert r.status_code == 200 and r.json()["rows"][0]["built"] == "yes"
+    assert db.history(filled, "A110")[-1]["device"] == "PC"            # recorded under the paired device's name
+    stale = client.post("/api/ops/set_built", headers=auth, json={"items": [{"serial": "A110", "design": "Other", "version": 1}]})
+    assert stale.status_code == 409 and stale.json()["rows"][0]["design"] == "PCC"
+    assert client.post("/api/ops/set_built", headers=auth, json={"items": [{"serial": "A130"}]}).status_code == 400
+    assert client.post("/api/ops/set_built", json={"items": [{"serial": "A110"}]}).status_code == 401
+    assert client.post("/api/ops/set_built", headers=auth, data="items=A110").status_code == 415
 
 
 def test_devices(client, auth, filled, ca_fp):

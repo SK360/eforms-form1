@@ -112,7 +112,18 @@ async function load() {
   const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
   $("sum").textContent = `${n(s.length, "suppressor")} · ${s.filter(r => r.built).length} built · ${s.filter(r => r.status === "approved" && !r.built).length} not built`
     + (data.sbrs.length ? ` · ${n(data.sbrs.length, "SBR")}` : "");
-  renderList(); renderDetail();
+  renderList();
+  // A live update mustn't wipe what's being typed (a design) or a question on screen (Keep it / Clear).
+  const typing = document.activeElement && document.activeElement.id === "design";
+  if (!typing && !asking) renderDetail();
+  if (SERVER && !live) listen();
+}
+
+// Live updates (server only): the server says when anything changed (this page, another phone, the PC); reload then.
+let live = null;
+function listen() {
+  live = new EventSource("/api/events");
+  live.addEventListener("change", () => { clearTimeout(listen.t); listen.t = setTimeout(load, 300); });
 }
 
 // Digits only ("83") find serials whose number is 83 or ends in 83 (A083, A1083); anything else searches serial, design, caliber, model.
@@ -252,13 +263,22 @@ async function renderDevices() {
   });
 }
 
+const requestId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 async function setBuilt(r, built, design) {
-  const res = await fetch(`/api/build?k=${encodeURIComponent(KEY)}`, {method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({serial: r.serial, built, design: (design || "").trim()})});
+  design = (design || "").trim();
+  // The server: a named operation with the row's version (another device's change since = 409, shown, not overwritten)
+  // and a request id (a retried request isn't applied twice). The PC's own page: its /api/build.
+  const [url, body] = SERVER
+    ? [built ? "/api/ops/set_built" : "/api/ops/clear_built",
+       built ? {request_id: requestId(), items: [{serial: r.serial, design, version: r.version}]}
+             : {request_id: requestId(), serial: r.serial, version: r.version}]
+    : [`/api/build?k=${encodeURIComponent(KEY)}`, {serial: r.serial, built, design}];
+  const res = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
   const out = await res.json().catch(() => ({}));
+  if (res.status === 409) { toast("Changed on another device: here it is now."); asking = null; await load(); renderDetail(); return; }
   if (!res.ok) { toast(out.error || "Not saved."); return; }
   toast(built ? `${r.serial} saved as built` : `${r.serial} is no longer marked built`);
-  await load();
+  await load(); renderDetail();
   if (built && !design && $("design")) $("design").focus();
 }
 

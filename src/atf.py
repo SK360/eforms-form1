@@ -101,7 +101,12 @@ def is_built(row):
 def record_builds(designs):
     """Mark suppressors as built, each with what it is: {serial: design} (or change the design of built ones). Only
     APPROVED rows: a Form 1 must be approved before the suppressor is made. Saves once; returns the serials updated;
-    raises ValueError if any serial is unknown or not approved (then nothing is saved)."""
+    raises ValueError if any serial is unknown or not approved (then nothing is saved). With a server: one operation,
+    all or nothing, based on the versions last read (another device's change since = nothing saved, ServerError)."""
+    if server_settings():
+        _server_op("set_built", {"items": [{"serial": s, "design": d.strip(), "version": _seen_version(s)}
+                                           for s, d in designs.items()]})
+        return list(designs)
     rows = load_rows()
     by = {r["serial_number"].upper(): r for r in rows}
     bad = [s for s in designs if (by.get(s.upper()) or {}).get("status") != "approved"]
@@ -134,11 +139,41 @@ def available_for_build(rows, caliber, length):
 
 def clear_build(serial):
     """Undo a build record (marked built by mistake)."""
+    if server_settings():
+        _server_op("clear_built", {"serial": serial, "version": _seen_version(serial)})
+        return
     rows = load_rows()
     for r in rows:
         if r["serial_number"].upper() == serial.upper():
             r.update(built="", design="")
     save_rows(rows)
+
+
+def add_queued(new_rows):
+    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new."""
+    if server_settings():
+        _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in ("serial_number", "caliber", "overall_length")}
+                                           for r in new_rows]})
+        return
+    save_rows(load_rows() + [dict(r, status="") for r in new_rows])
+
+
+def edit_queued(serial, changes, version=None):
+    """Change a queued row's serial_number / caliber / overall_length."""
+    if server_settings():
+        _server_op("edit_queued", {"serial": serial, "changes": changes, "version": version})
+        return
+    rows = load_rows()
+    r = next(r for r in rows if r["serial_number"].upper() == serial.upper() and r["status"] == "")
+    r.update(changes)
+    save_rows(rows)
+
+
+def remove_queued(serial, version=None):
+    if server_settings():
+        _server_op("remove_queued", {"serial": serial, "version": version})
+        return
+    save_rows([r for r in load_rows() if not (r["serial_number"].upper() == serial.upper() and r["status"] == "")])
 
 
 def serials_in(spec, rows):
@@ -251,11 +286,12 @@ def _token_match(want, got):
 # ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
 # ---------- Inventory server (optional: server/, connected in Settings > Where your inventory lives) ----------
 # data/server.yaml = the paired server (id, addresses, its CA and fingerprint, this computer's key). While it
-# exists, the inventory is the server's: this version reads it (load_rows / load_sbrs) and refuses to change it
-# (save_rows / save_sbrs raise ServerReadOnly); this computer's CSVs are left as they are and not used. When the
+# exists, the inventory is the server's: load_rows / load_sbrs read it; builds and queue edits are the server's named
+# operations (record_builds, clear_build, add_queued, edit_queued, remove_queued); whole-file saves are refused
+# (save_rows / save_sbrs raise ServerReadOnly: filing and approvals come later). This computer's CSVs aren't used. When the
 # server can't be reached, the last data seen (data/server_cache.json) is shown, marked offline and read-only.
-SERVER_READ_ONLY = ("Your inventory is on your server, and this version only shows it there. To file, add, record "
-                    "builds or check approvals, use this computer's inventory: Settings > Where your inventory lives.")
+SERVER_READ_ONLY = ("Your inventory is on your server. Filing and Check approvals don't use it yet: for those, use this "
+                    "computer's inventory (Settings > Where your inventory lives).")
 SERVER_STATE = {}  # after a read: {"online": bool, "address", "problem", "seen"}
 _FETCHED = {}
 
@@ -301,6 +337,26 @@ def _server(settings=None):
     import remote
     s = settings or server_settings()
     return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"], ca=s.get("ca"))
+
+
+def _server_op(name, body):
+    """One named change on the server (server/atf_server/db.py OPERATIONS), with a fresh request id."""
+    import uuid
+    import remote
+    try:
+        return _server().post(f"/api/ops/{name}", dict(body, request_id=uuid.uuid4().hex))
+    except remote.Unreachable as e:
+        raise remote.ServerError(f"Not saved: your server can't be reached. {e}")
+    finally:
+        _FETCHED.clear()  # the next read shows what the server has now
+
+
+def _seen_version(serial):
+    """The row's version as last read from the server (None = not read: the server then doesn't check it)."""
+    for r in (_FETCHED.get("data") or ([], []))[0]:
+        if r["serial_number"].upper() == serial.upper():
+            return r.get("version")
+    return None
 
 
 def _server_inventory():
