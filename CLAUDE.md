@@ -126,6 +126,23 @@ plain CLI, kept for debugging/scripting:
   switches to letters. One screen at a time under 760 px (hash = selected serial, so back works), side by side above.
   Turning Built off asks on the page (Keep it / Clear), not with `confirm()`: on the user's iPhone (2026-10-28) the
   switch couldn't be turned off with the pop-up.
+- **Inventory server** (`server/`, branch `server`; design doc "Inventory server design" on claude.ai, 5 phases;
+  phase 1 = read-only server with made-up data). Optional, never imported by the app; FastAPI + uvicorn + cryptography
+  (`server/requirements.txt`; dev: `server/.venv`, `requirements-dev.txt`). `atf_server/db.py`: SQLite (WAL, schema =
+  PRAGMA user_version, `MIGRATIONS`, backup before migrating, newer schema refused), tables suppressors (app CSV
+  columns; status queued/pending/filed/approved/disapproved/skip, "" in CSV = queued; ISO dates inside, MM/DD/YYYY
+  out; built only while approved; version bumped by trigger), sbrs, approval_pdfs (files `<data>/approved/<sha256>.pdf`),
+  history (append-only by trigger), devices (key hashes), meta (server_id, pair_code). Writes are named operations
+  in one transaction with a history row; phase 1 has only `import_inventory` (empty server only, all or nothing) and
+  pairing (6-digit code, 5 min, one use, 5 wrong tries kill it). `app.py`: the page is `src/phone.html` (copied into
+  the image), auth = `Authorization: Bearer` (the app) or the HttpOnly cookie a browser gets when pairing; POSTs
+  must be JSON (CSRF); `/api/inventory` = the PC page's shape + `can_build: false` + `server`; `/api/rows` = full CSV
+  shape. The page, when `data.server` is set: pairing screen on 401, history per serial, Devices (`#:devices`: add a
+  device = code, remove = tap twice), Export CSV. `tls.py`: its own certificate (app pins the fingerprint, phase 2).
+  CLI `python -m atf_server serve|pair-code|devices|revoke|fingerprint|import <app folder>|demo|backup`. Deploy:
+  `server/Dockerfile` (repo-root context), `compose.yaml`, `atf-inventory.service`, `LXC.md`. Tests: `server/tests`
+  (`server/.venv/bin/python -m pytest -q tests` from server/; root `pytest.ini` keeps the app's run to tests/); CI
+  job `server` also builds and starts the image.
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
   settings (settings_problems minus the file lines), each file via `_check_file` (exists, `_online_only`: Windows

@@ -1,0 +1,21 @@
+# The inventory server without Docker (simpler inside an LXC). See LXC.md:
+#   cp server/atf-inventory.service /etc/systemd/system/ && systemctl enable --now atf-inventory
+[Unit]
+Description=ATF inventory server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=atf
+WorkingDirectory=/opt/atf-inventory/server
+Environment=ATF_DATA=/var/lib/atf-inventory
+ExecStart=/opt/atf-inventory/server/.venv/bin/python -m atf_server serve
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/atf-inventory
+
+[Install]
+WantedBy=multi-user.target
