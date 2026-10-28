@@ -254,6 +254,7 @@ def inventory_flow():
         if any(r["status"] == "approved" for r in rows):
             choices.append(questionary.Choice("Record builds", builds_flow))
             choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
+        choices.append(questionary.Choice("Open on my phone (same Wi-Fi)", phone_flow))
         choices.append(questionary.Choice("Export to Excel", export_flow))
         what = questionary.select("Inventory:", choices=choices + [questionary.Choice("Back", "back")]).ask()
         if what in (None, "back"):
@@ -262,6 +263,23 @@ def inventory_flow():
             view = questionary.select("Show:", choices=views + [questionary.Choice("Back", view)]).ask() or view
         else:
             what()
+
+
+def phone_flow():
+    """Serve the inventory to a phone on the same Wi-Fi until Enter. The QR code and link carry this run's key."""
+    import phone
+    server, link = phone.start(on_event=lambda text: con.print(f"  [green]✔[/] Phone: {escape(text)}"))
+    try:
+        qr = phone.qr_text(link)
+        con.print(Panel((escape(qr) if qr else "") + f"\nScan it with your phone's camera, or open:\n[bold]{escape(link)}[/]\n\n"
+                        "Your phone must be on the same Wi-Fi. The page can mark approved suppressors built (or clear that);\n"
+                        "everything else is view only. The link stops working when you press Enter here.\n"
+                        "[dim]Safari: Share > Add to Home Screen. If nothing loads, allow Python through the firewall.[/]",
+                        title="Your inventory on your phone", border_style="cyan", expand=False))
+        con.input("[dim]Press Enter to stop sharing…[/] ")
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def open_file(path):
@@ -797,19 +815,8 @@ def _state(msg, cur):
 def _check_template(others=()):
     """Test-stamp forms/5320.23.pdf (and each other responsible person's template) with a dummy serial; returns a list
     of problems (empty = OK)."""
-    import tempfile
-    probs = []
-    for n, person in enumerate([None] + list(others), 1):
-        who = f"responsible person {n}'s 5320.23: " if person else ""
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                today = date.today().strftime("%m/%d/%Y")
-                dest, missing = atf.stamp_5320({"serial_number": "TEST123", "caliber": "22"}, today, out_dir=tmp, person=person)
-                probs += [who + p for p in ([f"could not place: {', '.join(missing)}"] if missing
-                                            else atf._check_5320(dest, {"serial_number": "TEST123"}, today))]
-        except SystemExit as e:
-            probs.append(who + str(e.code))
-    return probs
+    return [(f"responsible person {n}'s 5320.23: " if person else "") + p
+            for n, person in enumerate([None] + list(others), 1) for p in atf.template_problems(person)]
 
 
 def _questions_11(saved):
@@ -1077,15 +1084,36 @@ def settings_menu():
     """Settings from the menu. A trust gets a choice, so its other responsible persons are one step away
     (not at the end of the whole wizard)."""
     t = _settings()
-    if atf.applicant_type(t) != "trust":
-        return settings_flow()
-    n = len(atf.other_rps(t))
+    trust_filing = atf.applicant_type(t) == "trust"
     what = questionary.select("Settings:", choices=[
-        questionary.Choice("All settings (you, your 5320.23 template, CLEO, firearm, files)", settings_flow),
-        questionary.Choice(f"Other responsible persons in the trust ({n})", rps_flow),
-        questionary.Choice("Back", "back")]).ask()
+        questionary.Choice("All settings (you, your 5320.23 template, CLEO, firearm, files)" if trust_filing else
+                           "All settings (you, your answers, CLEO, firearm, files)", settings_flow)]
+        + ([questionary.Choice(f"Other responsible persons in the trust ({len(atf.other_rps(t))})", rps_flow)] if trust_filing else [])
+        + [questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
+           questionary.Choice("Back", "back")]).ask()
     if callable(what):
         what()
+
+
+def check_setup_flow():
+    """Everything a filing needs, checked without eForms. No paths or names on screen (screenshots get shared)."""
+    with con.status("Checking your settings, files, templates and the browser…"):
+        res = atf.check_setup()
+    t = Table(box=box.ROUNDED, header_style="bold", title="[bold]Check my setup[/]", title_justify="left", border_style="blue")
+    for col in ("", "Check", "Result"):
+        t.add_column(col)
+    marks = {"ok": "[green]✔[/]", "warn": "[yellow]⚠[/]", "fail": "[red]✖[/]"}
+    for level, label, detail, _ in res:
+        t.add_row(marks[level], escape(label), escape(detail) if level == "ok" else f"[{'yellow' if level == 'warn' else 'red'}]{escape(detail)}[/]")
+    con.print(t)
+    fails, warns = (sum(1 for r in res if r[0] == k) for k in ("fail", "warn"))
+    cli = ".\\atf.cmd" if os.name == "nt" else "./atf"
+    if fails or warns:
+        con.print(f"  {f'[red]{fails} to fix[/]' if fails else ''}{' · ' if fails and warns else ''}"
+                  f"{f'[yellow]{warns} to look at[/]' if warns else ''}  [dim]({escape(cli)} check-setup shows the file paths)[/]")
+    else:
+        con.print("  [green]✔ Everything a filing needs is in place.[/] [dim]Logging in to eForms isn't checked.[/]")
+    pause()
 
 
 def rps_flow():

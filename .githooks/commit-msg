@@ -1,0 +1,4 @@
+#!/bin/sh
+# Personal-data scan of the commit message (messages are public too).
+. "$(dirname "$0")/_python.sh"
+exec "$PY" tools/scan_personal.py "$1"

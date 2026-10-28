@@ -1,0 +1,4 @@
+#!/bin/sh
+# Personal-data scan of what this commit adds (the repository is public). Turn on: git config core.hooksPath .githooks
+. "$(dirname "$0")/_python.sh"
+exec "$PY" tools/scan_personal.py

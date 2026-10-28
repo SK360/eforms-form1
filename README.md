@@ -41,6 +41,8 @@ compares them with your records.
 ![Inventory](docs/screenshots/05-inventory.png)
 ![SBR inventory](docs/screenshots/06-sbrs.png)
 ![Finding the serial for a build](docs/screenshots/11-build-serial.png)
+![Check my setup](docs/screenshots/12-check-setup.png)
+<img src="docs/screenshots/13-phone-list.png" alt="Inventory on a phone" width="260"> <img src="docs/screenshots/14-phone-detail.png" alt="One suppressor on a phone" width="260">
 ![Recording builds](docs/screenshots/10-builds.png)
 ![Check approvals](docs/screenshots/07-approvals.png)
 
@@ -136,7 +138,11 @@ of all the packages yet; the installer skips it and asks you to add 3.13 next to
 Mac: `./atf`  Windows: `.\atf.cmd` (always with the `.cmd`)
 
 The first run asks whether you file through a trust or as an individual, then for your details, CLEO and files
-(Settings; change them any time, including switching between trust and individual).
+(Settings; change them any time, including switching between trust and individual). Then run **Settings > Check my
+setup**: without opening eForms, it checks that your settings are complete, every file (fingerprints, photo, trust
+document, supporting documents, each person's) is there, readable, the right kind and not an online-only
+OneDrive/iCloud copy, that each 5320.23 template stamps correctly, and that the browser is installed. Run it again
+whenever something changes. (`./atf check-setup` shows the same with the file paths.)
 
 **Before your first real batch, do a practice run:** add a suppressor (a test serial like `TEST1` is fine), then
 Advanced > **Practice run**. It fills a whole Form 1 in eForms and shows the read-back table, then stops: it never
@@ -160,6 +166,14 @@ stray keypress can't start anything). Then:
   and/or list (`A101-A110, A115`) or tick them in a list; it then asks the design of each one (typed in, e.g. "PCC
   Short"), shows them all, and saves when you confirm. Only approved suppressors can be marked built. The design can
   be changed, or the build record cleared, later.
+- **Open on my phone** (in Inventory, or `./atf serve`): shows a QR code; scan it with your phone's camera (same
+  Wi-Fi) and your inventory opens in the phone's browser. Search by typing a serial's digits on the number pad (`83`
+  finds A083) or by design, filter (built, not built, waiting, SBRs), see each one's details and open its approval
+  PDF, and switch **Built** on or off with its design, for walking through your safes and bags. That switch is the
+  only thing it can change, and only for approved suppressors. Nothing goes to the internet: the page comes from
+  your computer while you leave it open, and the link (with a key made for that run) stops working when you press
+  Enter. Safari's Share > Add to Home Screen makes it open like an app. If the phone can't connect, allow Python
+  through your computer's firewall when asked.
 - **Building one? Find the serial to use**: pick the caliber (from your inventory) and type the overall length of what
   you're building; it gives the first approved, not built serial of that caliber approved at that length **or longer**
   (an approval for 12" is good for a 5" build), lists the others that fit, and can record it as built right there.
@@ -196,6 +210,8 @@ Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (
 never committed. **Never zip or copy this folder to share it**; share the git repository instead.
 
 ## Troubleshooting
+- Start with **Settings > Check my setup**: most problems before a filing (a moved or online-only file, a template
+  that doesn't stamp, a missing browser) show up there.
 - "The browser isn't logged in to eForms yet": you pressed Enter before the login (MFA included) finished. Finish
   logging in until your eForms home page shows, then press Enter again (or type q to stop).
 - "Another user is logged in": a previous run didn't log out; wait ~15-30 min or log out in the other browser.

@@ -7,6 +7,20 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## Unreleased
+
+### New
+- **Settings > Check my setup** (and `./atf check-setup`): checks, without opening eForms, that your settings are
+  complete; that every file (fingerprints, photo, trust document, supporting documents, each responsible person's) is
+  there, readable, the right kind and not an online-only OneDrive/iCloud copy; that each 5320.23 template stamps
+  correctly; that the browser is installed; and that the inventory isn't open in Excel or waiting on a pending row.
+  Individuals now get a small Settings menu too (All settings, Check my setup).
+- **Your inventory on your phone** (Inventory > Open on my phone, or `./atf serve`): scan the QR code on the same
+  Wi-Fi to see your inventory, search by a serial's digits or a design, open approval PDFs, and mark approved
+  suppressors built (with their design) or clear that, while you walk through your safes. Served from your computer
+  only while it's open; nothing goes to the internet. **Run the installer again** after updating (`./install.sh`,
+  Windows `.\install.cmd`) for the QR code; without it the link is printed instead.
+
 ## 1.0.0 (2026-10-27)
 
 The first release: everything built so far.

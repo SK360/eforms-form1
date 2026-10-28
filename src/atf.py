@@ -17,6 +17,12 @@ Normally run through the menu: ./atf (src/ui.py). These commands are the plain C
         --capture       after the steps, record each screen the user clicks through to out/capture_*.jsonl.
   check-approved
         Read-only: download approved Form 1 PDFs (new ones only) and compare suppressors with your records.
+  check-setup
+        Check settings, files (found, readable, not online-only, the right kind), 5320.23 templates (test-stamped)
+        and the browser, without opening eForms. Exit 1 if something must be fixed.
+  serve
+        Your inventory on your phone, on the same Wi-Fi, until Ctrl-C (src/phone.py): a QR code and a link with a key
+        made for this run. The page can mark approved suppressors built (with their design) or clear that.
   inspect
         Open eForms and dump the controls/dialog text of whatever page the user is on (to map new steps).
   fields <pdf>
@@ -1348,6 +1354,131 @@ def settings_problems(trust=None):
     return probs
 
 
+# ---------- Check my setup (menu: Settings > Check my setup; CLI: check-setup) ----------
+FILE_KINDS = {"eft": ((b"1.001:",), "an EBTS fingerprint file (they start with 1.001:)"),
+              "photo": ((b"\xff\xd8\xff", b"\x89PNG"), "a JPG or PNG picture"),
+              "pdf": ((b"%PDF",), "a PDF")}
+CLOUD_FOLDERS = ("OneDrive", "iCloud", "Mobile Documents", "CloudStorage", "Dropbox", "Google Drive")
+
+
+def template_problems(person=None):
+    """Test-stamp your 5320.23 template (or another responsible person's) with a dummy serial in a temporary folder:
+    a list of problems (empty = it stamps correctly)."""
+    import tempfile
+    from datetime import date
+    today = date.today().strftime("%m/%d/%Y")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, missing = stamp_5320({"serial_number": "TEST123", "caliber": "22"}, today, out_dir=tmp, person=person)
+            return ([f"could not place: {', '.join(missing)}"] if missing
+                    else _check_5320(dest, {"serial_number": "TEST123"}, today))
+    except SystemExit as e:
+        return [str(e.code)]
+
+
+def _online_only(st):
+    """A cloud placeholder (OneDrive "online-only", iCloud "optimized storage"): the file isn't really on this computer,
+    and eForms may get it too late (the fingerprint check once timed out like that)."""
+    attrs = getattr(st, "st_file_attributes", 0)  # Windows: OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS
+    return bool(attrs & (0x1000 | 0x40000 | 0x400000) or getattr(st, "st_flags", 0) & 0x40000000)  # macOS: SF_DATALESS
+
+
+def _check_file(label, value, kind=None):
+    """(level, label, detail, path) for one file from the settings, or None when it isn't set (a missing setting is
+    reported with the other settings). Online-only files are not read (reading would download them)."""
+    if not str(value or "").strip():
+        return None
+    p = Path(value)
+    if not p.is_file():
+        return ("fail", label, "not found (choose it again in Settings)", str(p))
+    st = p.stat()
+    if _online_only(st):
+        return ("warn", label, "online-only (OneDrive/iCloud): set it to always stay on this device", str(p))
+    if not st.st_size:
+        return ("fail", label, "the file is empty", str(p))
+    try:
+        with p.open("rb") as f:
+            head = f.read(16)
+    except OSError as e:
+        return ("fail", label, f"can't be read ({e.strerror or e})", str(p))
+    if kind and not head.startswith(FILE_KINDS[kind][0]):
+        return ("warn", label, f"doesn't look like {FILE_KINDS[kind][1]}", str(p))
+    size = f"{st.st_size / 1e6:.1f} MB" if st.st_size >= 1e6 else f"{max(1, round(st.st_size / 1e3))} KB"
+    return ("ok", label, f"found, {size}", str(p))
+
+
+def _chromium_path():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        return pw.chromium.executable_path
+
+
+def check_setup():
+    """Everything a filing needs, checked without opening eForms: [(level ok|warn|fail, label, detail, path)].
+    Labels and details name no one and show no paths (the menu's screen gets shared); `path` is for the CLI."""
+    out = []
+    v = sys.version_info
+    out.append(("ok" if (3, 9) <= v[:2] <= (3, 14) else "warn", "Python", f"{v[0]}.{v[1]}.{v[2]}"
+                + ("" if (3, 9) <= v[:2] <= (3, 14) else " (3.9-3.14 are supported; run the installer again)"), sys.executable))
+    try:
+        exe = _chromium_path()
+        out.append(("ok", "Browser (Chromium)", "installed", exe) if exe and Path(exe).exists() else
+                   ("fail", "Browser (Chromium)", "not installed: run the installer again", exe or ""))
+    except Exception as e:
+        out.append(("fail", "Browser (Chromium)", f"can't start ({str(e).splitlines()[0] if str(e) else type(e).__name__}): "
+                    "run the installer again", ""))
+    cloud = next((c for c in CLOUD_FOLDERS if c.lower() in str(ROOT).lower()), None)
+    out.append(("warn", "Helper folder", f"inside {cloud}: its files can become online-only; a folder outside it is safer",
+                str(ROOT)) if cloud else ("ok", "Helper folder", "not in a synced cloud folder", str(ROOT)))
+    if not (DATA / "trust.yaml").exists():
+        return out + [("fail", "Settings", "no settings yet: choose Settings in the menu", str(DATA / "trust.yaml"))]
+    trust = load_trust()
+    kind = applicant_type(trust)
+    missing = [p for p in settings_problems(trust) if not re.search(r"not found|no 5320\.23 template", p)]
+    out.append(("fail", "Settings", "; ".join(missing), str(DATA / "trust.yaml")) if missing else
+               ("ok", "Settings", f"complete ({'a trust' if kind == 'trust' else 'an individual'})", str(DATA / "trust.yaml")))
+    f = trust.get("files") or {}
+    files = [("Your fingerprint file", f.get("eft"), "eft"), ("Your photo", f.get("photo"), "photo")]
+    files += [("Trust document", f.get("trust_document"), "pdf")] if kind == "trust" else []
+    files += [(f"Supporting document {i}", d.get("path"), None) for i, d in enumerate(trust.get("docs") or [], 1)]
+    out += [c for c in (_check_file(*x) for x in files) if c]
+    for n, person in enumerate([None] + other_rps(trust) if kind == "trust" else [], 1):
+        who = "Your" if person is None else f"Responsible person {n}:"
+        if person is not None:
+            out += [c for c in (_check_file(f"{who} fingerprint file", person.get("eft"), "eft"),
+                                _check_file(f"{who} photo", person.get("photo"), "photo")) if c]
+        name = "5320.23.pdf" if person is None else person.get("template")
+        c = _check_file(f"{who} 5320.23 template", name and str(FORMS / name), "pdf")
+        if c and c[0] == "ok":  # readable: does it stamp?
+            try:
+                probs = template_problems(person)
+            except Exception as e:
+                probs = [str(e).splitlines()[0] if str(e) else type(e).__name__]
+            c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
+                 ("ok", c[1], "stamps correctly (test serial, today's date)", c[3]))
+        out += [c] if c else []
+    if SUPP.exists():
+        rows = load_rows()
+        pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
+        try:
+            with SUPP.open("r+b"):  # Excel on Windows locks a file it has open; nothing is written
+                pass
+            out.append(("warn", "Inventory", f"{len(pending)} pending: resolve {'it' if len(pending) == 1 else 'them'} from the "
+                        "menu before filing more", str(SUPP)) if pending else ("ok", "Inventory", f"{len(rows)} suppressor{'s' if len(rows) != 1 else ''}", str(SUPP)))
+        except OSError:
+            out.append(("fail", "Inventory", "can't be saved: is it open in Excel? Close it", str(SUPP)))
+    return out
+
+
+def cmd_check_setup(args):
+    marks = {"ok": "OK  ", "warn": "WARN", "fail": "FIX "}
+    res = check_setup()
+    for level, label, detail, path in res:
+        print(f"{marks[level]} {label}: {detail}" + (f"\n       {path}" if path else ""))
+    if any(r[0] == "fail" for r in res):
+        sys.exit(1)
+
+
 def _row_context(trust, item):
     """Placeholder values for config/mapping.yaml steps for one suppressor row."""
     rp = trust["responsible_persons"][0]
@@ -1748,6 +1879,8 @@ def main():
     p = sub.add_parser("fields"); p.add_argument("pdf"); p.set_defaults(fn=cmd_fields)
     p = sub.add_parser("fill-5320"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--date"); p.set_defaults(fn=cmd_fill_5320)
     p = sub.add_parser("inspect"); p.set_defaults(fn=cmd_inspect)
+    p = sub.add_parser("serve", help="your inventory on your phone (same Wi-Fi) until Ctrl-C"); p.set_defaults(fn=lambda a: __import__("phone").cmd_serve(a))
+    p = sub.add_parser("check-setup", help="check settings, files, templates and the browser (no eForms)"); p.set_defaults(fn=cmd_check_setup)
     p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
     p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
     p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.set_defaults(fn=cmd_fill_form1)

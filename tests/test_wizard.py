@@ -192,9 +192,14 @@ def test_settings_goes_straight_to_other_responsible_persons(configured, answers
     assert "all 2 5320.23 templates stamp correctly" in screen.getvalue()
 
 
-def test_individual_settings_open_the_wizard_directly(configured, answers, screen):
+def test_individual_settings_menu(configured, answers, screen):
+    """An individual has no other responsible persons: All settings and Check my setup only."""
     from conftest import make_individual
     make_individual()
-    answers(lambda kw: ui.settings_menu, lambda kw: (answers.kw.setdefault("first", kw), None)[1], QUIT)
+    seen = {}
+    answers(lambda kw: ui.settings_menu, lambda kw: (seen.setdefault("menu", [str(c.title) for c in kw["choices"]]), ui.settings_flow)[1],
+            lambda kw: None, QUIT)
     ui.menu()
-    assert answers.asked[1][1] == "Who files the Form 1s?"                     # no Settings: choice for an individual
+    assert seen["menu"] == ["All settings (you, your answers, CLEO, firearm, files)",
+                            "Check my setup (files, templates, browser; no eForms)", "Back"]
+    assert answers.asked[2][1] == "Who files the Form 1s?"

@@ -21,6 +21,10 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 import atf  # noqa: E402
 import ui  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools"))
+import scan_personal  # noqa: E402
+
+PERSONAL = scan_personal.personal_values()  # from the real data/ here; the screens themselves use made-up records
 
 OUT = ROOT / "docs" / "screenshots"
 WIDTH = 114
@@ -215,6 +219,46 @@ def shot_sbrs():
     ui.con.print(f"  {ui.sbr_summary(sbrs)}")
 
 
+def shot_check_setup():
+    """Settings > Check my setup: the made-up files get real-looking headers; the supporting document is shown as an
+    online-only OneDrive copy to show a warning."""
+    f = atf.DATA.parent / "files"
+    for name, head in (("prints.eft", b"1.001:249"), ("me.jpg", b"\xff\xd8\xff\xe0"), ("trust.pdf", b"%PDF-1.4"),
+                       ("printer.jpg", b"\xff\xd8\xff\xe0")):
+        (f / name).write_bytes(head + b"x" * 180000)
+    (f / "trust.pdf").write_bytes(b"%PDF-1.4" + b"x" * 2400000)
+    online = (f / "printer.jpg").stat().st_ino
+    atf._online_only = lambda st: st.st_ino == online
+    atf._chromium_path = lambda: sys.executable
+    answered("What next?", "Settings")
+    answered("Settings:", "Check my setup (files, templates, browser; no eForms)")
+    ui.check_setup_flow()
+
+
+def shot_phone():
+    """The phone page (./atf serve) at iPhone size, served from the made-up records: the list with a number-pad search,
+    and one suppressor's details. Its text is scanned like the terminal screens."""
+    import phone
+    from playwright.sync_api import sync_playwright
+    server, link = phone.start(port=0, host="127.0.0.1")
+    try:
+        with sync_playwright() as pw:
+            page = pw.chromium.launch().new_page(viewport={"width": 390, "height": 760}, device_scale_factor=3)
+            page.goto(link)
+            page.wait_for_selector(".row")
+            for name, step in (("13-phone-list", lambda: page.fill("#q", "")), ("14-phone-detail", lambda: page.click(".row[data-s='A101']"))):
+                step()
+                page.wait_for_timeout(300)
+                hits = scan_personal.scan_text(page.inner_text("body"), PERSONAL)
+                if hits:
+                    sys.exit(f"{name}: {len(hits)} possible personal value(s) on the page; not saved")
+                page.screenshot(path=str(OUT / f"{name}.png"))
+                print(f"docs/screenshots/{name}.png")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def shot_build_serial():
     """Which serial for a 5" 22 build: A105 and A106 are approved at 12" and not built yet."""
     answered("What next?", "Building one? Find the serial to use")
@@ -295,7 +339,7 @@ def shot_individual():
 SHOTS = [("01-home", shot_home), ("02-add", shot_add), (None, shot_file),  # shot_file makes 03-file and 04-filing
          ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs),
          ("11-build-serial", shot_build_serial), ("10-builds", shot_builds),  # before 10: that one builds A105-A106
-         ("07-approvals", shot_approvals),
+         ("07-approvals", shot_approvals), ("12-check-setup", shot_check_setup), (None, shot_phone),
          (None, shot_individual)]  # 08-individual-confirm, 09-individual-readback (last: it switches the settings)
 
 
@@ -309,8 +353,13 @@ def to_png(svg, dest):
 
 
 def cut(name):
-    """Save what is on the recorded screen so far as docs/screenshots/<name>.png and start a fresh screen."""
-    to_png(ui.con.export_svg(title="./atf", clear=True), OUT / f"{name}.png")
+    """Save what is on the recorded screen so far as docs/screenshots/<name>.png and start a fresh screen. Its text is
+    scanned for values from YOUR records first (made-up data only; a PNG can't be scanned after it's made)."""
+    svg = ui.con.export_svg(title="./atf", clear=True)
+    hits = scan_personal.scan_text(scan_personal.svg_text(svg), PERSONAL)
+    if hits:
+        sys.exit(f"{name}: {len(hits)} possible personal value(s) on the screen ({', '.join(sorted({h[1] for h in hits}))}); not saved")
+    to_png(svg, OUT / f"{name}.png")
     print(f"docs/screenshots/{name}.png")
 
 

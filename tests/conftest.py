@@ -33,9 +33,10 @@ FIXTURE_ANSWERS = {
 FIXTURE_SSN = "123-45-6789"
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def sandbox(tmp_path, monkeypatch):
-    """Empty data/out/forms folders; atf points at them. Restores atf.emit/ask (the menu swaps them)."""
+    """Empty data/out/forms folders; atf points at them. Restores atf.emit/ask (the menu swaps them).
+    autouse: EVERY test runs here, including one that forgets to ask for it (data/ is the user's only copy)."""
     for d in ("data", "out", "forms", "files"):
         (tmp_path / d).mkdir()
     for name, sub in (("DATA", "data"), ("OUT", "out"), ("FORMS", "forms")):

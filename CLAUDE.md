@@ -38,6 +38,8 @@ plain CLI, kept for debugging/scripting:
 |---|---|
 | `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`, and each other responsible person's template -> `out/5320.23_<serial>.<first-last>.pdf` (no CLEO line). No row = all unfiled rows. |
 | `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. The menu's "File" = `--auto-affirm --submit` (+ `--skip-ssn` unless the user chose to type the SSN). |
+| `check-setup` | Checks settings, files, templates, Chromium and the inventory without eForms (menu: Settings > Check my setup); exit 1 if something must be fixed. |
+| `serve` | The phone page (src/phone.py) on the home network until Ctrl-C (menu: Inventory > Open on my phone). |
 | `inspect` | Dumps controls + visible text + dialog text of the page you're on, to map new/changed steps. |
 | `fields <pdf>` | Lists AcroForm fields (only for a fresh fillable PDF; generator output is flattened). |
 
@@ -68,9 +70,15 @@ plain CLI, kept for debugging/scripting:
 - **`data/sbrs.csv` = SBR inventory** (`SBR_COLS`): approved short-barreled rifles (type contains RIFLE), filled by
   `record_sbrs()` from Check approvals (keyed by eForm ID; no duplicates); never filed or queued by this tool.
   Path via `_sbrs_path()` (resolved at call time so tests' sandbox redirects it). Inventory > Show SBRs, Excel sheet.
-- **Tests must never touch the real `data/`:** the `sandbox` fixture asserts the real data/ folder is unchanged after
-  each test (a module-level path once leaked fake rows into data/sbrs.csv). New paths under DATA/OUT/FORMS must be
-  looked up at call time or patched in conftest.
+- **Development and tests must never write the real records** (`data/`, `forms/`, `out/submissions.csv`,
+  `out/approved/`: production data, the user's only copy). The `sandbox` fixture is autouse (every test runs in a temp
+  folder) and asserts the real data/ folder is unchanged after each test (a module-level path once leaked fake rows
+  into data/sbrs.csv). New paths under DATA/OUT/FORMS must be looked up at call time or patched in conftest. No ad-hoc
+  scripts that import atf/phone/ui: on 2026-10-28 one set only `atf.DATA` (`atf.SUPP` is module-level) and overwrote
+  the real inventory. Write a pytest test instead. `.claude/hooks/protect_data.py` (PreToolUse, `.claude/settings.json`)
+  enforces this for Claude: it denies Edit/Write of those paths, shell writes/moves/deletes of them, Python outside
+  pytest that imports the app, and `./atf` except read-only commands (--version, check-setup, fill-form1 --dry, fields).
+  A change the user wants in their records is theirs to make (the menu); Claude says exactly what to change.
 - **Applicant type** (`applicant_type: trust | individual` in trust.yaml; missing = trust, so older settings are
   unchanged; `atf.applicant_type()`). Individual (mapped from a live capture 2026-10-11): applicant-type `#Individual`;
   no trust name/title/trust document/5320.23 (the RP popup's `#formFile` and `#citizenType` are locked for individuals:
@@ -105,7 +113,26 @@ plain CLI, kept for debugging/scripting:
   `atf.approved_pdf_for`, `export_flow` -> `atf.export_inventory()` .xlsx (openpyxl), `edit_queued_flow`: queued rows
   only; filed/approved are locked), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
   counts up the last digit group; any clash = nothing added), `resolve_flow`, `approvals_flow`, `settings_flow`
-  (wizard), `advanced_flow`. `open_file()` uses open / os.startfile / xdg-open.
+  (wizard), `advanced_flow`. `open_file()` uses open / os.startfile / xdg-open. `settings_menu`: All settings, Other
+  responsible persons (trust), Check my setup (`check_setup_flow`).
+- **Phone page** (`src/phone.py` + `src/phone.html`; menu `phone_flow` until Enter, CLI `serve` until Ctrl-C): stdlib
+  `ThreadingHTTPServer` on 0.0.0.0:8765 (else any free port), `lan_address()` for the link, QR via `segno`
+  (requirements; `qr_text` returns None without it). Every request needs `?k=<secrets.token_urlsafe(16)>` made per
+  run (403 otherwise); `log_message` is silenced (it would print the key). GET `/` (the page, strict CSP, loads
+  nothing external), `/api/inventory` (suppressors + SBRs; application/eForm as last 4), `/pdf/<serial>`
+  (`approved_pdf_for`); POST `/api/build` {serial, built, design} -> `record_builds` / `clear_build`, approved rows
+  only (400 otherwise; 409 if saving fails, e.g. Excel lock). The user chose: no locations, no "seen"/audit system;
+  search defaults to the number pad (digits match a serial's digit group by value or ending: `83` -> A083), ABC
+  switches to letters. One screen at a time under 760 px (hash = selected serial, so back works), side by side above.
+  Turning Built off asks on the page (Keep it / Clear), not with `confirm()`: on the user's iPhone (2026-10-28) the
+  switch couldn't be turned off with the pop-up.
+- **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
+  fail): Python version, Chromium (`_chromium_path`), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
+  settings (settings_problems minus the file lines), each file via `_check_file` (exists, `_online_only`: Windows
+  OFFLINE/RECALL attributes, macOS SF_DATALESS, not read then; not empty; readable; `FILE_KINDS` header: EFT starts
+  `1.001:`, JPG/PNG, PDF = warn only), each 5320.23 template test-stamped (`template_problems`, also used by the
+  wizard), inventory not locked by Excel (`r+b` open) and pending rows. Labels name no one ("Responsible person 2:
+  photo") and the menu shows no paths; the CLI prints them.
 - **Check approvals** (`fetch_approved` -> `read_approved` -> `approval_report`; CLI `check-approved`), READ-ONLY:
   home page search `#form-type-search` = "ATF Form 1 (5320.1)", `#form-status-search` = APPROVED, `#queryBtn`; results
   rows (`tr` with a "View Form" button; cells: eForm ID, Permit/Control #, ICN, Created By, Created, Submitted,
@@ -258,6 +285,17 @@ SSN from a file; declined, same as passwords/codes/PINs.)
 with Playwright) in a temp folder with a fake trust and made-up serials A101... (no real serials, not even last 4:
 the user posts these publicly). The browser part of filing and approvals is replayed as engine events; no eForms.
 Re-run after changing any screen.
+
+## Personal-data scan (the repo is PUBLIC)
+`tools/scan_personal.py` compares text with the values in the real `data/trust.yaml` (identifying keys only: names,
+DOB, email, addresses, CLEO, file paths and telling file names; not sex/race/state/title/description/model),
+`data/suppressors.csv`, `data/sbrs.csv`, `out/submissions.csv` (serials, application/eForm/control numbers, designs),
+plus SSN-shaped numbers (not the fixture's 123-45-6789) and emails (not example.com). It prints where and what kind,
+never the value; exit 1 on a hit. No args = staged added lines (`.githooks/pre-commit`); a file arg = that file
+(`.githooks/commit-msg` scans the message); `--all` = every tracked file. Hooks are on per checkout:
+`git config core.hooksPath .githooks` (set in this one 2026-10-27). PNGs can't be read: `docs/make_screenshots.py`
+scans each screen's text (`svg_text`, pieces placed by column) and refuses to save one with a hit. A false alarm:
+check it, then `git commit --no-verify`. Generic file-name words (`GENERIC_FILE_WORDS`) keep "photo.jpg" etc. quiet.
 
 ## Releases
 `__version__` in `src/atf.py` (shown in the home title, `./atf --version`) and `CHANGELOG.md` (user-facing: what's

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Inventory">
+<meta name="referrer" content="no-referrer">
+<title>Inventory</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--text:#1f1e1d;--muted:#6b6a65;--line:rgba(31,30,29,.12);--line2:rgba(31,30,29,.24);
+--accent:#2c6ecb;--accent-bg:#e6f0fb;--ok:#3b7a17;--ok-bg:#e8f3dc;--ok-fill:#4f9a2a;--warn:#8a5208;--warn-bg:#fbefd9;
+--pro:#5146b0;--pro-bg:#eeedfe;--off:#d6d4cd;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1b;--card:#262624;--text:#f0efe9;--muted:#a3a19a;--line:rgba(255,255,255,.1);
+--line2:rgba(255,255,255,.22);--accent:#7fb2f0;--accent-bg:#1d3350;--ok:#a6d77f;--ok-bg:#24391a;--ok-fill:#5aa832;--warn:#f2c46f;
+--warn-bg:#40300f;--pro:#b9b3f6;--pro-bg:#2e2a55;--off:#4a4945}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+button,input{font:inherit;color:inherit}
+.wrap{max-width:980px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr);gap:16px;padding:12px 12px calc(16px + env(safe-area-inset-bottom))}
+@media (min-width:760px){.wrap{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.back{display:none!important}}
+@media (max-width:759px){body.detail #listView{display:none}body:not(.detail) #detailView{display:none}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:14px 12px}
+h1{font-size:24px;font-weight:600;margin:4px 4px 0}
+.sum{font-size:13px;color:var(--muted);margin:0 4px 12px}
+.search{display:flex;gap:8px;margin-bottom:10px}
+.search input{flex:1;min-width:0;height:44px;border:1px solid var(--line2);border-radius:12px;padding:0 12px;background:var(--card);font-size:17px}
+.search button{height:44px;min-width:56px;border:1px solid var(--line2);border-radius:12px;background:transparent;font-size:14px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+.chip{flex:none;font-size:14px;padding:6px 12px;border-radius:999px;border:1px solid var(--line2);background:transparent}
+.chip.on{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 6px;border:0;border-bottom:1px solid var(--line);background:transparent;cursor:pointer}
+.row.sel{background:var(--bg);border-radius:10px}
+.serial{font-family:var(--mono);font-size:17px;font-weight:600}
+.sub{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{flex:none;font-size:12px;padding:3px 9px;border-radius:999px}
+.p-built{background:var(--ok-bg);color:var(--ok)}.p-approved{background:var(--accent-bg);color:var(--accent)}
+.p-filed,.p-pending{background:var(--warn-bg);color:var(--warn)}.p-queued,.p-disapproved{background:var(--line);color:var(--muted)}
+.p-sbr{background:var(--pro-bg);color:var(--pro)}
+.back{display:flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--accent);font-size:16px;padding:4px 2px 10px}
+.big{font-family:var(--mono);font-size:32px;font-weight:600;letter-spacing:.5px}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+.kv span:first-child{color:var(--muted)}
+.note{background:var(--warn-bg);color:var(--warn);font-size:14px;padding:10px 12px;border-radius:12px;margin:10px 0}
+.build{margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:16px}
+.sw{position:relative;width:52px;height:32px;border-radius:999px;border:0;background:var(--off);flex:none;cursor:pointer}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .15s}
+.sw[aria-checked=true]{background:var(--ok-fill)}.sw[aria-checked=true]::after{left:23px}
+.sw:disabled{opacity:.4}
+.design{display:flex;gap:8px;margin-top:12px}
+.design input{flex:1;min-width:0;height:44px;border:1px solid var(--line2);border-radius:12px;padding:0 12px;background:var(--card)}
+.save{height:44px;padding:0 16px;border:0;border-radius:12px;background:var(--accent);color:#fff}
+.ask{margin-top:12px;font-size:15px}.ask .design{margin-top:8px}.ask button{flex:1}
+.keep{height:44px;border:1px solid var(--line2);border-radius:12px;background:var(--card);color:inherit}
+a{color:var(--accent);text-decoration:none}
+.empty{padding:28px 6px;color:var(--muted);font-size:15px}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="card" id="listView">
+    <h1>Inventory</h1>
+    <p class="sum" id="sum">Loading…</p>
+    <div class="search">
+      <input id="q" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="Serial number, like 83" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Search by serial or design">
+      <button id="pad" type="button" aria-label="Switch to letters">ABC</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div id="list"></div>
+  </section>
+  <section class="card" id="detailView"></section>
+</div>
+<div id="toast" role="status"></div>
+<script>
+const KEY = new URLSearchParams(location.search).get("k") || "";
+let items = [], filter = "all", sel = null, asking = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const FILTERS = {all: ["All", () => true], built: ["Built", r => r.built], notbuilt: ["Not built", r => r.status === "approved" && !r.built],
+  waiting: ["Waiting", r => r.status === "filed" || r.status === "pending"], queued: ["Queued", r => r.status === "queued"],
+  sbr: ["SBRs", r => r.status === "sbr"]};
+const PILL = r => r.status === "sbr" ? ["sbr", "SBR"] : r.built ? ["built", "Built"] : r.status === "approved" ? ["approved", "Approved"]
+  : r.status === "filed" ? ["filed", "Waiting"] : r.status === "pending" ? ["pending", "Pending"] : [r.status, r.status[0].toUpperCase() + r.status.slice(1)];
+const pill = r => { const [c, t] = PILL(r); return `<span class="pill p-${esc(c)}">${esc(t)}</span>`; };
+
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2500); }
+
+async function load() {
+  const res = await fetch(`/api/inventory?k=${encodeURIComponent(KEY)}`);
+  if (!res.ok) { $("sum").textContent = (await res.json().catch(() => ({}))).error || "Can't reach the helper."; return; }
+  const data = await res.json();
+  items = [...data.suppressors, ...data.sbrs];
+  const s = data.suppressors;
+  const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
+  $("sum").textContent = `${n(s.length, "suppressor")} · ${s.filter(r => r.built).length} built · ${s.filter(r => r.status === "approved" && !r.built).length} not built`
+    + (data.sbrs.length ? ` · ${n(data.sbrs.length, "SBR")}` : "");
+  renderList(); renderDetail();
+}
+
+// Digits only ("83") find serials whose number is 83 or ends in 83 (A083, A1083); anything else searches serial, design, caliber, model.
+function matches(r, q) {
+  if (!q) return 0;
+  if (/^\d+$/.test(q)) {
+    const groups = r.serial.match(/\d+/g) || [];
+    if (groups.some(g => parseInt(g, 10) === parseInt(q, 10))) return 2;
+    return groups.some(g => g.endsWith(q)) ? 1 : -1;
+  }
+  const t = q.toLowerCase();
+  return [r.serial, r.design, r.caliber, r.model].some(v => String(v || "").toLowerCase().includes(t)) ? 1 : -1;
+}
+
+function renderList() {
+  const q = $("q").value.trim();
+  $("chips").innerHTML = Object.entries(FILTERS).filter(([k, f]) => k === "all" || items.some(f[1]))
+    .map(([k, f]) => `<button class="chip${k === filter ? " on" : ""}" data-f="${k}" type="button">${f[0]}</button>`).join("");
+  const rows = items.filter(FILTERS[filter][1]).map(r => [r, matches(r, q)]).filter(([, m]) => m >= 0)
+    .sort((a, b) => b[1] - a[1]).map(([r]) => r);
+  $("list").innerHTML = rows.map(r => `<button class="row${r.serial === sel ? " sel" : ""}" data-s="${esc(r.serial)}" type="button">
+      <div style="flex:1;min-width:0"><div class="serial">${esc(r.serial)}</div>
+      <div class="sub">${esc(r.caliber)}${r.length ? " · " + esc(r.length) + '"' : ""}${r.design ? " · " + esc(r.design) : ""}${r.model ? " · " + esc(r.model) : ""}</div></div>
+      ${pill(r)}</button>`).join("") || `<div class="empty">${q ? "Nothing matches that." : "Nothing here."}</div>`;
+}
+
+function renderDetail() {
+  const r = items.find(x => x.serial === sel);
+  const v = $("detailView");
+  if (!r) { v.innerHTML = `<div class="empty">Tap a serial to see it here.</div>`; return; }
+  const kv = (k, val) => val ? `<div class="kv"><span>${k}</span><span>${val}</span></div>` : "";
+  const canBuild = r.status === "approved";
+  v.innerHTML = `<button class="back" id="back" type="button">‹ Inventory</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="big">${esc(r.serial)}</div>${pill(r)}</div>
+    <div class="sub" style="font-size:15px;margin-bottom:6px">Caliber ${esc(r.caliber)}${r.length ? " · " + esc(r.length) + '" overall' : ""}${r.barrel ? " · " + esc(r.barrel) + '" barrel' : ""}</div>
+    ${r.conditions ? `<div class="note">Approved with conditions: ${esc(r.conditions)}</div>` : ""}
+    ${kv("Model", esc(r.model))}${kv("Filed", esc(r.filed))}${kv("Approved", esc(r.approved))}${kv("Application", esc(r.application))}${kv("eForm", esc(r.eform))}
+    ${r.pdf ? kv("Approval PDF", `<a href="/pdf/${encodeURIComponent(r.serial)}?k=${encodeURIComponent(KEY)}" target="_blank" rel="noreferrer">Open</a>`) : ""}
+    ${r.status === "sbr" ? "" : `<div class="build">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div><div style="font-weight:600">Built</div><div class="sub">${canBuild ? (r.built ? "Made, in your inventory" : "Approved, not made yet") : "Only approved suppressors can be built"}</div></div>
+        <button class="sw" id="sw" role="switch" aria-checked="${r.built}" aria-label="Built" type="button"${canBuild ? "" : " disabled"}></button>
+      </div>
+      ${asking === r.serial ? `<div class="ask">Clear the build record of ${esc(r.serial)}?<div class="design">
+        <button class="keep" id="keep" type="button">Keep it</button><button class="save" id="clear" type="button">Clear</button></div></div>`
+      : r.built ? `<div class="design"><input id="design" value="${esc(r.design)}" placeholder="Design, like PCC Short" aria-label="Design" enterkeyhint="done">
+        <button class="save" id="save" type="button">Save</button></div>` : ""}
+    </div>`}`;
+  $("back").onclick = showList;
+  // Turning Built off asks on the page: a confirm() pop-up can be blocked on a phone, and then nothing happens.
+  if ($("sw")) $("sw").onclick = () => { if (r.built) { asking = asking === r.serial ? null : r.serial; renderDetail(); } else setBuilt(r, true, r.design); };
+  if ($("keep")) $("keep").onclick = () => { asking = null; renderDetail(); };
+  if ($("clear")) $("clear").onclick = () => { asking = null; setBuilt(r, false, ""); };
+  if ($("save")) $("save").onclick = () => setBuilt(r, true, $("design").value);
+  if ($("design")) $("design").onkeydown = e => { if (e.key === "Enter") setBuilt(r, true, e.target.value); };
+}
+
+async function setBuilt(r, built, design) {
+  const res = await fetch(`/api/build?k=${encodeURIComponent(KEY)}`, {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({serial: r.serial, built, design: (design || "").trim()})});
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { toast(out.error || "Not saved."); return; }
+  toast(built ? `${r.serial} saved as built` : `${r.serial} is no longer marked built`);
+  await load();
+  if (built && !design && $("design")) $("design").focus();
+}
+
+// The URL's #serial is the screen: a detail is a history entry of its own (pushState), so the phone's back button and
+// swipe return to the list. "‹ Inventory" doesn't rely on that entry being there (opened at #serial, or a browser
+// that didn't keep it): it goes back only to an entry this page made, else switches to the list in place.
+let listY = 0;
+function route() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h) sel = h;
+  document.body.classList.toggle("detail", !!h);
+  renderList(); renderDetail();
+  if (!h) window.scrollTo(0, listY);
+}
+function open(serial) {
+  listY = window.scrollY;
+  history.pushState({serial}, "", "#" + encodeURIComponent(serial));
+  route(); window.scrollTo(0, 0);
+}
+function showList() {
+  if (history.state && history.state.serial) {
+    history.back();
+    setTimeout(() => { if (location.hash) { history.replaceState(null, "", location.pathname + location.search); route(); } }, 400);
+  } else {
+    history.replaceState(null, "", location.pathname + location.search); route();
+  }
+}
+window.addEventListener("popstate", route);
+window.addEventListener("hashchange", route);
+$("list").onclick = e => { const b = e.target.closest(".row"); if (b) open(b.dataset.s); };
+$("chips").onclick = e => { const b = e.target.closest(".chip"); if (b) { filter = b.dataset.f; renderList(); } };
+$("q").oninput = renderList;
+$("pad").onclick = () => {
+  const q = $("q"), num = q.inputMode !== "numeric";
+  q.inputMode = num ? "numeric" : "text"; q.pattern = num ? "[0-9]*" : "";
+  q.placeholder = num ? "Serial number, like 83" : "Serial or design";
+  $("pad").textContent = num ? "ABC" : "123"; $("pad").setAttribute("aria-label", num ? "Switch to letters" : "Switch to the number pad");
+  q.blur(); q.focus();
+};
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+if (location.hash) { sel = decodeURIComponent(location.hash.slice(1)); document.body.classList.add("detail"); }
+load();
+</script>
+</body>
+</html>
