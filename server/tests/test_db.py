@@ -137,3 +137,25 @@ def test_backups(filled, data_dir):
     assert kept == ["inventory-1.db", "inventory-2.db", "inventory-3.db"]
     copy = sqlite3.connect(str(data_dir / "backups" / "inventory-3.db"))
     assert copy.execute("SELECT count(*) FROM suppressors").fetchone()[0] == 38
+
+
+def test_migration_3_removes_earlier_build_records(data_dir):
+    """Phase 3 servers recorded builds in the history and request rows; schema 3 removes them (and only them)."""
+    data_dir.mkdir()
+    c = db.connect(data_dir / "inventory.db")
+    for v in (1, 2):
+        c.execute("BEGIN")
+        for statement in db._statements(db.MIGRATIONS[v]):
+            c.execute(statement)
+        c.execute(f"PRAGMA user_version = {v}")
+        c.execute("COMMIT")
+    for opn in ("import", "set_built", "clear_built", "add_queued"):
+        c.execute("INSERT INTO history (at, device, operation, serial) VALUES ('2026-10-28T19:00:00Z', 'iPhone', ?, 'A101')", (opn,))
+        c.execute("INSERT INTO requests VALUES (?, ?, '{}', '2026-10-28T19:00:00Z')", (opn, opn))
+    db.migrate(c, data_dir / "backups")
+    assert [r[0] for r in c.execute("SELECT operation FROM history")] == ["import", "add_queued"]
+    assert [r[0] for r in c.execute("SELECT operation FROM requests")] == ["import", "add_queued"]
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        c.execute("DELETE FROM history")
+    c.close()
+    assert b"set_built" not in (data_dir / "inventory.db").read_bytes()          # not left in free pages either

@@ -137,8 +137,12 @@ plain CLI, kept for debugging/scripting:
   `operate(conn, name, body, device)` with `OPERATIONS` set_built {items: [{serial, design, version}]} (approved
   only, all or nothing), clear_built, add_queued {rows}, edit_queued {serial, changes, version} (queued only;
   serial_number/caliber/overall_length), remove_queued. `version` given and stale = `Conflict` (409 + the rows as they
-  are now); `request_id` seen before = the stored answer (table `requests`, schema 2). `last_change` = max history id
-  (what `/api/events` watches, 1 s, so CLI writes show too). And
+  are now); `request_id` seen before = the stored answer (table `requests`, schema 2). **Builds leave no record of
+  when** (the user's rule, 2026-10-28: "it could be self incriminating"): `PRIVATE_OPS` (set_built, clear_built)
+  write no history row, don't touch updated_at/updated_by, keep no request row, and the API doesn't log them
+  (`PRIVATE_PATHS`); schema 3 deleted earlier ones and VACUUMed; `secure_delete` is on. Never add a build date,
+  build log or build audit anywhere. `last_change` = a time-free counter in meta (`changes`, bumped by every
+  operation and import; what `/api/events` watches, 1 s, so CLI writes show too). And
   pairing (6-digit code, 5 min, one use, 5 wrong tries kill it). `app.py`: the page is `src/phone.html` (copied into
   the image), auth = `Authorization: Bearer` (the app) or the HttpOnly cookie a browser gets when pairing; POSTs
   must be JSON (CSRF); `/api/inventory` = the PC page's shape + `version` + `can_build: true` + `server`; `POST /api/ops/<name>`;

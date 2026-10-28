@@ -185,7 +185,7 @@ function renderDetail() {
 }
 
 const OPS = {import: "Added (import)", add_queued: "Queued", edit_queued: "Edited", remove_queued: "Removed", mark_pending: "Pending",
-  mark_filed: "Filed", unmark_pending: "Back to queued", record_approvals: "Approved", set_built: "Built", clear_built: "Build cleared"};
+  mark_filed: "Filed", unmark_pending: "Back to queued", record_approvals: "Approved"};  // builds leave no history (the user's rule)
 const day = iso => new Date(iso).toLocaleDateString();
 async function loadHistory(serial) {
   const res = await fetch(`/api/history/${encodeURIComponent(serial)}`);

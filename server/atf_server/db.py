@@ -5,6 +5,10 @@ write is a named operation (OPERATIONS; import, into an empty server only) that 
 its history row; there is no "replace the whole inventory" call. Each operation names the row versions it was based
 on (another device's change since = Conflict, nothing saved) and a request_id (the same request again = the first
 answer, not applied twice). The schema version is PRAGMA user_version.
+
+Builds leave no record of WHEN (the user's rule: it could be self-incriminating): marking or clearing a build
+(PRIVATE_OPS) writes no history row, doesn't touch updated_at/updated_by, keeps no request row and isn't logged by
+the API. Only the current state (built, design) exists. Deleted rows are overwritten (secure_delete).
 """
 import csv
 import hashlib
@@ -92,7 +96,13 @@ CREATE TABLE requests (
   operation TEXT NOT NULL,
   response TEXT NOT NULL,
   at TEXT NOT NULL);
+""", 3: """
+DROP TRIGGER history_no_delete;
+DELETE FROM history WHERE operation IN ('set_built', 'clear_built');
+CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+DELETE FROM requests WHERE operation IN ('set_built', 'clear_built');
 """}
+PRIVATE_OPS = ("set_built", "clear_built")  # leave no record of when (see above); migration 3 removed earlier ones
 SCHEMA_VERSION = max(MIGRATIONS)
 
 
@@ -145,6 +155,7 @@ def connect(path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA secure_delete=ON")  # deleted rows are overwritten, not left in free pages
     return conn
 
 
@@ -176,6 +187,9 @@ def migrate(conn, backups=None):
         except BaseException:
             conn.execute("ROLLBACK")
             raise
+    if 0 < have < 3:  # build records were removed: rewrite the file so nothing of them stays in free space
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     if not meta(conn, "server_id"):
         set_meta(conn, "server_id", uuid.uuid4().hex)
 
@@ -330,6 +344,7 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
             except sqlite3.IntegrityError as e:
                 raise Refused(f"approval PDF for eForm {p.get('eform_id')}: {_why(e)}")
             stored += 1
+        _bump(conn)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -390,11 +405,8 @@ def _set_built(conn, body, device, at, rid):
         if r["status"] != "approved":
             raise Refused(f"{r['serial']} isn't approved, so it can't be marked built.")
         rows.append((r, _text(item.get("design"), "design", r["serial"], required=False)))
-    for r, design in rows:
-        before = row(conn, r["serial"])
-        conn.execute("UPDATE suppressors SET built = 1, design = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-                     (design, at, device, r["id"]))
-        _log(conn, at, device, "set_built", r["serial"], before, row(conn, r["serial"]), rid)
+    for r, design in rows:  # no history, no updated_at: see PRIVATE_OPS
+        conn.execute("UPDATE suppressors SET built = 1, design = ? WHERE id = ?", (design, r["id"]))
     return [row(conn, r["serial"]) for r, _ in rows]
 
 
@@ -403,10 +415,7 @@ def _clear_built(conn, body, device, at, rid):
     _check_version(conn, r, body.get("version"))
     if r["status"] != "approved":
         raise Refused(f"{r['serial']} isn't approved.")
-    before = row(conn, r["serial"])
-    conn.execute("UPDATE suppressors SET built = 0, design = '', updated_at = ?, updated_by = ? WHERE id = ?",
-                 (at, device, r["id"]))
-    _log(conn, at, device, "clear_built", r["serial"], before, row(conn, r["serial"]), rid)
+    conn.execute("UPDATE suppressors SET built = 0, design = '' WHERE id = ?", (r["id"],))  # no record of when
     return [row(conn, r["serial"])]
 
 
@@ -481,7 +490,8 @@ def operate(conn, name, body, device):
                 return json.loads(done["response"])
         rows = OPERATIONS[name](conn, body, device, now(), rid)
         out = {"ok": True, "rows": rows}
-        if rid:
+        _bump(conn)
+        if rid and name not in PRIVATE_OPS:  # marking a build twice is harmless: no request row (it has a time)
             conn.execute("INSERT INTO requests (request_id, operation, response, at) VALUES (?, ?, ?, ?)",
                          (rid, name, json.dumps(out), now()))
         conn.execute("COMMIT")
@@ -492,9 +502,13 @@ def operate(conn, name, body, device):
         raise
 
 
+def _bump(conn):
+    set_meta(conn, "changes", str(int(meta(conn, "changes") or 0) + 1))
+
+
 def last_change(conn):
-    """The newest history id: it grows with every change (what live pages watch)."""
-    return conn.execute("SELECT COALESCE(MAX(id), 0) FROM history").fetchone()[0]
+    """A counter that grows with every change, builds included, and holds no time (what live pages watch)."""
+    return int(meta(conn, "changes") or 0)
 
 
 def _log(conn, at, device, operation, serial, before, after, request_id=None):

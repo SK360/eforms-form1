@@ -64,10 +64,13 @@ def test_full_rows_history_pdf_export(client, auth, filled):
     assert export.text == db.export_csv(filled) and "attachment" in export.headers["content-disposition"]
 
 
-def test_operations(client, auth, filled):
+def test_operations(client, auth, filled, caplog):
+    caplog.set_level("INFO", logger="atf_server")
     r = client.post("/api/ops/set_built", headers=auth, json={"request_id": "x1", "items": [{"serial": "A110", "design": "PCC", "version": 1}]})
     assert r.status_code == 200 and r.json()["rows"][0]["built"] == "yes"
-    assert db.history(filled, "A110")[-1]["device"] == "PC"            # recorded under the paired device's name
+    assert "set_built" not in caplog.text                              # a build isn't even in the log
+    r = client.post("/api/ops/add_queued", headers=auth, json={"rows": [{"serial_number": "A139", "caliber": "9", "overall_length": "12"}]})
+    assert db.history(filled, "A139")[-1]["device"] == "PC" and "/api/ops/add_queued 200 PC" in caplog.text
     stale = client.post("/api/ops/set_built", headers=auth, json={"items": [{"serial": "A110", "design": "Other", "version": 1}]})
     assert stale.status_code == 409 and stale.json()["rows"][0]["design"] == "PCC"
     assert client.post("/api/ops/set_built", headers=auth, json={"items": [{"serial": "A130"}]}).status_code == 400

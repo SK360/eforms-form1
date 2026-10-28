@@ -23,6 +23,7 @@ COOKIE = "atf_device"
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; "
        "frame-ancestors 'none'")
 log = logging.getLogger("atf_server")
+PRIVATE_PATHS = {f"/api/ops/{name}" for name in db.PRIVATE_OPS}
 
 
 def find_page():
@@ -98,8 +99,9 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
             response = await call_next(request)
         for k, v in (("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"), ("Cache-Control", "no-store")):
             response.headers.setdefault(k, v)
-        log.info("%s %s %s %s", request.method, request.url.path, response.status_code,
-                 getattr(request.state, "device", "-"))
+        if request.url.path not in PRIVATE_PATHS:  # a build leaves no record of when, log lines included
+            log.info("%s %s %s %s", request.method, request.url.path, response.status_code,
+                     getattr(request.state, "device", "-"))
         return response
 
     @app.get("/", response_class=HTMLResponse)
@@ -186,8 +188,8 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
 
     @app.get("/api/events")
     async def events(request: Request, me=Depends(device)):
-        """Server-sent events: "change" whenever the history grows (any device, the console too), so open pages
-        reload. A comment line every 15 s keeps proxies from closing it."""
+        """Server-sent events: "change" whenever anything changed (db.last_change: any device, the console too), so
+        open pages reload. A comment line every 15 s keeps proxies from closing it."""
         async def stream():
             with opened() as c:
                 seen = db.last_change(c)

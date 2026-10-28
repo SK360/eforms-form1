@@ -9,17 +9,20 @@ def op(conn, name, device="iPhone", **body):
     return db.operate(conn, name, body, device)
 
 
-def test_set_and_clear_built(filled):
+def test_set_and_clear_built_leave_no_record_of_when(filled):
+    """The user's rule: a build must not be recorded with a time anywhere. Only the current state exists."""
+    stamp = tuple(filled.execute("SELECT updated_at, updated_by FROM suppressors WHERE serial = 'A110'").fetchone())
     v = db.row(filled, "A110")["version"]
-    out = op(filled, "set_built", items=[{"serial": "a110", "design": "  PCC   Short ", "version": v}])
+    out = op(filled, "set_built", request_id="b1", items=[{"serial": "a110", "design": "  PCC   Short ", "version": v}])
     a110 = out["rows"][0]
     assert (a110["built"], a110["design"], a110["version"]) == ("yes", "PCC Short", v + 1)
-    op(filled, "clear_built", serial="A110", version=a110["version"])
+    op(filled, "clear_built", request_id="b2", serial="A110", version=a110["version"])
     assert (db.row(filled, "A110")["built"], db.row(filled, "A110")["design"]) == ("", "")
-    hist = db.history(filled, "A110")
-    assert [h["operation"] for h in hist] == ["import", "set_built", "clear_built"]
-    assert hist[1]["device"] == "iPhone" and hist[1]["before"]["built"] == "" and hist[1]["after"]["design"] == "PCC Short"
-    assert filled.execute("SELECT updated_by FROM suppressors WHERE serial = 'A110'").fetchone()[0] == "iPhone"
+    assert [h["operation"] for h in db.history(filled, "A110")] == ["import"]     # no history entry
+    assert tuple(filled.execute("SELECT updated_at, updated_by FROM suppressors WHERE serial = 'A110'").fetchone()) == stamp
+    assert not filled.execute("SELECT 1 FROM requests").fetchone()                  # no request row (it has a time)
+    op(filled, "set_built", request_id="b1", items=[{"serial": "A110", "design": "PCC Short"}])
+    assert db.row(filled, "A110")["built"] == "yes"                                # a repeat is simply harmless
 
 
 def test_builds_are_all_or_nothing_and_approved_only(filled):

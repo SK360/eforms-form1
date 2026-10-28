@@ -130,8 +130,8 @@ def https_running(filled, data_dir, tls_dir):
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_builds_from_two_phones(running, filled, engine):
-    """Two paired phones: one marks a build, the other's page updates by itself (live updates), the history names the
-    phone; a page still showing an old version can't overwrite the newer change."""
+    """Two paired phones: one marks a build, the other's page updates by itself (live updates); the build leaves no
+    history; a page still showing an old version can't overwrite the newer change."""
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as pw:
         try:
@@ -156,8 +156,8 @@ def test_builds_from_two_phones(running, filled, engine):
         one.click("#save")
         two.wait_for_selector("#sw[aria-checked='true']")               # two: updated without a reload
         assert two.input_value("#design") == "Rimfire 12in"
-        two.wait_for_selector("#hist :text('Phone one')")
-        assert "Built · Rimfire 12in · Phone one" in two.inner_text("#hist")
+        two.wait_for_selector("#hist .kv")
+        assert "Built" not in two.inner_text("#hist")                    # builds leave no history (the user's rule)
         two.evaluate("live.close()")                                    # two stops listening: it now shows an old version
         one.click("#sw")
         one.click("#clear")
