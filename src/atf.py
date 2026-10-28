@@ -34,6 +34,7 @@ import argparse
 import base64
 import csv
 import json
+import os
 import re
 from datetime import datetime
 import sys
@@ -290,8 +291,8 @@ def _token_match(want, got):
 # operations (record_builds, clear_build, add_queued, edit_queued, remove_queued); whole-file saves are refused
 # (save_rows / save_sbrs raise ServerReadOnly: filing and approvals come later). This computer's CSVs aren't used. When the
 # server can't be reached, the last data seen (data/server_cache.json) is shown, marked offline and read-only.
-SERVER_READ_ONLY = ("Your inventory is on your server. Filing and Check approvals don't use it yet: for those, use this "
-                    "computer's inventory (Settings > Where your inventory lives).")
+SERVER_READ_ONLY = ("Your inventory is on your server: this can't be saved as a whole file. Please report it (it's a bug); "
+                    "nothing was changed.")
 SERVER_STATE = {}  # after a read: {"online": bool, "address", "problem", "seen"}
 _FETCHED = {}
 
@@ -340,15 +341,69 @@ def _server(settings=None):
 
 
 def _server_op(name, body):
-    """One named change on the server (server/atf_server/db.py OPERATIONS), with a fresh request id."""
+    """One named change on the server (server/atf_server/db.py OPERATIONS), with a fresh request id. Filing results
+    still waiting in the retry file go first."""
     import uuid
     import remote
+    if _outbox_path().exists():
+        outbox_replay()
     try:
         return _server().post(f"/api/ops/{name}", dict(body, request_id=uuid.uuid4().hex))
     except remote.Unreachable as e:
         raise remote.ServerError(f"Not saved: your server can't be reached. {e}")
     finally:
         _FETCHED.clear()  # the next read shows what the server has now
+
+
+# The retry file (data/outbox.jsonl): a filing result the server hasn't confirmed yet. Written (and flushed to disk)
+# BEFORE it's sent, removed only once the server confirms it; sent again before every server call and at every
+# start. Its request id makes a repeat harmless. While it isn't empty, filing doesn't start.
+def _outbox_path():
+    return DATA / "outbox.jsonl"
+
+
+def outbox():
+    p = _outbox_path()
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()] if p.exists() else []
+
+
+def _outbox_write(entries):
+    p = _outbox_path()
+    if not entries:
+        p.unlink(missing_ok=True)
+        return
+    tmp = p.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _outbox_add(entry):
+    p = _outbox_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def outbox_replay():
+    """Send the waiting filing results. Returns those still waiting (unreachable, or refused: then with "problem")."""
+    import remote
+    waiting = outbox()
+    if not waiting or not server_settings():
+        return waiting
+    left = []
+    for n, e in enumerate(waiting):
+        try:
+            _server().post(f"/api/ops/{e['op']}", e["body"])
+            _FETCHED.clear()
+        except remote.Unreachable:
+            left += waiting[n:]
+            break
+        except remote.ServerError as err:
+            left.append(dict(e, problem=str(err)))
+    _outbox_write(left)
+    return left
 
 
 def _seen_version(serial):
@@ -365,6 +420,8 @@ def _server_inventory():
     import remote
     if _FETCHED and time.monotonic() - _FETCHED["at"] < 2:
         return _FETCHED["data"]
+    if _outbox_path().exists():  # a filing result waiting to reach the server goes first
+        outbox_replay()
     server = _server()
     try:
         data = server.rows()
@@ -613,14 +670,16 @@ def record_sbrs(records):
                "control_number": rec.get("control_number", ""), "conditions": rec.get("conditions", "")}
         old = by.get(key(new))
         if old is None:
-            rows.append(new)
-            by[key(new)] = new
+            rows.append(dict(new, _changed=True))
+            by[key(new)] = rows[-1]
             added += 1
             changed = True
         elif any(v and old.get(k) != v for k, v in new.items()):
-            old.update({k: v for k, v in new.items() if v})
+            old.update({k: v for k, v in new.items() if v}, _changed=True)
             changed = True
-    if changed:
+    if changed and server_settings():
+        _server_op("record_sbrs", {"rows": [r for r in rows if r.get("_changed")]})
+    elif changed:
         save_sbrs(rows)
     return added
 
@@ -1058,7 +1117,54 @@ def _tick(page, selector):
         raise RuntimeError(f"could not tick {selector}")
 
 
-def _submit(page, item, bad, rows, idx, length=""):
+def _set_pending(rows, idx, length, force=False):
+    """Mark a row pending just before Sign & Submit. With a server, only its confirmation counts: this raises if it
+    doesn't come, and the caller then doesn't click Sign & Submit."""
+    r, today = rows[idx], datetime.now().strftime("%m/%d/%Y")
+    length = r.get("overall_length") or length
+    if server_settings():
+        _server_op("mark_pending", {"serial": r["serial_number"], "version": r.get("version"), "filed_date": today,
+                                    "overall_length": length, "force": bool(force)})
+        r.update(status="pending", filed_date=today, overall_length=length)
+        return
+    r.update(status="pending", filed_date=today, overall_length=length)
+    save_rows(rows)
+
+
+def _set_filed(rows, idx, num):
+    """Record the application number (out/submissions.csv was written first). With a server: into the retry file,
+    then sent. Returns False if the server hasn't confirmed it yet (it stays in the retry file)."""
+    import uuid
+    rows[idx].update(status="filed", application_number=num)
+    if not server_settings():
+        save_rows(rows)
+        return True
+    serial = rows[idx]["serial_number"]
+    _outbox_add({"op": "mark_filed", "serial": serial, "number": num,
+                 "body": {"serial": serial, "application_number": num, "request_id": uuid.uuid4().hex}})
+    return not [e for e in outbox_replay() if e["serial"] == serial]
+
+
+def resolve_pending(serial, number=None):
+    """Resolve a pending row after checking the dashboard: filed (with its application number, also logged to
+    out/submissions.csv) or, with no number, not filed (back in the queue)."""
+    rows = load_rows()
+    i = next(n for n, r in enumerate(rows) if r["serial_number"].upper() == serial.upper())
+    if number:
+        log_submission(rows[i], number)
+        if server_settings():
+            _server_op("mark_filed", {"serial": rows[i]["serial_number"], "application_number": number})
+            return
+        rows[i].update(status="filed", application_number=number, filed_date=rows[i]["filed_date"] or datetime.now().strftime("%m/%d/%Y"))
+    elif server_settings():
+        _server_op("unmark_pending", {"serial": rows[i]["serial_number"]})
+        return
+    else:
+        rows[i]["status"] = ""
+    save_rows(rows)
+
+
+def _submit(page, item, bad, rows, idx, length="", force=False):
     """Opt-in: tick the certification and click Sign & Submit. You still enter the emailed code and your PIN."""
     if bad:
         emit("error", "*** NOT submitting: see the problem(s) above. ***"); return
@@ -1075,10 +1181,12 @@ def _submit(page, item, bad, rows, idx, length=""):
         emit("error", "*** NOT submitting: Certify page does not say 'validated successfully'. ***"); return
     _tick(page, "#signed")
     # From here on the application may get filed: mark the row pending first, so a crash, timeout or Ctrl-C
-    # can't leave it looking unfiled (and get it filed twice by the next run).
-    rows[idx]["status"], rows[idx]["filed_date"] = "pending", datetime.now().strftime("%m/%d/%Y")
-    rows[idx]["overall_length"] = rows[idx].get("overall_length") or length
-    save_rows(rows)
+    # can't leave it looking unfiled (and get it filed twice by the next run). With a server, only once it confirmed.
+    try:
+        _set_pending(rows, idx, length, force)
+    except Exception as e:
+        emit("error", f"*** NOT submitting: PENDING couldn't be recorded ({str(e).splitlines()[0]}). Nothing was filed. ***")
+        return
     page.locator("#signAndSubmit").click()
     emit("banner", "Signed & submitted. In the browser: enter the 6-digit code from your email and click Verify,\n"
                    "then enter your eForms PIN and click Submit. Waiting up to 15 min for the confirmation...")
@@ -1092,10 +1200,13 @@ def _submit(page, item, bad, rows, idx, length=""):
     m = re.search(r"application number is:?\s*(\d+)", txt)
     num = m.group(1) if m else "UNKNOWN"
     log = log_submission(item, num)
-    rows[idx]["status"], rows[idx]["application_number"] = "filed", num
-    save_rows(rows)
-    emit("done", f"SUBMITTED. Application number {num} logged to {log}; row {idx + 1} marked filed.",
-         serial=item["serial_number"], number=num)
+    if _set_filed(rows, idx, num):
+        emit("done", f"SUBMITTED. Application number {num} logged to {log}; row {idx + 1} marked filed.",
+             serial=item["serial_number"], number=num)
+    else:
+        emit("done", f"SUBMITTED. Application number {num} logged to {log}.", serial=item["serial_number"], number=num)
+        emit("error", f"*** Your server hasn't recorded it yet: kept in {_outbox_path()} and sent again automatically. "
+                      "The batch stops here. ***")
     try:
         page.locator("#OkBtn").click(timeout=3000)
     except Exception:
@@ -1491,11 +1602,40 @@ def apply_approvals(records, import_unknown=False):
             rows.append(row)
             by[row["serial_number"].upper()] = row
             added.append(row["serial_number"])
+    if server_settings():  # the same changes, as one operation on the server
+        if updated or added:
+            fields = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+            before = {r["serial_number"].upper(): r for r in load_rows()}
+            _server_op("record_approvals", {
+                "updates": [{"serial": s, "fields": {k: by[s.upper()][k] for k in fields
+                                                     if by[s.upper()][k] != before[s.upper()][k]}} for s in updated],
+                "added": [by[s.upper()] for s in added]})
+        return updated, added
     if added:
         rows.sort(key=lambda r: serial_key(r["serial_number"]))
     if updated or added:
         save_rows(rows)
     return updated, added
+
+
+def send_approval_pdfs(records):
+    """With a server: upload the approval PDFs it doesn't have yet (by eForm ID). Returns how many it added."""
+    import hashlib
+    if not server_settings():
+        return 0
+    server = _server()
+    have = {p["eform_id"] for p in server.get("/api/pdfs")["pdfs"]}
+    sent = []
+    for rec in records:
+        path = Path(rec.get("pdf") or "")
+        if rec.get("eform_id") and rec["eform_id"] not in have and path.is_file():
+            data = path.read_bytes()
+            if server.post("/api/import/pdf", data, timeout=60)["sha256"] != hashlib.sha256(data).hexdigest():
+                raise RuntimeError(f"The approval PDF {path.name} arrived damaged.")
+            sent.append({"eform_id": rec["eform_id"], "serial": (rec.get("serial") or "").strip(),
+                         "sha256": hashlib.sha256(data).hexdigest()})
+            have.add(rec["eform_id"])
+    return server.post("/api/approval-pdfs", {"pdfs": sent}, timeout=120)["added"] if sent else 0
 
 
 def _num(s):
@@ -2110,7 +2250,7 @@ def _file_one(page, args, trust, steps, rows, idx):
         emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")
     if args.submit:
         try:
-            _submit(page, item, bad, rows, idx, ctx_vals["overall_length"])
+            _submit(page, item, bad, rows, idx, ctx_vals["overall_length"], force=getattr(args, "force", False))
         except Exception as e:
             emit("error", f"\n*** SUBMIT STEP FAILED: {str(e).splitlines()[0]} ***")
             if rows[idx]["status"] == "pending":
@@ -2180,6 +2320,8 @@ def file_rows(rows, todo, args):
         emit("warn", "5320.23 problems:\n  " + "\n  ".join(probs))
         if ask("Continue anyway? [y/N] ").strip().lower() != "y":
             sys.exit(1)
+    if args.submit and server_settings():
+        _server_precheck(rows, todo, getattr(args, "force", False))
     pw, ctx, page = _browser()
     try:
         if portal.get("new_form_steps"):
@@ -2192,6 +2334,9 @@ def file_rows(rows, todo, args):
             if not _file_one(page, args, trust, steps, rows, idx) and args.submit:
                 emit("warn", f"Row {idx + 1} was not filed; stopping the batch.")
                 break
+            if args.submit and outbox():
+                emit("warn", "A filing result hasn't reached your server yet; stopping the batch before the next row.")
+                break
         if args.capture:
             OUT.mkdir(exist_ok=True)
             dest = OUT / f"capture_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
@@ -2200,6 +2345,25 @@ def file_rows(rows, todo, args):
         ask("Press Enter to log out and close the browser... ")
     finally:  # runs on errors, sys.exit and Ctrl-C too: eForms allows one session, so always log out
         _shutdown(page, ctx, pw)
+
+
+def _server_precheck(rows, todo, force=False):
+    """Before the browser opens, with a server: it must answer, nothing may be waiting in the retry file, and every
+    row to file must still be queued THERE (another device may have filed or changed it). Exits otherwise."""
+    import remote
+    try:
+        waiting = outbox_replay()
+        if waiting:
+            sys.exit(f"A filing result hasn't reached your server yet ({', '.join(e['serial'] for e in waiting)}): "
+                     "filing doesn't start until it has. Check the server, then try again.")
+        fresh = {r["serial_number"].upper(): r for r in _server().rows()[0]}
+    except remote.ServerError as e:
+        sys.exit(f"Your inventory server can't be reached, so filing doesn't start: {e}")
+    for i in todo:
+        there = fresh.get(rows[i]["serial_number"].upper())
+        if there is None or (there["status"] != "" and not force) or there.get("version") != rows[i].get("version"):
+            sys.exit(f"{rows[i]['serial_number']} changed on your server since this list was read (another device?). "
+                     "Nothing was filed; open File again.")
 
 
 def cmd_fill_form1(args):

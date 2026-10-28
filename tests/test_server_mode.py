@@ -240,13 +240,12 @@ def test_menu_connects_shows_the_server_and_switches_back(fake, configured, answ
     queue(("S1", "9"))
     local = atf.SUPP.read_bytes()
     answers(pick("Settings"), pick("Where your inventory lives"), "connect", fake["address"], True, "", "PC", "123456",
-            lambda kw: "quit" if not any(str(c.title).startswith(("File ", "Check approvals", "Advanced", "⚠ Resolve"))
-                                         for c in kw["choices"]) and any(str(c.title) == "Add suppressors" for c in kw["choices"])
-            else "unexpected")
+            lambda kw: "quit" if {"Add suppressors", "Check approvals on eForms", "Advanced…"} <= {str(c.title) for c in kw["choices"]}
+            and any(str(c.title).startswith("File 1 queued") for c in kw["choices"]) else "unexpected")   # everything, on the server
     ui.menu()
     out = screen.getvalue()
     assert _fingerprint() in out and "Connected:" in out and "2 suppressors, 1 SBRs" in out
-    assert "A101" in out and "On your server" in out and "filing and approvals use this computer's inventory" in out
+    assert "A101" in out and "On your server (https://127.0.0.1:" in out
     saved = atf.server_settings()
     assert saved["key"] == "k1" and saved["addresses"] == [fake["address"]] and saved["fingerprint"] == _fingerprint()
     assert saved["ca"] == CA and "certificate authority fingerprint" in out

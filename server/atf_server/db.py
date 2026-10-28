@@ -556,8 +556,152 @@ def _remove_queued(conn, body, device, at, rid):
     return []
 
 
+# ---------- Filing (the app's Sign & Submit) and approvals ----------
+
+def _mark_pending(conn, body, device, at, rid):
+    """Just before Sign & Submit: the app clicks it only once this is saved (fail-closed). Queued rows only (force:
+    a deliberate re-file of a filed/pending/never-file/disapproved row)."""
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    allowed = ("queued",) + (("filed", "pending", "skip", "disapproved") if body.get("force") else ())
+    if r["status"] not in allowed:
+        raise Refused(f"{r['serial']} isn't queued on your server (it's {r['status']}): not filing it.")
+    length = r["overall_length"] or (_inches(body.get("overall_length"), r["serial"]) if body.get("overall_length") else "")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET status = 'pending', filed_date = ?, overall_length = ?, updated_at = ?, updated_by = ? "
+                 "WHERE id = ?", (to_iso(body.get("filed_date")) or at[:10], length, at, device, r["id"]))
+    _log(conn, at, device, "mark_pending", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+def _mark_filed(conn, body, device, at, rid):
+    """The portal's confirmation was read (or Resolve: it was filed): filed + application number ("UNKNOWN" when the
+    number couldn't be read: filed, number left empty)."""
+    r = _current(conn, body.get("serial"))
+    if r["status"] not in ("pending", "filed"):
+        raise Refused(f"{r['serial']} isn't pending on your server (it's {r['status']}).")
+    number = str(body.get("application_number") or "").strip()
+    if number and number != "UNKNOWN" and not number.isdigit():
+        raise Refused(f"{r['serial']}: the application number should be digits.")
+    before = row(conn, r["serial"])
+    try:
+        conn.execute("UPDATE suppressors SET status = 'filed', application_number = ?, filed_date = COALESCE(filed_date, ?), "
+                     "updated_at = ?, updated_by = ? WHERE id = ?",
+                     (number if number.isdigit() else r["application_number"], at[:10], at, device, r["id"]))
+    except sqlite3.IntegrityError:
+        raise Refused(f"Application number {number} is already recorded for another suppressor.")
+    _log(conn, at, device, "mark_filed", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+def _unmark_pending(conn, body, device, at, rid):
+    """Resolve: it was NOT filed (checked on the dashboard): back in the queue."""
+    r = _current(conn, body.get("serial"))
+    if r["status"] != "pending":
+        raise Refused(f"{r['serial']} isn't pending on your server (it's {r['status']}).")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET status = 'queued', filed_date = NULL, updated_at = ?, updated_by = ? WHERE id = ?",
+                 (at, device, r["id"]))
+    _log(conn, at, device, "unmark_pending", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+APPROVAL_FIELDS = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+
+
+def _record_approvals(conn, body, device, at, rid):
+    """Check approvals: updates [{serial, fields}] (approval fields only; status approved/disapproved; an overall
+    length only fills an empty one) and added [rows] (approved suppressors that weren't in the inventory)."""
+    out = []
+    for u in body.get("updates") or []:
+        r = _current(conn, u.get("serial"))
+        fields = u.get("fields") or {}
+        if set(fields) - set(APPROVAL_FIELDS) or fields.get("status", "approved") not in ("approved", "disapproved"):
+            raise Refused(f"{r['serial']}: only approval details can be recorded this way.")
+        if fields.get("overall_length") and r["overall_length"]:
+            fields.pop("overall_length")  # never overwrites a recorded length (a differing one is reported, not changed)
+        values = {k: (to_iso(v) if k == "approved_date" else str(v).strip()) for k, v in fields.items()}
+        if "overall_length" in values:
+            values["overall_length"] = _inches(values["overall_length"], r["serial"])
+        if r["built"] and values.get("status") == "disapproved":
+            raise Refused(f"{r['serial']} is marked built; it can't be disapproved here.")
+        before = row(conn, r["serial"])
+        conn.execute(f"UPDATE suppressors SET {', '.join(f'{k} = ?' for k in values)}, updated_at = ?, updated_by = ? WHERE id = ?",
+                     (*values.values(), at, device, r["id"]))
+        _log(conn, at, device, "record_approvals", r["serial"], before, row(conn, r["serial"]), rid)
+        out.append(row(conn, r["serial"]))
+    for n in body.get("added") or []:
+        serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
+        if conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+            raise Refused(f"{serial} is already in the inventory.")
+        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, approved_date, eform_id, control_number, "
+                     "conditions, updated_at, updated_by) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)",
+                     (serial, _text(n.get("caliber"), "caliber", serial, required=False, limit=40),
+                      str(n.get("overall_length") or "").strip(), to_iso(n.get("approved_date")), str(n.get("eform_id") or ""),
+                      str(n.get("control_number") or ""), str(n.get("conditions") or ""), at, device))
+        _log(conn, at, device, "record_approvals", serial, None, row(conn, serial), rid)
+        out.append(row(conn, serial))
+    return out
+
+
+def _record_sbrs(conn, body, device, at, rid):
+    """Check approvals: approved SBRs, added or (by eForm ID) filled in with the details given."""
+    for s in body.get("rows") or []:
+        s = {c: str(s.get(c) or "").strip() for c in SBR_COLS}
+        if not s["serial_number"]:
+            raise Refused("An SBR without a serial number.")
+        have = conn.execute("SELECT * FROM sbrs WHERE eform_id = ?", (s["eform_id"],)).fetchone() if s["eform_id"] else \
+            conn.execute("SELECT * FROM sbrs WHERE serial = ? COLLATE NOCASE AND eform_id IS NULL", (s["serial_number"],)).fetchone()
+        values = (s["serial_number"], s["caliber"], s["model"], s["barrel_length"], s["overall_length"], to_iso(s["approved_date"]),
+                  s["control_number"], s["conditions"])
+        if have is None:
+            conn.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, control_number, "
+                         "conditions, eform_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, s["eform_id"] or None))
+        else:
+            cols = ("serial", "caliber", "model", "barrel_length", "overall_length", "approved_date", "control_number", "conditions")
+            keep = [(c, v) for c, v in zip(cols, values) if v]  # fills in; never blanks a recorded detail
+            if keep:
+                conn.execute(f"UPDATE sbrs SET {', '.join(f'{c} = ?' for c, _ in keep)} WHERE id = ?", (*[v for _, v in keep], have["id"]))
+        _log(conn, at, device, "record_sbrs", s["serial_number"], None, s, rid)
+    return []
+
+
 OPERATIONS = {"set_built": _set_built, "clear_built": _clear_built, "add_queued": _add_queued,
-              "edit_queued": _edit_queued, "remove_queued": _remove_queued}
+              "edit_queued": _edit_queued, "remove_queued": _remove_queued, "mark_pending": _mark_pending,
+              "mark_filed": _mark_filed, "unmark_pending": _unmark_pending, "record_approvals": _record_approvals,
+              "record_sbrs": _record_sbrs}
+
+
+def add_approval_pdfs(conn, pdf_dir, items, device):
+    """Check approvals: new approval PDFs ({eform_id, serial, path} of uploaded files). One already stored for that
+    eForm ID is skipped. Returns how many were added."""
+    added = 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for p in items:
+            if not p.get("eform_id") or conn.execute("SELECT 1 FROM approval_pdfs WHERE eform_id = ?", (p["eform_id"],)).fetchone():
+                continue
+            data = Path(p["path"]).read_bytes()
+            if not data.startswith(b"%PDF"):
+                raise Refused(f"approval PDF for {p.get('serial') or p['eform_id']}: not a PDF")
+            digest = hashlib.sha256(data).hexdigest()
+            target = Path(pdf_dir) / f"{digest}.pdf"
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(".tmp")
+                tmp.write_bytes(data)
+                tmp.replace(target)
+            conn.execute("INSERT INTO approval_pdfs (eform_id, serial, sha256, size, received_at) VALUES (?, ?, ?, ?, ?)",
+                         (p["eform_id"], p.get("serial") or "", digest, len(data), now()))
+            _log(conn, now(), device, "add_approval_pdf", p.get("serial") or None, None, {"eform_id": p["eform_id"]})
+            added += 1
+        if added:
+            _bump(conn)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return added
 
 
 def operate(conn, name, body, device):

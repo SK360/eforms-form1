@@ -1,52 +1,13 @@
 """Moving the inventory to the server and back (phase 4), against the REAL server (server/atf_server, run from
 server/.venv in a temp folder; skipped where that isn't installed). Made-up records only."""
-import re
-import socket
-import subprocess
 import time
-from pathlib import Path
 
 import pytest
 
-from conftest import ROOT, atf, pick, ui
+from conftest import atf, connect, pick, ui
 import remote
 
-SERVER_PY = ROOT / "server" / ".venv" / "bin" / "python"
 QUIT = lambda kw: "quit"  # noqa: E731
-
-
-def _cli(data, *args):
-    return subprocess.run([str(SERVER_PY), "-m", "atf_server", "--data", str(data), *args], cwd=ROOT / "server",
-                          capture_output=True, text=True, timeout=60).stdout
-
-
-@pytest.fixture
-def server(tmp_path):
-    if not SERVER_PY.exists():
-        pytest.skip("the server's environment (server/.venv) isn't installed")
-    data = tmp_path / "server-data"
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    proc = subprocess.Popen([str(SERVER_PY), "-m", "atf_server", "--data", str(data), "serve", "--host", "127.0.0.1",
-                             "--port", str(port)], cwd=ROOT / "server", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    address = f"https://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            remote.probe(address, timeout=1)
-            break
-        except remote.ServerError:
-            time.sleep(0.1)
-    yield {"address": address, "data": data, "code": lambda: re.search(r"\d{6}", _cli(data, "pair-code")).group()}
-    proc.terminate()
-    proc.wait(10)
-
-
-def connect(server):
-    found = remote.probe(server["address"])
-    paired = remote.pair(found, server["code"](), "PC")
-    atf.save_server_settings({"server_id": found["server_id"], "addresses": [found["address"]], "fingerprint": found["fingerprint"],
-                              "ca": found["ca"], "key": paired["key"], "device_id": paired["device_id"]})
 
 
 def inventory():

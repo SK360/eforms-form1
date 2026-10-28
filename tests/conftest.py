@@ -7,7 +7,10 @@ import builtins
 import io
 import re
 import shutil
+import socket
+import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -110,6 +113,43 @@ def add_other_rp(**over):
     t["responsible_persons"].append(person)
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
     return person
+
+
+SERVER_PY = ROOT / "server" / ".venv" / "bin" / "python"
+
+
+@pytest.fixture
+def server(tmp_path):
+    """The REAL inventory server (server/atf_server, from server/.venv) on 127.0.0.1 in a temp folder; skipped where
+    that isn't installed. {"address", "data", "code": () -> a fresh pairing code}."""
+    if not SERVER_PY.exists():
+        pytest.skip("the server's environment (server/.venv) isn't installed")
+    data = tmp_path / "server-data"
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    cli = lambda *a: subprocess.run([str(SERVER_PY), "-m", "atf_server", "--data", str(data), *a], cwd=ROOT / "server",  # noqa: E731
+                                    capture_output=True, text=True, timeout=60).stdout
+    proc = subprocess.Popen([str(SERVER_PY), "-m", "atf_server", "--data", str(data), "serve", "--host", "127.0.0.1",
+                             "--port", str(port)], cwd=ROOT / "server", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    address = f"https://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            remote.probe(address, timeout=1)
+            break
+        except remote.ServerError:
+            time.sleep(0.1)
+    yield {"address": address, "data": data, "code": lambda: re.search(r"\d{6}", cli("pair-code")).group()}
+    proc.terminate()
+    proc.wait(10)
+
+
+def connect(server):
+    """Pair this (sandboxed) app with the test server and switch it to server mode."""
+    found = remote.probe(server["address"])
+    paired = remote.pair(found, server["code"](), "PC")
+    atf.save_server_settings({"server_id": found["server_id"], "addresses": [found["address"]], "fingerprint": found["fingerprint"],
+                              "ca": found["ca"], "key": paired["key"], "device_id": paired["device_id"]})
 
 
 @pytest.fixture

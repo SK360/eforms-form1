@@ -239,6 +239,21 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
         finally:
             shutil.rmtree(incoming, ignore_errors=True)  # stored (or refused): the uploads aren't needed any more
 
+    @app.post("/api/approval-pdfs")
+    def approval_pdfs(body: dict, me=Depends(device), conn=Depends(get_db)):
+        """Check approvals: new approval PDFs uploaded first with /api/import/pdf ([{eform_id, serial, sha256}])."""
+        items = []
+        for p in body.get("pdfs") or []:
+            path = incoming / f"{p.get('sha256')}.pdf"
+            if not (len(str(p.get("sha256"))) == 64 and path.is_file()):
+                raise db.Refused(f"The approval PDF for {p.get('serial') or p.get('eform_id')} wasn't uploaded.")
+            items.append({"eform_id": str(p.get("eform_id") or ""), "serial": str(p.get("serial") or ""), "path": path})
+        try:
+            return {"added": db.add_approval_pdfs(conn, pdf_dir, items, me["name"])}
+        finally:
+            for item in items:
+                item["path"].unlink(missing_ok=True)
+
     @app.post("/api/import/undo")
     def undo_import(me=Depends(device), conn=Depends(get_db)):
         """Take back the last import while nothing has changed since (the app found a difference, or a try-out), and

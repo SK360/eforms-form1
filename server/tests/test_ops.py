@@ -86,3 +86,44 @@ def test_last_change_grows(filled):
     before = db.last_change(filled)
     op(filled, "clear_built", serial="A101")
     assert db.last_change(filled) == before + 1
+
+
+def test_filing_operations(filled):
+    v = db.row(filled, "A136")["version"]
+    op(filled, "mark_pending", device="PC", serial="A136", version=v, filed_date="10/28/2026", overall_length="12")
+    assert (db.row(filled, "A136")["status"], db.row(filled, "A136")["filed_date"]) == ("pending", "10/28/2026")
+    with pytest.raises(db.Refused, match="isn't queued on your server"):        # a second Sign & Submit: refused
+        op(filled, "mark_pending", serial="A136")
+    with pytest.raises(db.Refused, match="digits"):
+        op(filled, "mark_filed", serial="A136", application_number="12-34")
+    op(filled, "mark_filed", serial="A136", application_number="900000136")
+    assert (db.row(filled, "A136")["status"], db.row(filled, "A136")["application_number"]) == ("filed", "900000136")
+    with pytest.raises(db.Refused, match="already recorded for another"):
+        op(filled, "mark_pending", serial="A137")
+        op(filled, "mark_filed", serial="A137", application_number="900000136")
+    op(filled, "mark_filed", serial="A137", application_number="UNKNOWN")       # filed; the number couldn't be read
+    assert (db.row(filled, "A137")["status"], db.row(filled, "A137")["application_number"]) == ("filed", "")
+    op(filled, "mark_pending", serial="A138")
+    op(filled, "unmark_pending", serial="A138")
+    assert (db.row(filled, "A138")["status"], db.row(filled, "A138")["filed_date"]) == ("", "")
+    with pytest.raises(db.Refused, match="isn't queued"):
+        op(filled, "mark_pending", serial="A130")                                # filed already
+    op(filled, "mark_pending", serial="A130", force=True)                        # a deliberate re-file
+    assert [h["operation"] for h in db.history(filled, "A136")] == ["import", "mark_pending", "mark_filed"]
+
+
+def test_approval_operations(filled):
+    op(filled, "record_approvals", updates=[{"serial": "A130", "fields": {"status": "approved", "approved_date": "10/30/2026",
+                                                                          "eform_id": "1000130", "overall_length": "6"}}],
+       added=[{"serial_number": "A200", "caliber": "9", "overall_length": "12", "approved_date": "10/30/2026", "eform_id": "1000200"}])
+    a130 = db.row(filled, "A130")
+    assert (a130["status"], a130["approved_date"], a130["overall_length"]) == ("approved", "10/30/2026", "12")   # length kept
+    assert db.row(filled, "A200")["status"] == "approved"
+    with pytest.raises(db.Refused, match="only approval details"):
+        op(filled, "record_approvals", updates=[{"serial": "A130", "fields": {"built": "yes"}}])
+    with pytest.raises(db.Refused, match="only approval details"):
+        op(filled, "record_approvals", updates=[{"serial": "A130", "fields": {"status": "queued"}}])
+    op(filled, "record_sbrs", rows=[{"serial_number": "R3", "caliber": "9", "eform_id": "2000003", "approved_date": "10/30/2026"},
+                                    {"serial_number": "R1", "eform_id": "2000001", "conditions": "Mark it"}])
+    sbrs = {s["serial_number"]: s for s in db.sbrs(filled)}
+    assert sbrs["R3"]["approved_date"] == "10/30/2026" and sbrs["R1"]["conditions"] == "Mark it" and sbrs["R1"]["model"] == "PCC"

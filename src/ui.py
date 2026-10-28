@@ -177,10 +177,14 @@ def server_line():
         return
     st = atf.SERVER_STATE
     if st.get("online"):
-        con.print(f"  [dim]On your server ({escape(st.get('address') or '')}) · filing and approvals use this computer's inventory for now[/]")
+        con.print(f"  [dim]On your server ({escape(st.get('address') or '')})[/]")
     elif st.get("seen"):
         con.print(f"  [yellow]⚠ Your server can't be reached: this is the last data seen ({escape(st['seen'])}), read-only.[/]"
                   f"\n  [dim]{escape(st.get('problem') or '')}[/]")
+    for e in atf.outbox():  # filing results the server hasn't confirmed yet
+        con.print(f"  [bold yellow]⚠ The filing result for {escape(e['serial'])} (#{escape(short(e['number']))}) hasn't reached "
+                  "your server yet:[/] kept on this computer and sent again automatically. Filing waits until it has."
+                  + (f"\n    [dim]{escape(e['problem'])}[/]" if e.get("problem") else ""))
 
 
 def _days(date_str):
@@ -606,18 +610,14 @@ def resolve_flow():
         num = questionary.text("Application number:", validate=lambda s: s.strip().isdigit() or "Digits only").ask()
         if num is None:
             return
-        rows[i]["status"], rows[i]["application_number"] = "filed", num.strip()
-        rows[i]["filed_date"] = rows[i]["filed_date"] or date.today().strftime("%m/%d/%Y")
-        atf.log_submission(rows[i], num.strip())
-        atf.save_rows(rows)
+        atf.resolve_pending(rows[i]["serial_number"], num.strip())
         con.print(f"  [green]✔[/] {escape(rows[i]['serial_number'])} marked filed (#{escape(short(num.strip()))})")
     elif what == "queued":
-        rows[i]["status"] = ""
-        atf.save_rows(rows)
+        atf.resolve_pending(rows[i]["serial_number"])
         con.print(f"  [green]✔[/] {escape(rows[i]['serial_number'])} is back in the queue")
 
 
-def file_flow(indices=None):
+def file_flow(indices=None, force=False):
     probs = atf.settings_problems()
     if probs:
         con.print(Panel("\n".join(f"• {escape(x)}" for x in probs), title="Fix these in Settings first", border_style="red", expand=False))
@@ -667,7 +667,7 @@ def file_flow(indices=None):
         title="Confirm", border_style="cyan", expand=False))
     if not questionary.confirm("Confirm and open the browser?", default=False, auto_enter=False).ask():
         return
-    opts = SimpleNamespace(dry=False, submit=True, auto_affirm=True, skip_ssn=not ssn, capture=False)
+    opts = SimpleNamespace(dry=False, submit=True, auto_affirm=True, skip_ssn=not ssn, capture=False, force=force)
     try:
         atf.file_rows(rows, indices, opts)
     finally:
@@ -762,7 +762,7 @@ def refile_flow():
     con.print(Panel(f"{escape(rows[i]['serial_number'])} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
                     "Filing again creates a SECOND application for the same serial.", border_style="red", expand=False))
     if questionary.confirm("Re-file it anyway?", default=False, auto_enter=False).ask():
-        file_flow([i])
+        file_flow([i], force=True)
 
 
 # ---------- Settings (first-run wizard, and Settings in the menu) ----------
@@ -1373,6 +1373,11 @@ def approvals_flow():
             more_updated, added = atf.apply_approvals(records, import_unknown=True)
             updated += more_updated
     new_sbrs = atf.record_sbrs(records)
+    if atf.server_settings():
+        with con.status("Saving new approval PDFs on your server…"):
+            sent = atf.send_approval_pdfs(records)
+        if sent:
+            con.print(f"  [green]✔[/] {sent} approval PDF(s) saved on your server.")
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
     if new_sbrs:
@@ -1424,9 +1429,9 @@ def menu():
         queued = [r["serial_number"] for r in rows if r["status"] not in atf.SKIP]
         pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
         choices = []
-        if pending and not server:  # filing and its pending rows stay with this computer's inventory for now
+        if pending:
             choices.append(questionary.Choice(f"⚠ Resolve a pending row ({', '.join(pending)})", resolve_flow))
-        if queued and not server:
+        if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
         choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
@@ -1434,10 +1439,8 @@ def menu():
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
-        choices += ([] if server else [questionary.Choice("Check approvals on eForms", approvals_flow)]) + [
-                    questionary.Choice("Settings", settings_menu)] + ([] if server else [
-                    questionary.Choice("Advanced…", advanced_flow)]) + [
-                    questionary.Choice("Quit", "quit")]
+        choices += [questionary.Choice("Check approvals on eForms", approvals_flow), questionary.Choice("Settings", settings_menu),
+                    questionary.Choice("Advanced…", advanced_flow), questionary.Choice("Quit", "quit")]
         what = questionary.select("What next?", choices=choices).ask()
         if what in (None, "quit"):
             return

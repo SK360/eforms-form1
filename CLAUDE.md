@@ -185,7 +185,20 @@ plain CLI, kept for debugging/scripting:
   deleted). `copy_from_server()`: writes the CSVs (a non-empty one renamed `.replaced-by-server-<date>.csv` first),
   fetches PDFs it doesn't have by checksum (`GET /api/pdfs/<sha>`) into out/approved + index, compares. Menu:
   Settings > Where your inventory lives offers Move (when the server is empty), and on switching back Copy first /
-  Keep. Server console: `reset` (type RESET; backup first; devices/certs stay) and `restore <file>`. Tests:
+  Keep. **Phase 5 (filing + approvals):** server ops mark_pending (queued only; `force` = deliberate re-file),
+  mark_filed (pending/filed; "UNKNOWN" = filed without a number), unmark_pending, record_approvals ({updates:
+  [{serial, fields}] approval fields only, a length only fills an empty one; added: [rows]}), record_sbrs (upsert
+  by eForm ID, fills in); `POST /api/approval-pdfs` (uploaded first via /api/import/pdf). App: `_submit` calls
+  `_set_pending` (server: `mark_pending` with the row's version; ANY failure = "NOT submitting", Sign & Submit not
+  clicked); after the confirmation `log_submission` (out/submissions.csv) then `_set_filed`: server mode writes
+  `data/outbox.jsonl` (fsync) FIRST, then sends; `outbox_replay()` runs before every server call/read and removes an
+  entry only when the server confirms (request_id = harmless repeat); a waiting entry stops the batch before the next
+  row and blocks new filing (`_server_precheck`, before the browser opens: server reachable, outbox empty, every row
+  still queued there at the same version). `resolve_pending(serial, number)`. `apply_approvals`/`record_sbrs` send
+  their changes as ops in server mode; `send_approval_pdfs(records)` uploads PDFs the server lacks. The menu offers
+  everything in server mode except Open on my phone; the home screen shows waiting filing results. Tests:
+  `tests/test_server_filing.py` (fake portal + REAL server: pending refused = not submitted, result kept and
+  replayed, another device's change, unreachable, resolve, approvals); the `server` fixture lives in conftest. Server console: `reset` (type RESET; backup first; devices/certs stay) and `restore <file>`. Tests:
   `tests/test_move.py` runs the REAL server from server/.venv in a temp folder (skipped without it) for the round
   trip; `server/tests/test_move.py`. The test sandbox uses its own MonkeyPatch (a test's `monkeypatch.undo()` once
   pointed atf at the real data/); use `monkeypatch.context()` in tests.

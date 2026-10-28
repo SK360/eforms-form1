@@ -116,7 +116,9 @@ nft add rule inet atf input tcp dport 8765 ip saddr != { 127.0.0.1, 192.168.1.0/
 3. Back to the computer any time: Settings › Where your inventory lives › Use this computer's inventory again ›
    **Copy the server's inventory to this computer first** (checked the same way; the server keeps its copy).
 
-Filing and Check approvals still use the computer's own inventory in this version: switch back for those.
+Filing and Check approvals then work on the server's inventory too. A row is marked pending ON THE SERVER before
+Sign & Submit is clicked (if the server doesn't confirm it, nothing is submitted), and each filing result is written
+to the computer's `data/outbox.jsonl` before it's sent, so a server that goes away mid-batch never loses one.
 
 ## Backups and the restore drill
 
