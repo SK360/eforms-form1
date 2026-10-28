@@ -474,10 +474,11 @@ def _differences(here, there, cols, what):
     return problems
 
 
-def move_to_server(try_only=False):
-    """Move this computer's inventory to the (empty, connected) server; see above. Returns {suppressors, built, sbrs,
-    pdfs, problems, moved, renamed}."""
-    import base64
+def move_to_server(try_only=False, progress=lambda text: None):
+    """Move this computer's inventory to the (empty, connected) server; see above. The approval PDFs go one per
+    request first (all of them in one request was too much for a small container), then the rows in one import that
+    names them by checksum. progress(text) is told how far it got. Returns {suppressors, built, sbrs, pdfs, problems,
+    moved, renamed}."""
     import hashlib
     import remote
     if not server_settings():
@@ -486,23 +487,38 @@ def move_to_server(try_only=False):
     sup, sbrs, pdfs = local_for_move()
     if not sup and not sbrs:
         raise remote.ServerError("There's no inventory on this computer to move.")
-    files = [(p, p["path"].read_bytes()) for p in pdfs]
-    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "pdfs": len(files)}
-    server.post("/api/import", {"suppressors": sup, "sbrs": sbrs, "pdfs": [
-        {"eform_id": p["eform_id"], "serial": p["serial"], "data": base64.b64encode(d).decode("ascii")} for p, d in files]})
+    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "pdfs": len(pdfs)}
+    sent = []
+    try:
+        for n, p in enumerate(pdfs, 1):
+            progress(f"Sending approval PDFs ({n}/{len(pdfs)})…")
+            data = p["path"].read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if server.post("/api/import/pdf", data, timeout=60)["sha256"] != digest:
+                raise remote.ServerError(f"The approval PDF {p['path'].name} arrived damaged. Nothing was moved.")
+            sent.append((p, digest))
+        progress("Sending the inventory…")
+        server.post("/api/import", {"suppressors": sup, "sbrs": sbrs, "pdfs": [
+            {"eform_id": p["eform_id"], "serial": p["serial"], "sha256": d} for p, d in sent]}, timeout=300)
+    except BaseException:
+        try:  # an unfinished move: drop what was uploaded (an import that did land is taken back too)
+            server.post("/api/import/undo", {}, timeout=60)
+        except remote.ServerError:
+            pass
+        raise
+    progress("Checking every row and PDF on the server…")
     try:
         got_sup, got_sbrs = server.rows()
         problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "SBR")
-        sent = sorted((p["eform_id"] or "", hashlib.sha256(d).hexdigest()) for p, d in files)
-        if sent != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
+        if sorted((p["eform_id"] or "", d) for p, d in sent) != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
             problems.append("Approval PDFs: what the server stored isn't what was sent")
     except BaseException:
-        server.post("/api/import/undo", {})
+        server.post("/api/import/undo", {}, timeout=60)
         raise
     finally:
         _FETCHED.clear()
     if problems or try_only:
-        server.post("/api/import/undo", {})
+        server.post("/api/import/undo", {}, timeout=60)
         return dict(counts, problems=problems, moved=False, renamed=[])
     renamed = [_move_aside(p, "moved-to-server") for p in (SUPP, _sbrs_path()) if p.exists()]
     return dict(counts, problems=[], moved=True, renamed=renamed)

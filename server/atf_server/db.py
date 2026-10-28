@@ -328,8 +328,8 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
                 raise Refused(f"SBR {r['serial_number'] or '(no serial)'}: {_why(e)}")
             _log(conn, at, device, "import", r["serial_number"], None, r)
         stored = 0
-        for p in pdfs:
-            data = p["data"]
+        for p in pdfs:  # {"data": bytes} or {"path": an uploaded file}: read one at a time (a small container)
+            data = p["data"] if "data" in p else Path(p["path"]).read_bytes()
             if not data.startswith(b"%PDF"):
                 raise Refused(f"approval PDF for {p.get('serial') or p.get('eform_id')}: not a PDF")
             digest = hashlib.sha256(data).hexdigest()
@@ -377,7 +377,9 @@ def _wipe(conn, history_where):
 
 def undo_import(conn, pdf_dir):
     """Take back an import that nothing has changed since (the app's move found a difference, or was a try-out):
-    the server is empty again, as before the import."""
+    the server is empty again, as before the import. An empty server: nothing to take back."""
+    if is_empty(conn):
+        return
     conn.execute("BEGIN IMMEDIATE")
     try:
         mark = meta(conn, "import_mark")

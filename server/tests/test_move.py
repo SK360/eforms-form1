@@ -79,3 +79,30 @@ def test_console_reset_asks_first(filled, data_dir, monkeypatch, capsys):
     assert main(["--data", str(data_dir), "reset"]) == 1 and len(db.rows(filled)) == 38
     monkeypatch.setattr("builtins.input", lambda prompt: "RESET")
     assert main(["--data", str(data_dir), "reset"]) == 0 and db.is_empty(filled)
+
+
+def test_pdfs_uploaded_one_at_a_time(empty_client, conn, data_dir):
+    """The app sends each PDF on its own (a 137 MB inventory in one request was too much for a 512 MB container),
+    then the rows in one import naming them by checksum."""
+    sup, sbrs, pdfs = demo.inventory()
+    named = []
+    for p in pdfs:
+        r = empty_client.post("/api/import/pdf", content=p["data"], headers={"Content-Type": "application/pdf"})
+        assert r.json()["sha256"] == hashlib.sha256(p["data"]).hexdigest()
+        named.append({"eform_id": p["eform_id"], "serial": p["serial"], "sha256": r.json()["sha256"]})
+    assert empty_client.post("/api/import/pdf", content=b"hello", headers={"Content-Type": "application/pdf"}).status_code == 400
+    assert empty_client.post("/api/import/pdf", content=b"%PDF", headers={"Content-Type": "text/plain"}).status_code == 415
+    missing = dict(named[0], sha256="0" * 64)
+    r = empty_client.post("/api/import", json={"suppressors": sup, "sbrs": sbrs, "pdfs": [missing]})
+    assert r.status_code == 400 and "wasn't uploaded" in r.json()["error"] and db.is_empty(conn)
+    for p in pdfs:                                                   # that refusal dropped the uploads: send them again
+        empty_client.post("/api/import/pdf", content=p["data"], headers={"Content-Type": "application/pdf"})
+    assert empty_client.post("/api/import", json={"suppressors": sup, "sbrs": sbrs, "pdfs": named}).json()["pdfs"] == 27
+    assert not (data_dir / "incoming").exists() and len(list((data_dir / "approved").glob("*.pdf"))) == 27
+
+
+def test_undo_drops_unfinished_uploads(empty_client, conn, data_dir):
+    empty_client.post("/api/import/pdf", content=b"%PDF-1.4 x", headers={"Content-Type": "application/pdf"})
+    assert (data_dir / "incoming").exists()
+    assert empty_client.post("/api/import/undo", json={}).json() == {"ok": True}       # server empty: just the uploads
+    assert not (data_dir / "incoming").exists()

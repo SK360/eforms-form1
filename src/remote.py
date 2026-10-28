@@ -100,7 +100,9 @@ def _call(conn, method, path, body=None, key=None):
     if key:
         headers["Authorization"] = f"Bearer {key}"
     data = None
-    if body is not None:
+    if isinstance(body, bytes):  # an approval PDF upload
+        data, headers["Content-Type"] = body, "application/pdf"
+    elif body is not None:
         data, headers["Content-Type"] = json.dumps(body).encode("utf-8"), "application/json"
     try:
         conn.request(method, path, body=data, headers=headers)
@@ -172,7 +174,7 @@ class Server:
         self.ca = ca
         self.timeout = timeout
 
-    def _request(self, method, path, body=None):
+    def _request(self, method, path, body=None, timeout=None):
         first = Server.working.get(self.server_id)
         order = ([first] if first in self.addresses else []) + [a for a in self.addresses if a != first]
         problems = []
@@ -187,7 +189,7 @@ class Server:
                         hello = {}
                     if hello.get("server_id") != self.server_id:
                         raise Unreachable(f"A different server answers at {address}; it isn't used.")
-                result = _call(_connect(address, self.fingerprint, self.timeout, self.ca), method, path, body, self.key)
+                result = _call(_connect(address, self.fingerprint, timeout or self.timeout, self.ca), method, path, body, self.key)
             except Unreachable as e:
                 Server.working.pop(self.server_id, None)
                 problems.append(str(e))
@@ -204,8 +206,9 @@ class Server:
     def get(self, path):
         return _json(*self._request("GET", path))
 
-    def post(self, path, body):
-        return _json(*self._request("POST", path, body))
+    def post(self, path, body, timeout=None):
+        """body: JSON, or bytes (an approval PDF). timeout: seconds to wait on each step (longer for big jobs)."""
+        return _json(*self._request("POST", path, body, timeout))
 
     def rows(self):
         """(suppressors, sbrs) in the app's CSV shape."""

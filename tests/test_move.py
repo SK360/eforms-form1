@@ -133,7 +133,7 @@ def test_menu_moves_and_comes_back(server, configured, answers, screen):
     ui.menu()
     out = screen.getvalue()
     assert "Your server is empty" in out and "Everything matched" in out and atf.SUPP.exists()
-    assert found["fingerprint"] in out
+    assert atf.server_settings()["fingerprint"] == found["fingerprint"]   # the CA it showed is the one it saved
     answers(pick("Settings"), pick("Where your inventory lives"), "move", "move", True, QUIT)
     ui.menu()
     assert "Moved and checked" in screen.getvalue() and not atf.SUPP.exists()

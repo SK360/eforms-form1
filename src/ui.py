@@ -1163,8 +1163,12 @@ def server_flow():
         if how in (None, "back"):
             return
         if how == "copy":
-            with con.status("Copying your server's inventory to this computer…"):
-                rep = atf.copy_from_server()
+            try:
+                with con.status("Copying your server's inventory to this computer…"):
+                    rep = atf.copy_from_server()
+            except remote.ServerError as e:
+                con.print(f"  [red]✖ Nothing was copied: {escape(str(e))}[/]")
+                return pause()
             if rep["problems"]:
                 con.print("  [red]✖ The copy on this computer doesn't match the server, so you're still connected:[/]")
                 for line in rep["problems"][:10]:
@@ -1204,12 +1208,12 @@ def move_flow():
     if how == "move" and not questionary.confirm(f"Move {len(sup)} suppressors and {len(sbrs)} SBRs to your server now?",
                                                  default=False, auto_enter=False).ask():
         return
-    with con.status("Sending your inventory and checking it…"):
-        try:
-            rep = atf.move_to_server(try_only=how == "try")
-        except remote.ServerError as e:
-            con.print(f"  [red]✖ Nothing was moved: {escape(str(e))}[/]")
-            return pause()
+    try:
+        with con.status("Sending your inventory…") as status:
+            rep = atf.move_to_server(try_only=how == "try", progress=status.update)
+    except remote.ServerError as e:  # (outside the status: its spinner would sit over the Enter prompt)
+        con.print(f"  [red]✖ Nothing was moved: {escape(str(e))}[/]")
+        return pause()
     what = f"{rep['suppressors']} suppressors ({rep['built']} built), {rep['sbrs']} SBRs, {rep['pdfs']} approval PDFs"
     if rep["problems"]:
         con.print(f"  [red]✖ The server's copy didn't match ({len(rep['problems'])} difference(s)), so nothing was moved "
@@ -1229,12 +1233,12 @@ def _connect_server():
     address = questionary.text("Your server's address on your home network (like 192.168.1.138):").ask()
     if not address:
         return
-    with con.status("Looking for your server…"):
-        try:
+    try:
+        with con.status("Looking for your server…"):
             found = remote.probe(address)
-        except remote.ServerError as e:
-            con.print(f"  [red]✖ {escape(str(e))}[/]")
-            return pause()
+    except remote.ServerError as e:  # (outside the status: its spinner would sit over the Enter prompt)
+        con.print(f"  [red]✖ {escape(str(e))}[/]")
+        return pause()
     if found["api"] != remote.API:
         newer = "the helper" if (found["api"] or 0) > remote.API else "the server"
         con.print(f"  [red]✖ That server speaks version {escape(str(found['api']))} and this helper speaks {remote.API}: "

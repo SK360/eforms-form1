@@ -9,7 +9,10 @@ browser gets when it pairs. Request logs name the method, path, device and statu
 import asyncio
 import base64
 import binascii
+import hashlib
 import logging
+import secrets
+import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -95,7 +98,10 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
     @app.middleware("http")
     async def guard_and_log(request: Request, call_next):
         # Writes must be JSON: a form on another site can't send that without the browser asking first (CSRF).
-        if request.method == "POST" and not request.headers.get("content-type", "").startswith("application/json"):
+        kind = request.headers.get("content-type", "")
+        # (an approval PDF upload is application/pdf: a form on another site can't send that either)
+        if request.method == "POST" and not (kind.startswith("application/json")
+                                             or (request.url.path == "/api/import/pdf" and kind == "application/pdf")):
             response = JSONResponse({"error": "Send JSON."}, status_code=415)
         else:
             response = await call_next(request)
@@ -183,21 +189,61 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
         return Response(db.export_csv(conn), media_type="text/csv; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="inventory_{datetime.now():%Y-%m-%d}.csv"'})
 
+    incoming = data_dir / "incoming"  # approval PDFs uploaded for an import, one request each
+
+    @app.post("/api/import/pdf")
+    async def import_pdf(request: Request, me=Depends(device)):
+        """One approval PDF for the coming import, streamed to disk (a 137 MB inventory in one request was too much
+        for a 512 MB container). Returns its checksum, which the import then names."""
+        incoming.mkdir(parents=True, exist_ok=True)
+        tmp, digest, size, head = incoming / f"upload-{secrets.token_hex(8)}.tmp", hashlib.sha256(), 0, b""
+        try:
+            with tmp.open("wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 64 * 1024 * 1024:
+                        raise db.Refused("That PDF is too large (over 64 MB).")
+                    head = head or chunk[:4]
+                    digest.update(chunk)
+                    f.write(chunk)
+            if head != b"%PDF":
+                raise db.Refused("That isn't a PDF.")
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        tmp.replace(incoming / f"{digest.hexdigest()}.pdf")
+        return {"sha256": digest.hexdigest(), "size": size}
+
     @app.post("/api/import")
     def do_import(body: dict, me=Depends(device), conn=Depends(get_db)):
-        """The app's move to the server: the whole inventory at once ({suppressors, sbrs} in the app's CSV shape,
-        pdfs: [{eform_id, serial, data (base64)}]), into an empty server only, all or nothing."""
+        """The app's move to the server: the whole inventory at once ({suppressors, sbrs} in the app's CSV shape;
+        pdfs: [{eform_id, serial, sha256}] uploaded first with /api/import/pdf, or {data: base64} for small ones),
+        into an empty server only, all or nothing."""
+        files = []
+        for p in body.get("pdfs") or []:
+            item = {"eform_id": p.get("eform_id"), "serial": p.get("serial") or ""}
+            if "data" in p:
+                try:
+                    item["data"] = base64.b64decode(p["data"], validate=True)
+                except (TypeError, ValueError, binascii.Error):
+                    raise db.Refused("An approval PDF in the import couldn't be read.")
+            else:
+                path = incoming / f"{p.get('sha256')}.pdf"
+                if not (len(str(p.get("sha256"))) == 64 and path.is_file()):
+                    raise db.Refused(f"The approval PDF for {item['serial'] or item['eform_id']} wasn't uploaded.")
+                item["path"] = path
+            files.append(item)
         try:
-            files = [{"eform_id": p.get("eform_id"), "serial": p.get("serial") or "", "data": base64.b64decode(p["data"], validate=True)}
-                     for p in body.get("pdfs") or []]
-        except (KeyError, TypeError, ValueError, binascii.Error):
-            raise db.Refused("An approval PDF in the import couldn't be read.")
-        return db.import_inventory(conn, pdf_dir, body.get("suppressors") or [], body.get("sbrs") or [], files,
-                                   device=me["name"])
+            return db.import_inventory(conn, pdf_dir, body.get("suppressors") or [], body.get("sbrs") or [], files,
+                                       device=me["name"])
+        finally:
+            shutil.rmtree(incoming, ignore_errors=True)  # stored (or refused): the uploads aren't needed any more
 
     @app.post("/api/import/undo")
     def undo_import(me=Depends(device), conn=Depends(get_db)):
-        """Take back the last import while nothing has changed since (the app found a difference, or a try-out)."""
+        """Take back the last import while nothing has changed since (the app found a difference, or a try-out), and
+        drop any uploaded PDFs an unfinished move left."""
+        shutil.rmtree(incoming, ignore_errors=True)
         db.undo_import(conn, pdf_dir)
         return {"ok": True}
 
