@@ -103,9 +103,11 @@ people and check their rows on the responsible-persons page.
 ## Get it
 - **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):
   `git clone https://github.com/SK360/eforms-form1.git` and later `git pull` (in that folder) to update.
-- **Without Git:** on the repository page (https://github.com/SK360/eforms-form1):
-  Code > Download ZIP, then unzip it. To update, download it again and copy your `data`, `forms` and `out`
-  folders into the new copy.
+- **Without Git:** download the ZIP of the latest release from https://github.com/SK360/eforms-form1/releases and
+  unzip it. To update, download the new release and copy your `data`, `forms` and `out` folders into the new copy.
+
+**Updates:** [CHANGELOG.md](CHANGELOG.md) lists what's new in each release, and the home screen shows which version
+you have. To be told about new releases, choose **Watch > Custom > Releases** on the repository page.
 
 ## Install (once)
 It needs Python 3.9 to 3.14 (3.13 recommended). A brand-new Python such as 3.15 doesn't have ready-built copies

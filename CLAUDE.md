@@ -259,6 +259,14 @@ with Playwright) in a temp folder with a fake trust and made-up serials A101... 
 the user posts these publicly). The browser part of filing and approvals is replayed as engine events; no eForms.
 Re-run after changing any screen.
 
+## Releases
+`__version__` in `src/atf.py` (shown in the home title, `./atf --version`) and `CHANGELOG.md` (user-facing: what's
+new, fixed, and what is or isn't tested live; never real serials or names). To release: bump both, regenerate the
+screenshots (the home title shows the version), commit, wait for CI to pass on main, then
+`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z` and `gh release create vX.Y.Z --title vX.Y.Z --notes-file
+<that version's CHANGELOG section>`. Public (people Watch releases): run the personal-data scan first, and only with
+the user's OK.
+
 ## When the portal changes
 Run `./atf` > Advanced > Capture portal pages (= `inspect`), click through the Form 1, press Enter on each page (it
 records each field's question text (`context`), dropdown options and selected answer, and the newest tab to `out/capture_*.jsonl` and saves any PDF the portal sends to `out/captures/`); Claude reads those; update selectors in `config/mapping.yaml`. Advanced > Preview (= `fill-form1 --dry`)
@@ -273,8 +281,8 @@ prints steps without a browser. `--capture` records screens after the automated 
   EFT); a real second person (their own EFT/name) not yet. Verify page RP read-back not mapped. U.S. citizens only.
 - Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
 - Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
-- Windows: install/launcher/tests verified on GitHub's Windows runners; not yet used on a real Windows PC against the
-  live portal. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
+- Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on
+  GitHub's Windows runners. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
 - Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);
   reusing eForms "Saved Line items".
 - Legal: each submission is a certification under 18 U.S.C. 924 / 26 U.S.C. 5861 by the user. Check ATF's eForms

@@ -165,7 +165,7 @@ def summary(rows):
 
 def home(rows):
     con.clear()
-    con.print(queue_table(rows, title="[bold]eForms Form 1[/]"))  # no trust name: the screen gets shared
+    con.print(queue_table(rows, title=f"[bold]eForms Form 1[/] [dim]v{atf.__version__}[/]"))  # no trust name: the screen gets shared
     con.print(f"  {summary(rows)}")
 
 

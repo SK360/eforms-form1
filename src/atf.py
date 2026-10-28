@@ -21,6 +21,8 @@ Normally run through the menu: ./atf (src/ui.py). These commands are the plain C
         Open eForms and dump the controls/dialog text of whatever page the user is on (to map new steps).
   fields <pdf>
         List AcroForm field names in a PDF (only useful for a fresh, fillable ATF 5320.23).
+  --version
+        Print the version (see CHANGELOG.md).
 """
 import argparse
 import base64
@@ -33,6 +35,8 @@ from pathlib import Path
 
 import yaml
 from pypdf import PdfReader
+
+__version__ = "1.0.0"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -1739,6 +1743,7 @@ def cmd_fill_form1(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version=f"eForms Form 1 helper {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("fields"); p.add_argument("pdf"); p.set_defaults(fn=cmd_fields)
     p = sub.add_parser("fill-5320"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--date"); p.set_defaults(fn=cmd_fill_5320)

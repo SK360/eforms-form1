@@ -442,3 +442,15 @@ def test_export_has_build_columns(configured):
     i = rows[0].index("Built")
     assert rows[0][i:i + 2] == ("Built", "Design") and rows[3][i:i + 2] == ("yes", "PCC Short")
     assert rows[4][i:i + 2] == (None, None)
+
+
+def test_version_on_home_and_cli(configured, answers, screen, capsys, monkeypatch):
+    queue(("S1", "9"))
+    answers(QUIT)
+    ui.menu()
+    assert f"eForms Form 1 v{atf.__version__}" in screen.getvalue()
+    assert f"## {atf.__version__} " in (atf.ROOT / "CHANGELOG.md").read_text(encoding="utf-8")   # released with notes
+    monkeypatch.setattr(sys, "argv", ["atf", "--version"])
+    with pytest.raises(SystemExit):
+        atf.main()
+    assert capsys.readouterr().out.strip() == f"eForms Form 1 helper {atf.__version__}"
