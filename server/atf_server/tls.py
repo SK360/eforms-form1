@@ -150,3 +150,11 @@ def ensure_certificate(folder, names=()):
 
 def ca_path(folder):
     return Path(folder) / "ca.pem"
+
+
+def covered(cert_path):
+    """The addresses and names the server certificate is good for (what a phone may open), as text."""
+    from cryptography import x509
+    cert = x509.load_pem_x509_certificate(Path(cert_path).read_bytes())
+    alt = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    return [str(i) for i in alt.get_values_for_type(x509.IPAddress)] + alt.get_values_for_type(x509.DNSName)

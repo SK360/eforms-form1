@@ -1,5 +1,7 @@
-# docker compose up -d   (from this folder). Data lives in the "inventory-data" volume: inventory.db, approved/
-# PDFs, tls/ (the server's certificate), backups/. First pairing code: docker compose logs, or
+# The inventory server with Docker Compose: the steps are in DOCKER.md. In short, set ATF_NAMES below to this
+# machine's address on your home network FIRST, then:  docker compose up -d --build   (from this folder).
+# Data lives in the "inventory-data" volume: inventory.db, approved/ PDFs, tls/ (the server's certificates),
+# backups/. First pairing code: docker compose logs inventory, or
 #   docker compose exec inventory python -m atf_server pair-code
 services:
   inventory:
@@ -13,7 +15,10 @@ services:
       - inventory-data:/data
     environment:
       ATF_SERVER_NAME: ATF inventory
-      # ATF_NAMES: atf-inventory.home.arpa   # extra names for the certificate (the app pins it either way)
+      # This machine's address on your home network (what your phone opens), comma-separated with any names, e.g.
+      # 192.168.1.50,nas.home.arpa. Inside Docker the server can't see it by itself; without it, phones keep
+      # getting a certificate warning even after trusting the server.
+      ATF_NAMES: ""            # <- your machine's address here, e.g. "192.168.1.50"
 
 volumes:
   inventory-data:

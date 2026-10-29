@@ -158,7 +158,9 @@ plain CLI, kept for debugging/scripting:
   by this CA, e.g. phase 1's self-signed one; the CA stays). `/ca.crt` (no auth) + the page's "Trust this server"
   (`trustHelp`, only on the server's own HTTPS, not *.ts.net): a phone installs the CA once, then no warnings.
   CLI `python -m atf_server serve|pair-code|devices|revoke|fingerprint|import <app folder>|demo|backup`. Deploy:
-  `server/Dockerfile` (repo-root context), `compose.yaml`, `atf-inventory.service`, `LXC.md`. Tests: `server/tests`
+  `server/Dockerfile` (repo-root context), `compose.yaml` + `DOCKER.md` (Docker users must set `ATF_NAMES` = the host's
+  home-network address: inside a container the server only sees its own; the log's "HTTPS for:" = `tls.covered`),
+  `atf-inventory.service` + `LXC.md` (Proxmox), `server/README.md` (what/why, for users). Tests: `server/tests`
   (`server/.venv/bin/python -m pytest -q tests` from server/; root `pytest.ini` keeps the app's run to tests/); CI
   job `server` also builds and starts the image.
   **Phase 2 (the app reads from the server):** `src/remote.py` (stdlib only): `normalize` (bare address -> port

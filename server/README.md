@@ -98,8 +98,10 @@ Your password, SSN, emailed codes and PIN are never stored anywhere, server incl
 
 ## Setting it up
 
-1. **Install it** on your always-on machine: [LXC.md](LXC.md) has the steps for a Proxmox container (a plain install
-   with a system service, recommended), and for Docker. Any Linux machine with Python 3.11 or newer works the same way.
+1. **Install it** on your always-on machine, whichever way suits it:
+   - **Docker Compose** (a NAS, a Linux box, a mini PC, Docker Desktop): [DOCKER.md](DOCKER.md).
+   - **Proxmox**: [LXC.md](LXC.md), a small container with a plain install and a system service (no Docker needed).
+     The same steps work on any Linux machine with Python 3.11 or newer.
 2. **Try it with made-up data first** (`atf-server demo`): pair your phone, look around, mark a few builds.
 3. **Connect the helper**: Settings > Where your inventory lives > Connect to my server. It shows the server's
    fingerprint to compare with the one on your phone's Devices page, and asks for a pairing code.

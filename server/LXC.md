@@ -50,8 +50,8 @@ database before any schema change).
 
 ### Or with Docker
 
-With nesting on and Docker installed in the container: `cd /opt/atf-inventory/server && docker compose up -d`, then
-`docker compose logs` for the pairing code and `docker compose exec inventory python -m atf_server demo` for made-up data.
+With nesting on and Docker installed in the container, follow [DOCKER.md](DOCKER.md) instead (it's the same on any
+machine that runs Docker).
 
 ## 3. Your phone, on your home Wi-Fi
 

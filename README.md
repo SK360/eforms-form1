@@ -261,7 +261,9 @@ and its own always-on phone page. Filing and Check approvals still run on your c
 your settings, templates and files never leave it. It works on your home network alone (no internet, no VPN needed),
 you can try it with made-up data first, and you can move your inventory back at any time.
 
-Why you might (or might not) want it, what it does, and how to install it: **[server/README.md](server/README.md)**.
+Why you might (or might not) want it and what it does: **[server/README.md](server/README.md)**. Installing it:
+with **Docker Compose** on a NAS or any machine that runs Docker ([server/DOCKER.md](server/DOCKER.md)), or in a
+**Proxmox** container ([server/LXC.md](server/LXC.md)).
 
 ### Connecting the helper
 Settings > **Where your inventory lives** > Connect to my server: its address, a fingerprint to compare, a pairing

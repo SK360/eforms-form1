@@ -110,3 +110,14 @@ def test_a_stolen_ca_cant_vouch_for_a_real_website(tmp_path):
     server.load_cert_chain(tmp_path / "fake.pem", tmp_path / "fake-key.pem")
     with pytest.raises(ssl.SSLCertVerificationError):
         _handshake(ctx, server, "www.example-bank.com")
+
+
+def test_names_given_for_docker(tmp_path, monkeypatch):
+    """In Docker the server sees only the container's address: ATF_NAMES adds the host's (and a home name); the log
+    line "HTTPS for:" lists what the certificate covers. A public address is never in it."""
+    monkeypatch.setattr(tls, "addresses", lambda: ["127.0.0.1", "172.17.0.2"])
+    cert, _ = tls.ensure_certificate(tmp_path, names=["192.168.1.50", "nas.home.arpa", "8.8.8.8", ""])
+    shown = tls.covered(cert)
+    assert {"192.168.1.50", "172.17.0.2", "nas.home.arpa"} <= set(shown) and "8.8.8.8" not in shown
+    cert, _ = tls.ensure_certificate(tmp_path, names=["192.168.1.60"])          # changed later: a new certificate
+    assert "192.168.1.60" in tls.covered(cert)

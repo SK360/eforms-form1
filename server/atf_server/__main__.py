@@ -65,7 +65,7 @@ def serve(args):
     if not args.http:
         cert, key = tls.ensure_certificate(folder / "tls", names=(os.environ.get("ATF_NAMES") or "").split(","))
         ssl, ca = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, tls.ca_path(folder / "tls")
-        print(f"Server CA fingerprint: {tls.fingerprint(ca)}\nHTTPS for: {', '.join(tls.addresses())}", flush=True)
+        print(f"Server CA fingerprint: {tls.fingerprint(ca)}\nHTTPS for: {', '.join(tls.covered(cert))}", flush=True)
     threading.Thread(target=_daily_backups, args=(folder,), daemon=True).start()
     app = create_app(folder, name=os.environ.get("ATF_SERVER_NAME") or "ATF inventory", ca=ca)
     uvicorn.run(app, host=args.host, port=args.port, access_log=False, proxy_headers=False, timeout_graceful_shutdown=3, **ssl)
