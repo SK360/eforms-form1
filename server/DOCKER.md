@@ -17,9 +17,7 @@ try it, an issue saying how it went helps.
 
 ```bash
 git clone https://github.com/SK360/eforms-form1.git atf-inventory
-cd atf-inventory
-git checkout server            # until the server is part of a release
-cd server
+cd atf-inventory/server
 ```
 
 Open `compose.yaml` and put **your machine's address** in `ATF_NAMES` (and, if you like, a name your router gives

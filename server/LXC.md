@@ -32,7 +32,7 @@ In the container's console:
 apt update && apt install -y git python3-venv curl
 useradd --system --home /var/lib/atf-inventory --create-home atf
 git clone https://github.com/SK360/eforms-form1.git /opt/atf-inventory
-cd /opt/atf-inventory && git checkout server
+cd /opt/atf-inventory
 python3 -m venv server/.venv && server/.venv/bin/pip install -r server/requirements.txt
 cp server/atf-inventory.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now atf-inventory
