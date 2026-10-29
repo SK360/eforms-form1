@@ -69,3 +69,28 @@ jobs:
         run: |
           .venv/bin/python -m pip install --quiet pytest
           .venv/bin/python -m pytest -q -p no:cacheprovider
+
+  server:
+    # The optional inventory server (server/): its tests (API, database rules, its page in Chromium and WebKit) and
+    # the Docker image.
+    name: server (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --quiet -r server/requirements-dev.txt
+          python -m playwright install --with-deps chromium webkit
+      - name: Tests
+        run: python -m pytest -q -p no:cacheprovider server/tests
+      - name: Docker image builds and answers
+        run: |
+          docker build -q -f server/Dockerfile -t atf-inventory .
+          docker run -d --name inv -p 8765:8765 atf-inventory
+          for i in $(seq 30); do curl -skf https://127.0.0.1:8765/api/hello && break; sleep 1; done
+          curl -skf https://127.0.0.1:8765/api/hello
+          docker logs inv | grep -q "Pairing code"

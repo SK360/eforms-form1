@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest
+httpx
+playwright   # the browser test; skipped without it

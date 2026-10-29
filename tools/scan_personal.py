@@ -3,7 +3,8 @@
 
 Compares text with the values in YOUR records: data/trust.yaml (trust name and address, names, dates of birth,
 emails, addresses, the CLEO, file names), data/suppressors.csv and data/sbrs.csv (serials, application numbers,
-eForm IDs, control numbers, designs) and out/submissions.csv. Also flags SSN-shaped numbers and email addresses.
+eForm IDs, control numbers, designs; also their .moved-to-server-<date> copies and, with an inventory server, the
+app's data/server_cache.json) and out/submissions.csv. Also flags SSN-shaped numbers and email addresses.
 It never prints a value it finds: only where it is and what kind of value it is.
 
   python tools/scan_personal.py              what `git commit` would add (staged changes)   <- pre-commit hook
@@ -82,13 +83,25 @@ def personal_values(root=ROOT):
     if settings.exists():
         walk(yaml.safe_load(settings.read_text(encoding="utf-8-sig")) or {}, "")
     for rel, cols in CSV_COLS.items():
+        # also the copies a move to the inventory server leaves (suppressors.moved-to-server-<date>.csv) or replaces
         p = root / rel
-        if p.exists():
-            with p.open(newline="", encoding="utf-8-sig") as f:
-                for r in csv.DictReader(f):
-                    for c in cols:
-                        if (r.get(c) or "").strip():
-                            add(r[c], c, f"{rel} {c}")
+        for q in [p] + sorted(p.parent.glob(f"{p.stem}.*{p.suffix}")):
+            if q.exists():
+                with q.open(newline="", encoding="utf-8-sig") as f:
+                    for r in csv.DictReader(f):
+                        for c in cols:
+                            if (r.get(c) or "").strip():
+                                add(r[c], c, f"{q.relative_to(root).as_posix()} {c}")
+    # with an inventory server, the app's copy of what the server last sent (data/server_cache.json)
+    cache = root / "data" / "server_cache.json"
+    if cache.exists():
+        import json
+        saved = json.loads(cache.read_text(encoding="utf-8"))
+        for table, rel in (("suppressors", "data/suppressors.csv"), ("sbrs", "data/sbrs.csv")):
+            for r in saved.get(table) or []:
+                for c in CSV_COLS[rel]:
+                    if str(r.get(c) or "").strip():
+                        add(str(r[c]), c, f"data/server_cache.json {c}")
     return list(found.values())
 
 

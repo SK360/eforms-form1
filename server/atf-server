@@ -1,0 +1,9 @@
+#!/bin/sh
+# The server's commands on a plain install (LXC.md), run as the atf user with its data folder, from anywhere:
+#   /opt/atf-inventory/server/atf-server pair-code        (demo, devices, revoke <id>, fingerprint, backup, ...)
+cd "$(dirname "$0")" || exit 1
+ATF_DATA="${ATF_DATA:-/var/lib/atf-inventory}"
+if [ "$(id -u)" = 0 ]; then
+  exec runuser -u atf -- env ATF_DATA="$ATF_DATA" .venv/bin/python -m atf_server "$@"
+fi
+ATF_DATA="$ATF_DATA" exec .venv/bin/python -m atf_server "$@"

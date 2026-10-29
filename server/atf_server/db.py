@@ -1,0 +1,849 @@
+"""The inventory database: one SQLite file (WAL mode), rules enforced by constraints and triggers.
+
+Once the app is connected, the server is the only copy of the inventory (design doc: "Inventory server design"). Every
+write is a named operation (OPERATIONS; import, into an empty server only) that runs in one transaction together with
+its history row; there is no "replace the whole inventory" call. Each operation names the row versions it was based
+on (another device's change since = Conflict, nothing saved) and a request_id (the same request again = the first
+answer, not applied twice). The schema version is PRAGMA user_version.
+
+Builds leave no record of WHEN (the user's rule: it could be self-incriminating): marking or clearing a build
+(PRIVATE_OPS) writes no history row, doesn't touch updated_at/updated_by, keeps no request row and isn't logged by
+the API. Only the current state (built, design) exists. Deleted rows are overwritten (secure_delete).
+"""
+import csv
+import hashlib
+import hmac
+import io
+import json
+import re
+import secrets
+import sqlite3
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# The app's CSV columns (src/atf.py COLS / SBR_COLS): import and export are straight copies of the app's files.
+COLS = ["caliber", "serial_number", "overall_length", "status", "application_number", "filed_date", "approved_date",
+        "eform_id", "control_number", "conditions", "built", "design"]
+SBR_COLS = ["serial_number", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
+            "control_number", "conditions"]
+STATUSES = ("queued", "pending", "filed", "approved", "disapproved", "skip")  # "" in the app's CSV = queued
+PAIR_MINUTES, PAIR_TRIES = 5, 5
+ISO = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'"
+
+MIGRATIONS = {1: f"""
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE suppressors (
+  id INTEGER PRIMARY KEY,
+  serial TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (trim(serial) <> ''),
+  caliber TEXT NOT NULL DEFAULT '',
+  overall_length TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ({", ".join(f"'{s}'" for s in STATUSES)})),
+  application_number TEXT UNIQUE CHECK (application_number IS NULL OR application_number <> ''),
+  filed_date TEXT CHECK (filed_date IS NULL OR filed_date GLOB {ISO}),
+  approved_date TEXT CHECK (approved_date IS NULL OR approved_date GLOB {ISO}),
+  eform_id TEXT NOT NULL DEFAULT '',
+  control_number TEXT NOT NULL DEFAULT '',
+  conditions TEXT NOT NULL DEFAULT '',
+  built INTEGER NOT NULL DEFAULT 0 CHECK (built IN (0, 1)),
+  design TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  CHECK (built = 0 OR status = 'approved'));
+CREATE TRIGGER suppressors_version AFTER UPDATE ON suppressors WHEN NEW.version <= OLD.version
+BEGIN UPDATE suppressors SET version = OLD.version + 1 WHERE id = NEW.id; END;
+CREATE TABLE sbrs (
+  id INTEGER PRIMARY KEY,
+  serial TEXT NOT NULL CHECK (trim(serial) <> ''),
+  caliber TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  barrel_length TEXT NOT NULL DEFAULT '',
+  overall_length TEXT NOT NULL DEFAULT '',
+  approved_date TEXT CHECK (approved_date IS NULL OR approved_date GLOB {ISO}),
+  eform_id TEXT UNIQUE CHECK (eform_id IS NULL OR eform_id <> ''),
+  control_number TEXT NOT NULL DEFAULT '',
+  conditions TEXT NOT NULL DEFAULT '');
+CREATE TABLE approval_pdfs (
+  id INTEGER PRIMARY KEY,
+  eform_id TEXT UNIQUE CHECK (eform_id IS NULL OR eform_id <> ''),
+  serial TEXT NOT NULL DEFAULT '',
+  sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+  size INTEGER NOT NULL,
+  received_at TEXT NOT NULL);
+CREATE TABLE history (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  device TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  serial TEXT,
+  before TEXT,
+  after TEXT,
+  request_id TEXT);
+CREATE INDEX history_serial ON history (serial COLLATE NOCASE);
+CREATE TRIGGER history_no_update BEFORE UPDATE ON history BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+CREATE TABLE devices (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  last_seen TEXT,
+  revoked_at TEXT);
+""", 2: """
+CREATE TABLE requests (
+  request_id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  response TEXT NOT NULL,
+  at TEXT NOT NULL);
+""", 3: """
+DROP TRIGGER history_no_delete;
+DELETE FROM history WHERE operation IN ('set_built', 'clear_built');
+CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+DELETE FROM requests WHERE operation IN ('set_built', 'clear_built');
+"""}
+PRIVATE_OPS = ("set_built", "clear_built")  # leave no record of when (see above); migration 3 removed earlier ones
+SCHEMA_VERSION = max(MIGRATIONS)
+
+
+class Refused(Exception):
+    """An operation the rules don't allow (the API answers 400/409 with this text)."""
+
+
+class Conflict(Refused):
+    """The row changed since the caller read it (another device): nothing saved. .rows = how they are now."""
+
+    def __init__(self, text, rows):
+        super().__init__(text)
+        self.rows = rows
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def serial_key(serial):
+    """Natural order, as in the app: S9 < S10 < S100, letters compared case-insensitively."""
+    return [int(t) if t.isdigit() else t.upper() for t in re.split(r"(\d+)", str(serial))]
+
+
+def to_iso(date):
+    """MM/DD/YYYY (the app's CSV) -> YYYY-MM-DD; "" -> None. Anything else is refused."""
+    date = (date or "").strip()
+    if not date:
+        return None
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    raise Refused(f"not a date: {date!r} (expected MM/DD/YYYY)")
+
+
+def to_us(iso):
+    return datetime.strptime(iso, "%Y-%m-%d").strftime("%m/%d/%Y") if iso else ""
+
+
+# ---------- Opening, migrating, backing up ----------
+
+def connect(path):
+    conn = sqlite3.connect(str(path), isolation_level=None, timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA secure_delete=ON")  # deleted rows are overwritten, not left in free pages
+    return conn
+
+
+def _statements(script):
+    buf = ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            yield buf.strip()
+            buf = ""
+
+
+def migrate(conn, backups=None):
+    """Bring the schema up to date, each migration in one transaction. An existing database is backed up first; one
+    made by a newer server is refused (this server would not know its rules)."""
+    have = conn.execute("PRAGMA user_version").fetchone()[0]
+    if have > SCHEMA_VERSION:
+        raise Refused(f"The database is from a newer server (schema {have}, this server knows {SCHEMA_VERSION}). "
+                      "Update the server.")
+    if 0 < have < SCHEMA_VERSION and backups:
+        backup(conn, backups, label=f"before-schema-{SCHEMA_VERSION}")
+    for version in range(have + 1, SCHEMA_VERSION + 1):
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for statement in _statements(MIGRATIONS[version]):
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {version}")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    if 0 < have < 3:  # build records were removed: rewrite the file so nothing of them stays in free space
+        conn.execute("VACUUM")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    if not meta(conn, "server_id"):
+        set_meta(conn, "server_id", uuid.uuid4().hex)
+
+
+def backup(conn, folder, label=None, keep=30):
+    """A consistent copy made with SQLite's online backup (safe while the server runs). Keeps the newest `keep`."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / f"inventory-{label or datetime.now().strftime('%Y-%m-%d')}.db"
+    target = sqlite3.connect(str(dest))
+    try:
+        conn.backup(target)
+    finally:
+        target.close()
+    for old in sorted(folder.glob("inventory-*.db"), key=lambda p: p.stat().st_mtime)[:-keep]:
+        old.unlink()
+    return dest
+
+
+def meta(conn, key):
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn, key, value):
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                 (key, value))
+
+
+# ---------- Reads ----------
+
+def _app_row(r):
+    """A suppressors row in the app's CSV shape ("" = queued, built "yes", dates MM/DD/YYYY) plus its version."""
+    return {"caliber": r["caliber"], "serial_number": r["serial"], "overall_length": r["overall_length"],
+            "status": "" if r["status"] == "queued" else r["status"].upper() if r["status"] == "skip" else r["status"],
+            "application_number": r["application_number"] or "", "filed_date": to_us(r["filed_date"]),
+            "approved_date": to_us(r["approved_date"]), "eform_id": r["eform_id"], "control_number": r["control_number"],
+            "conditions": r["conditions"], "built": "yes" if r["built"] else "", "design": r["design"],
+            "version": r["version"]}
+
+
+def _app_sbr(r):
+    return {"serial_number": r["serial"], "caliber": r["caliber"], "model": r["model"], "barrel_length": r["barrel_length"],
+            "overall_length": r["overall_length"], "approved_date": to_us(r["approved_date"]), "eform_id": r["eform_id"] or "",
+            "control_number": r["control_number"], "conditions": r["conditions"]}
+
+
+def rows(conn):
+    return sorted((_app_row(r) for r in conn.execute("SELECT * FROM suppressors")),
+                  key=lambda r: serial_key(r["serial_number"]))
+
+
+def row(conn, serial):
+    r = conn.execute("SELECT * FROM suppressors WHERE serial = ?", (serial,)).fetchone()
+    return _app_row(r) if r else None
+
+
+def sbrs(conn):
+    return sorted((_app_sbr(r) for r in conn.execute("SELECT * FROM sbrs")), key=lambda r: serial_key(r["serial_number"]))
+
+
+def pdf_for(conn, serial):
+    """(sha256, file name) of the approval PDF for a suppressor or SBR: by its eForm ID, else by serial; or None."""
+    found = conn.execute("SELECT eform_id FROM suppressors WHERE serial = ? UNION ALL "
+                         "SELECT eform_id FROM sbrs WHERE serial = ? COLLATE NOCASE", (serial, serial)).fetchall()
+    for (eform,) in found:
+        if eform:
+            p = conn.execute("SELECT sha256, serial FROM approval_pdfs WHERE eform_id = ?", (eform,)).fetchone()
+            if p:
+                return p["sha256"], f"{p['serial'] or serial}.pdf"
+    if found:
+        p = conn.execute("SELECT sha256, serial FROM approval_pdfs WHERE serial = ? COLLATE NOCASE ORDER BY id DESC",
+                         (serial,)).fetchone()
+        if p:
+            return p["sha256"], f"{p['serial']}.pdf"
+    return None
+
+
+def history(conn, serial):
+    return [{"at": h["at"], "device": h["device"], "operation": h["operation"],
+             "before": json.loads(h["before"]) if h["before"] else None, "after": json.loads(h["after"]) if h["after"] else None}
+            for h in conn.execute("SELECT * FROM history WHERE serial = ? COLLATE NOCASE ORDER BY id", (serial,))]
+
+
+def export_csv(conn):
+    """The inventory as the app's suppressors.csv (serial order)."""
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=COLS, extrasaction="ignore", lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows(conn))
+    return out.getvalue()
+
+
+def is_empty(conn):
+    return not any(conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone() for t in ("suppressors", "sbrs", "approval_pdfs"))
+
+
+# ---------- Import (into an empty server only) ----------
+
+def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="import"):
+    """Load a whole inventory once: the app's suppressors.csv / sbrs.csv rows and approval PDFs
+    ({"eform_id", "serial", "data"}). All or nothing; refused unless the server is empty. Returns the counts."""
+    pdf_dir = Path(pdf_dir)
+    at = now()
+    written = []  # PDF files this import added: removed again if it fails
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not is_empty(conn):
+            raise Refused("The server already holds an inventory; import only goes into an empty server.")
+        for r in suppressors:
+            r = {c: (r.get(c) or "").strip() for c in COLS}
+            status = r["status"].lower() or "queued"
+            if status not in STATUSES:
+                raise Refused(f"{r['serial_number']}: unknown status {r['status']!r}")
+            built = r["built"].lower() == "yes"
+            if built and status != "approved":
+                raise Refused(f"{r['serial_number']}: marked built but not approved")
+            values = (r["serial_number"], r["caliber"], r["overall_length"], status, r["application_number"] or None,
+                      to_iso(r["filed_date"]), to_iso(r["approved_date"]), r["eform_id"], r["control_number"],
+                      r["conditions"], int(built), r["design"], at, device)
+            try:
+                conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, application_number, "
+                             "filed_date, approved_date, eform_id, control_number, conditions, built, design, updated_at, "
+                             "updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+            except sqlite3.IntegrityError as e:
+                raise Refused(f"{r['serial_number'] or '(no serial)'}: {_why(e)}")
+            _log(conn, at, device, "import", r["serial_number"], None, row(conn, r["serial_number"]))
+        for r in sbr_rows:
+            r = {c: (r.get(c) or "").strip() for c in SBR_COLS}
+            try:
+                conn.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, "
+                             "eform_id, control_number, conditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (r["serial_number"], r["caliber"], r["model"], r["barrel_length"], r["overall_length"],
+                              to_iso(r["approved_date"]), r["eform_id"] or None, r["control_number"], r["conditions"]))
+            except sqlite3.IntegrityError as e:
+                raise Refused(f"SBR {r['serial_number'] or '(no serial)'}: {_why(e)}")
+            _log(conn, at, device, "import", r["serial_number"], None, r)
+        stored = 0
+        for p in pdfs:  # {"data": bytes} or {"path": an uploaded file}: read one at a time (a small container)
+            data = p["data"] if "data" in p else Path(p["path"]).read_bytes()
+            if not data.startswith(b"%PDF"):
+                raise Refused(f"approval PDF for {p.get('serial') or p.get('eform_id')}: not a PDF")
+            digest = hashlib.sha256(data).hexdigest()
+            target = pdf_dir / f"{digest}.pdf"
+            if not target.exists():
+                pdf_dir.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(".tmp")
+                tmp.write_bytes(data)
+                tmp.replace(target)
+                written.append(target)
+            try:
+                conn.execute("INSERT INTO approval_pdfs (eform_id, serial, sha256, size, received_at) VALUES (?, ?, ?, ?, ?)",
+                             (p.get("eform_id") or None, p.get("serial") or "", digest, len(data), at))
+            except sqlite3.IntegrityError as e:
+                raise Refused(f"approval PDF for eForm {p.get('eform_id')}: {_why(e)}")
+            stored += 1
+        _bump(conn)
+        set_meta(conn, "import_mark", str(last_change(conn)))  # undo_import is allowed while this is still the newest
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        for f in written:
+            f.unlink(missing_ok=True)
+        raise
+    return {"suppressors": len(suppressors), "sbrs": len(sbr_rows), "pdfs": stored}
+
+
+def pdfs(conn):
+    """Every stored approval PDF: eform_id, serial, sha256, size (what the app compares after moving)."""
+    return [{"eform_id": p["eform_id"] or "", "serial": p["serial"], "sha256": p["sha256"], "size": p["size"]}
+            for p in conn.execute("SELECT * FROM approval_pdfs ORDER BY id")]
+
+
+def _wipe(conn, history_where):
+    """Inside a transaction: the inventory tables emptied, and the history rows matching `history_where`."""
+    for table in ("suppressors", "sbrs", "approval_pdfs", "requests"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.execute("DROP TRIGGER history_no_delete")
+    conn.execute(f"DELETE FROM history WHERE {history_where}")
+    conn.execute("CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, "
+                 "'history is append-only'); END")
+    conn.execute("DELETE FROM meta WHERE key = 'import_mark'")
+    _bump(conn)
+
+
+def undo_import(conn, pdf_dir):
+    """Take back an import that nothing has changed since (the app's move found a difference, or was a try-out):
+    the server is empty again, as before the import. An empty server: nothing to take back."""
+    if is_empty(conn):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        mark = meta(conn, "import_mark")
+        if not mark or int(mark) != last_change(conn):
+            raise Refused("Something changed on the server since the import, so it can't be taken back from here.")
+        files = [r[0] for r in conn.execute("SELECT sha256 FROM approval_pdfs")]
+        _wipe(conn, "operation = 'import'")
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    for sha in files:
+        (Path(pdf_dir) / f"{sha}.pdf").unlink(missing_ok=True)
+
+
+def reset(conn, pdf_dir, backups):
+    """Server console only: remove the whole inventory (suppressors, SBRs, approval PDFs, their history) after a
+    backup. Devices, the server's id and its certificates stay. For clearing made-up data before a real move."""
+    saved = backup(conn, backups, label=f"before-reset-{datetime.now():%Y-%m-%d-%H%M%S}")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _wipe(conn, "serial IS NOT NULL")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    for f in Path(pdf_dir).glob("*.pdf"):
+        f.unlink()
+    conn.execute("VACUUM")
+    return saved
+
+
+def restore(conn, source, backups):
+    """Server console only: replace the database with a backup (after backing up the current one). The approval PDF
+    files aren't in database backups; ones still on disk are found again by their checksum."""
+    source = Path(source)
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        version = src.execute("PRAGMA user_version").fetchone()[0]
+        if not src.execute("SELECT 1 FROM sqlite_master WHERE name = 'suppressors'").fetchone() or version < 1:
+            raise Refused(f"{source.name} isn't an inventory backup.")
+        if version > SCHEMA_VERSION:
+            raise Refused(f"{source.name} is from a newer server.")
+        saved = backup(conn, backups, label=f"before-restore-{datetime.now():%Y-%m-%d-%H%M%S}")
+        src.backup(conn)
+    finally:
+        src.close()
+    migrate(conn)
+    _bump_now(conn)
+    return saved
+
+
+def _bump_now(conn):
+    conn.execute("BEGIN IMMEDIATE")
+    _bump(conn)
+    conn.execute("COMMIT")
+
+
+def _why(error):
+    text = str(error)
+    if "UNIQUE" in text and "serial" in text:
+        return "the serial appears twice"
+    if "UNIQUE" in text and "application_number" in text:
+        return "the application number appears twice"
+    if "UNIQUE" in text and "eform_id" in text:
+        return "the eForm ID appears twice"
+    return text
+
+
+# ---------- Operations (the only writes besides import) ----------
+
+def _inches(value, serial):
+    v = str(value or "").strip()
+    if not re.fullmatch(r"\d+(\.\d+)?", v):
+        raise Refused(f"{serial}: overall length must be a number of inches, like 12 or 6.5")
+    return v
+
+
+def _text(value, what, serial, required=True, limit=200):
+    v = re.sub(r"\s+", " ", str(value or "")).strip()
+    if required and not v:
+        raise Refused(f"{serial}: {what} is missing")
+    if len(v) > limit:
+        raise Refused(f"{serial}: {what} is too long")
+    return v
+
+
+def _current(conn, serial):
+    r = conn.execute("SELECT * FROM suppressors WHERE serial = ?", (str(serial).strip(),)).fetchone()
+    if r is None:
+        raise Refused(f"{serial} isn't in the inventory.")
+    return r
+
+
+def _check_version(conn, current, given):
+    if given is not None and int(given) != current["version"]:
+        raise Conflict(f"{current['serial']} was changed on another device since you looked. Nothing was saved; "
+                       "here is how it is now.", [row(conn, current["serial"])])
+
+
+def _set_built(conn, body, device, at, rid):
+    items = body.get("items") or []
+    if not items:
+        raise Refused("No suppressors given.")
+    rows = []
+    for item in items:
+        r = _current(conn, item.get("serial"))
+        _check_version(conn, r, item.get("version"))
+        if r["status"] != "approved":
+            raise Refused(f"{r['serial']} isn't approved, so it can't be marked built.")
+        rows.append((r, _text(item.get("design"), "design", r["serial"], required=False)))
+    for r, design in rows:  # no history, no updated_at: see PRIVATE_OPS
+        conn.execute("UPDATE suppressors SET built = 1, design = ? WHERE id = ?", (design, r["id"]))
+    return [row(conn, r["serial"]) for r, _ in rows]
+
+
+def _clear_built(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "approved":
+        raise Refused(f"{r['serial']} isn't approved.")
+    conn.execute("UPDATE suppressors SET built = 0, design = '' WHERE id = ?", (r["id"],))  # no record of when
+    return [row(conn, r["serial"])]
+
+
+def _add_queued(conn, body, device, at, rid):
+    new = body.get("rows") or []
+    if not new:
+        raise Refused("No suppressors given.")
+    out, seen = [], set()
+    for n in new:
+        serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
+        if serial.upper() in seen or conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+            raise Refused(f"{serial} is already in the inventory. Nothing was added.")
+        seen.add(serial.upper())
+        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, updated_at, updated_by) "
+                     "VALUES (?, ?, ?, 'queued', ?, ?)",
+                     (serial, _text(n.get("caliber"), "caliber", serial, limit=40), _inches(n.get("overall_length"), serial),
+                      at, device))
+        _log(conn, at, device, "add_queued", serial, None, row(conn, serial), rid)
+        out.append(row(conn, serial))
+    return out
+
+
+def _edit_queued(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "queued":
+        raise Refused(f"{r['serial']} isn't queued: only queued suppressors can be changed.")
+    changes = body.get("changes") or {}
+    unknown = set(changes) - {"serial_number", "caliber", "overall_length"}
+    if unknown or not changes:
+        raise Refused(f"Can't change {', '.join(sorted(unknown)) or 'nothing'}.")
+    serial = _text(changes.get("serial_number", r["serial"]), "serial number", r["serial"], limit=40)
+    if serial.upper() != r["serial"].upper() and conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+        raise Refused(f"{serial} is already in the inventory.")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET serial = ?, caliber = ?, overall_length = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+                 (serial, _text(changes.get("caliber", r["caliber"]), "caliber", serial, limit=40),
+                  _inches(changes.get("overall_length", r["overall_length"]), serial), at, device, r["id"]))
+    _log(conn, at, device, "edit_queued", serial, before, row(conn, serial), rid)
+    return [row(conn, serial)]
+
+
+def _remove_queued(conn, body, device, at, rid):
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    if r["status"] != "queued":
+        raise Refused(f"{r['serial']} isn't queued: only queued suppressors can be removed.")
+    before = row(conn, r["serial"])
+    conn.execute("DELETE FROM suppressors WHERE id = ?", (r["id"],))
+    _log(conn, at, device, "remove_queued", r["serial"], before, None, rid)
+    return []
+
+
+# ---------- Filing (the app's Sign & Submit) and approvals ----------
+
+def _mark_pending(conn, body, device, at, rid):
+    """Just before Sign & Submit: the app clicks it only once this is saved (fail-closed). Queued rows only (force:
+    a deliberate re-file of a filed/pending/never-file/disapproved row)."""
+    r = _current(conn, body.get("serial"))
+    _check_version(conn, r, body.get("version"))
+    allowed = ("queued",) + (("filed", "pending", "skip", "disapproved") if body.get("force") else ())
+    if r["status"] not in allowed:
+        raise Refused(f"{r['serial']} isn't queued on your server (it's {r['status']}): not filing it.")
+    length = r["overall_length"] or (_inches(body.get("overall_length"), r["serial"]) if body.get("overall_length") else "")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET status = 'pending', filed_date = ?, overall_length = ?, updated_at = ?, updated_by = ? "
+                 "WHERE id = ?", (to_iso(body.get("filed_date")) or at[:10], length, at, device, r["id"]))
+    _log(conn, at, device, "mark_pending", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+def _mark_filed(conn, body, device, at, rid):
+    """The portal's confirmation was read (or Resolve: it was filed): filed + application number ("UNKNOWN" when the
+    number couldn't be read: filed, number left empty)."""
+    r = _current(conn, body.get("serial"))
+    if r["status"] not in ("pending", "filed"):
+        raise Refused(f"{r['serial']} isn't pending on your server (it's {r['status']}).")
+    number = str(body.get("application_number") or "").strip()
+    if number and number != "UNKNOWN" and not number.isdigit():
+        raise Refused(f"{r['serial']}: the application number should be digits.")
+    before = row(conn, r["serial"])
+    try:
+        conn.execute("UPDATE suppressors SET status = 'filed', application_number = ?, filed_date = COALESCE(filed_date, ?), "
+                     "updated_at = ?, updated_by = ? WHERE id = ?",
+                     (number if number.isdigit() else r["application_number"], at[:10], at, device, r["id"]))
+    except sqlite3.IntegrityError:
+        raise Refused(f"Application number {number} is already recorded for another suppressor.")
+    _log(conn, at, device, "mark_filed", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+def _unmark_pending(conn, body, device, at, rid):
+    """Resolve: it was NOT filed (checked on the dashboard): back in the queue."""
+    r = _current(conn, body.get("serial"))
+    if r["status"] != "pending":
+        raise Refused(f"{r['serial']} isn't pending on your server (it's {r['status']}).")
+    before = row(conn, r["serial"])
+    conn.execute("UPDATE suppressors SET status = 'queued', filed_date = NULL, updated_at = ?, updated_by = ? WHERE id = ?",
+                 (at, device, r["id"]))
+    _log(conn, at, device, "unmark_pending", r["serial"], before, row(conn, r["serial"]), rid)
+    return [row(conn, r["serial"])]
+
+
+APPROVAL_FIELDS = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+
+
+def _record_approvals(conn, body, device, at, rid):
+    """Check approvals: updates [{serial, fields}] (approval fields only; status approved/disapproved; an overall
+    length only fills an empty one) and added [rows] (approved suppressors that weren't in the inventory)."""
+    out = []
+    for u in body.get("updates") or []:
+        r = _current(conn, u.get("serial"))
+        fields = u.get("fields") or {}
+        if set(fields) - set(APPROVAL_FIELDS) or fields.get("status", "approved") not in ("approved", "disapproved"):
+            raise Refused(f"{r['serial']}: only approval details can be recorded this way.")
+        if fields.get("overall_length") and r["overall_length"]:
+            fields.pop("overall_length")  # never overwrites a recorded length (a differing one is reported, not changed)
+        values = {k: (to_iso(v) if k == "approved_date" else str(v).strip()) for k, v in fields.items()}
+        if "overall_length" in values:
+            values["overall_length"] = _inches(values["overall_length"], r["serial"])
+        if r["built"] and values.get("status") == "disapproved":
+            raise Refused(f"{r['serial']} is marked built; it can't be disapproved here.")
+        before = row(conn, r["serial"])
+        conn.execute(f"UPDATE suppressors SET {', '.join(f'{k} = ?' for k in values)}, updated_at = ?, updated_by = ? WHERE id = ?",
+                     (*values.values(), at, device, r["id"]))
+        _log(conn, at, device, "record_approvals", r["serial"], before, row(conn, r["serial"]), rid)
+        out.append(row(conn, r["serial"]))
+    for n in body.get("added") or []:
+        serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
+        if conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
+            raise Refused(f"{serial} is already in the inventory.")
+        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, approved_date, eform_id, control_number, "
+                     "conditions, updated_at, updated_by) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)",
+                     (serial, _text(n.get("caliber"), "caliber", serial, required=False, limit=40),
+                      str(n.get("overall_length") or "").strip(), to_iso(n.get("approved_date")), str(n.get("eform_id") or ""),
+                      str(n.get("control_number") or ""), str(n.get("conditions") or ""), at, device))
+        _log(conn, at, device, "record_approvals", serial, None, row(conn, serial), rid)
+        out.append(row(conn, serial))
+    return out
+
+
+def _record_sbrs(conn, body, device, at, rid):
+    """Check approvals: approved SBRs, added or (by eForm ID) filled in with the details given."""
+    for s in body.get("rows") or []:
+        s = {c: str(s.get(c) or "").strip() for c in SBR_COLS}
+        if not s["serial_number"]:
+            raise Refused("An SBR without a serial number.")
+        have = conn.execute("SELECT * FROM sbrs WHERE eform_id = ?", (s["eform_id"],)).fetchone() if s["eform_id"] else \
+            conn.execute("SELECT * FROM sbrs WHERE serial = ? COLLATE NOCASE AND eform_id IS NULL", (s["serial_number"],)).fetchone()
+        values = (s["serial_number"], s["caliber"], s["model"], s["barrel_length"], s["overall_length"], to_iso(s["approved_date"]),
+                  s["control_number"], s["conditions"])
+        if have is None:
+            conn.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, control_number, "
+                         "conditions, eform_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, s["eform_id"] or None))
+        else:
+            cols = ("serial", "caliber", "model", "barrel_length", "overall_length", "approved_date", "control_number", "conditions")
+            keep = [(c, v) for c, v in zip(cols, values) if v]  # fills in; never blanks a recorded detail
+            if keep:
+                conn.execute(f"UPDATE sbrs SET {', '.join(f'{c} = ?' for c, _ in keep)} WHERE id = ?", (*[v for _, v in keep], have["id"]))
+        _log(conn, at, device, "record_sbrs", s["serial_number"], None, s, rid)
+    return []
+
+
+OPERATIONS = {"set_built": _set_built, "clear_built": _clear_built, "add_queued": _add_queued,
+              "edit_queued": _edit_queued, "remove_queued": _remove_queued, "mark_pending": _mark_pending,
+              "mark_filed": _mark_filed, "unmark_pending": _unmark_pending, "record_approvals": _record_approvals,
+              "record_sbrs": _record_sbrs}
+
+
+def add_approval_pdfs(conn, pdf_dir, items, device):
+    """Check approvals: new approval PDFs ({eform_id, serial, path} of uploaded files). One already stored for that
+    eForm ID is skipped. Returns how many were added."""
+    added = 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for p in items:
+            if not p.get("eform_id") or conn.execute("SELECT 1 FROM approval_pdfs WHERE eform_id = ?", (p["eform_id"],)).fetchone():
+                continue
+            data = Path(p["path"]).read_bytes()
+            if not data.startswith(b"%PDF"):
+                raise Refused(f"approval PDF for {p.get('serial') or p['eform_id']}: not a PDF")
+            digest = hashlib.sha256(data).hexdigest()
+            target = Path(pdf_dir) / f"{digest}.pdf"
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(".tmp")
+                tmp.write_bytes(data)
+                tmp.replace(target)
+            conn.execute("INSERT INTO approval_pdfs (eform_id, serial, sha256, size, received_at) VALUES (?, ?, ?, ?, ?)",
+                         (p["eform_id"], p.get("serial") or "", digest, len(data), now()))
+            _log(conn, now(), device, "add_approval_pdf", p.get("serial") or None, None, {"eform_id": p["eform_id"]})
+            added += 1
+        if added:
+            _bump(conn)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return added
+
+
+def operate(conn, name, body, device):
+    """Run one named operation in one transaction with its history. Returns {"ok", "rows": the rows as they are now}.
+    A request_id already seen returns that first answer again (a retry is never applied twice)."""
+    if name not in OPERATIONS:
+        raise Refused(f"Unknown operation: {name}")
+    rid = str(body.get("request_id") or "").strip()[:80] or None
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if rid:
+            done = conn.execute("SELECT operation, response FROM requests WHERE request_id = ?", (rid,)).fetchone()
+            if done:
+                conn.execute("ROLLBACK")
+                if done["operation"] != name:
+                    raise Refused("That request id was already used for something else.")
+                return json.loads(done["response"])
+        rows = OPERATIONS[name](conn, body, device, now(), rid)
+        out = {"ok": True, "rows": rows}
+        _bump(conn)
+        if rid and name not in PRIVATE_OPS:  # marking a build twice is harmless: no request row (it has a time)
+            conn.execute("INSERT INTO requests (request_id, operation, response, at) VALUES (?, ?, ?, ?)",
+                         (rid, name, json.dumps(out), now()))
+        conn.execute("COMMIT")
+        return out
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _bump(conn):
+    set_meta(conn, "changes", str(int(meta(conn, "changes") or 0) + 1))
+
+
+def last_change(conn):
+    """A counter that grows with every change, builds included, and holds no time (what live pages watch)."""
+    return int(meta(conn, "changes") or 0)
+
+
+def _log(conn, at, device, operation, serial, before, after, request_id=None):
+    conn.execute("INSERT INTO history (at, device, operation, serial, before, after, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (at, device, operation, serial, json.dumps(before) if before is not None else None,
+                  json.dumps(after) if after is not None else None, request_id))
+
+
+def read_app_folder(root):
+    """An app folder's inventory, as import takes it: data/suppressors.csv, data/sbrs.csv, out/approved/ (index.csv maps
+    eForm ID -> file; files without an entry count when they are named after a serial). Reads only."""
+    root = Path(root)
+
+    def table(path):
+        if not path.exists():
+            return []
+        with path.open(newline="", encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))
+    sup, sbr = table(root / "data" / "suppressors.csv"), table(root / "data" / "sbrs.csv")
+    if not sup and not (root / "data" / "suppressors.csv").exists():
+        raise Refused(f"No inventory at {root / 'data' / 'suppressors.csv'}")
+    by_eform = {r.get("eform_id", "").strip(): r["serial_number"].strip() for r in sup + sbr if r.get("eform_id", "").strip()}
+    serials = {r["serial_number"].strip().upper(): r["serial_number"].strip() for r in sup + sbr}
+    folder, pdfs, used = root / "out" / "approved", [], set()
+    for entry in table(folder / "index.csv"):
+        path = folder / entry["file"]
+        if path.is_file():
+            stem = re.sub(r"_\d+$", "", path.stem)
+            serial = by_eform.get(entry["eform_id"]) or serials.get(stem.upper(), "")
+            pdfs.append({"eform_id": entry["eform_id"], "serial": serial, "data": path.read_bytes()})
+            used.add(path.name)
+    for path in sorted(folder.glob("*.pdf")) if folder.exists() else []:
+        if path.name not in used and path.stem.upper() in serials:
+            pdfs.append({"eform_id": None, "serial": serials[path.stem.upper()], "data": path.read_bytes()})
+    return sup, sbr, pdfs
+
+
+# ---------- Devices and pairing ----------
+
+def new_pair_code(conn):
+    """A 6-digit code for pairing one device, valid PAIR_MINUTES; replaces any earlier code."""
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=PAIR_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    set_meta(conn, "pair_code", json.dumps({"hash": _hash(code), "expires": expires, "failures": 0}))
+    return code, expires
+
+
+def pair(conn, code, name):
+    """Trade a valid pairing code for a new device key (returned once; only its hash is kept). A code works once and
+    stops working after PAIR_TRIES wrong tries."""
+    name = re.sub(r"\s+", " ", str(name or "")).strip()[:40] or "Device"
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        state = json.loads(meta(conn, "pair_code") or "null")
+        if not state or state["expires"] < now():
+            raise Refused("No pairing code is active. Make one under Devices on a paired device, or with the "
+                          "server's pair-code command.")
+        if not hmac.compare_digest(state["hash"], _hash(str(code).strip())):
+            state["failures"] += 1
+            if state["failures"] >= PAIR_TRIES:
+                conn.execute("DELETE FROM meta WHERE key = 'pair_code'")
+            else:
+                set_meta(conn, "pair_code", json.dumps(state))
+            conn.execute("COMMIT")
+            raise Refused("That code is wrong." + (" It no longer works; make a new one." if state["failures"] >= PAIR_TRIES else ""))
+        conn.execute("DELETE FROM meta WHERE key = 'pair_code'")
+        key = secrets.token_urlsafe(32)
+        cur = conn.execute("INSERT INTO devices (name, key_hash, created_at, last_seen) VALUES (?, ?, ?, ?)",
+                           (name, _hash(key), now(), now()))
+        _log(conn, now(), name, "pair_device", None, None, {"device": name})
+        conn.execute("COMMIT")
+        return cur.lastrowid, key
+    except Refused:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def device_for_key(conn, key):
+    if not key:
+        return None
+    d = conn.execute("SELECT * FROM devices WHERE key_hash = ? AND revoked_at IS NULL", (_hash(key),)).fetchone()
+    if d and (d["last_seen"] or "") < (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"):
+        conn.execute("UPDATE devices SET last_seen = ? WHERE id = ?", (now(), d["id"]))
+    return dict(d) if d else None
+
+
+def devices(conn):
+    return [{"id": d["id"], "name": d["name"], "created_at": d["created_at"], "last_seen": d["last_seen"],
+             "revoked_at": d["revoked_at"]} for d in conn.execute("SELECT * FROM devices ORDER BY id")]
+
+
+def revoke(conn, device_id, by):
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        d = conn.execute("SELECT name FROM devices WHERE id = ? AND revoked_at IS NULL", (device_id,)).fetchone()
+        if not d:
+            raise Refused("No such device (or it's already removed).")
+        conn.execute("UPDATE devices SET revoked_at = ? WHERE id = ?", (now(), device_id))
+        _log(conn, now(), by, "revoke_device", None, {"device": d["name"]}, None)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise

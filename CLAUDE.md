@@ -126,6 +126,89 @@ plain CLI, kept for debugging/scripting:
   switches to letters. One screen at a time under 760 px (hash = selected serial, so back works), side by side above.
   Turning Built off asks on the page (Keep it / Clear), not with `confirm()`: on the user's iPhone (2026-10-28) the
   switch couldn't be turned off with the pop-up.
+- **Inventory server** (`server/`, branch `server`; design doc "Inventory server design" on claude.ai, 5 phases;
+  phase 1 = read-only server with made-up data). Optional, never imported by the app; FastAPI + uvicorn + cryptography
+  (`server/requirements.txt`; dev: `server/.venv`, `requirements-dev.txt`). `atf_server/db.py`: SQLite (WAL, schema =
+  PRAGMA user_version, `MIGRATIONS`, backup before migrating, newer schema refused), tables suppressors (app CSV
+  columns; status queued/pending/filed/approved/disapproved/skip, "" in CSV = queued; ISO dates inside, MM/DD/YYYY
+  out; built only while approved; version bumped by trigger), sbrs, approval_pdfs (files `<data>/approved/<sha256>.pdf`),
+  history (append-only by trigger), devices (key hashes), meta (server_id, pair_code). Writes are named operations
+  in one transaction with a history row: `import_inventory` (empty server only, all or nothing) and, since phase 3,
+  `operate(conn, name, body, device)` with `OPERATIONS` set_built {items: [{serial, design, version}]} (approved
+  only, all or nothing), clear_built, add_queued {rows}, edit_queued {serial, changes, version} (queued only;
+  serial_number/caliber/overall_length), remove_queued. `version` given and stale = `Conflict` (409 + the rows as they
+  are now); `request_id` seen before = the stored answer (table `requests`, schema 2). **Builds leave no record of
+  when** (the user's rule, 2026-10-28: "it could be self incriminating"): `PRIVATE_OPS` (set_built, clear_built)
+  write no history row, don't touch updated_at/updated_by, keep no request row, and the API doesn't log them
+  (`PRIVATE_PATHS`); schema 3 deleted earlier ones and VACUUMed; `secure_delete` is on. Never add a build date,
+  build log or build audit anywhere. `last_change` = a time-free counter in meta (`changes`, bumped by every
+  operation and import; what `/api/events` watches, 1 s, so CLI writes show too). And
+  pairing (6-digit code, 5 min, one use, 5 wrong tries kill it). `app.py`: the page is `src/phone.html` (copied into
+  the image), auth = `Authorization: Bearer` (the app) or the HttpOnly cookie a browser gets when pairing; POSTs
+  must be JSON (CSRF); `/api/inventory` = the PC page's shape + `version` + `can_build: true` + `server`; `POST /api/ops/<name>`;
+  `/api/events` (server-sent events: `change` when the history grows; the page reloads, but not over a design being
+  typed or a Keep/Clear question); `/api/rows` = full CSV
+  shape. The page, when `data.server` is set: pairing screen on 401, history per serial, Devices (`#:devices`: add a
+  device = code, remove = tap twice), Export CSV. **No tailnet is ever required** (the user's rule, 2026-10-28):
+  everything, the phone page included, works at the home-network address; Tailscale (`tailscale serve`) is an
+  optional second address. `tls.py`: the server's own CA (`tls/ca.pem`, key 0600, 20 years, critical name
+  constraints = private IP ranges + .local/.lan/.home.arpa/.internal/localhost, so a stolen key can't vouch for real
+  sites) signs its server certificate (800 days, Apple's 825 limit; SAN = this machine's private addresses +
+  host.local/.lan/.home.arpa + ATF_NAMES; re-issued at start when an address is new, it's due, or it wasn't signed
+  by this CA, e.g. phase 1's self-signed one; the CA stays). `/ca.crt` (no auth) + the page's "Trust this server"
+  (`trustHelp`, only on the server's own HTTPS, not *.ts.net): a phone installs the CA once, then no warnings.
+  CLI `python -m atf_server serve|pair-code|devices|revoke|fingerprint|import <app folder>|demo|backup`. Deploy:
+  `server/Dockerfile` (repo-root context), `compose.yaml` + `DOCKER.md` (Docker users must set `ATF_NAMES` = the host's
+  home-network address: inside a container the server only sees its own; the log's "HTTPS for:" = `tls.covered`),
+  `atf-inventory.service` + `LXC.md` (Proxmox), `server/README.md` (what/why, for users). Tests: `server/tests`
+  (`server/.venv/bin/python -m pytest -q tests` from server/; root `pytest.ini` keeps the app's run to tests/); CI
+  job `server` also builds and starts the image.
+  **Phase 2 (the app reads from the server):** `src/remote.py` (stdlib only): `normalize` (bare address -> port
+  8765, *.ts.net -> 443), `probe` (unverified connect: /api/hello + /ca.crt; fingerprint = the CA's; checks the
+  served certificate really is signed by it; an older server without /ca.crt = its certificate's fingerprint), `pair`, `Server` (addresses in
+  order, first that answers is kept in `Server.working` for the run; with `ca` only certificates that CA signed
+  pass (hostname not checked: addresses change), else the pinned fingerprint; failing that, one that verifies
+  normally (a tailnet name); a different server_id at an address = skipped; `Unreachable` falls through to the next
+  address, other refusals don't). `data/server.yaml` (server id, addresses, fingerprint, ca, key, device_id; chmod 600)
+  = server mode: `load_rows`/`load_sbrs` read `/api/rows` (reused 2 s), cached to `data/server_cache.json`, shown
+  with `SERVER_STATE` online/offline (offline = last data seen, read-only; nothing seen = `remote.ServerError`,
+  the menu offers Try again / Settings); `save_rows`/`save_sbrs` raise `ServerReadOnly` (so do record_builds etc.);
+  `approved_pdf_for` fetches into `out/server-pdfs/`; backfill is skipped; Check my setup has an "Inventory server"
+  line instead of the local inventory check. **Phase 3:** `record_builds`, `clear_build` and the new `add_queued`,
+  `edit_queued`, `remove_queued` (local: load/save as before; the menu's add/edit flows use them) call `_server_op`
+  (fresh request_id; version from `_seen_version` = the last read, or the row's own `version`). Menu in server mode:
+  everything except File, Resolve a pending row, Check approvals, Advanced and Open on my phone (filing and
+  approvals = phase 5; `save_rows` still raises `ServerReadOnly` for them). **Phase 4 (moving):**
+  `atf.move_to_server(try_only)`: `local_for_move()` (the CSVs + out/approved PDFs, read directly whatever the mode)
+  -> `POST /api/import` (empty server only; PDFs base64) -> read back `/api/rows` + `/api/pdfs`, `_differences`
+  field by field (`_norm`: status/built lower, dates padded; SBRs keyed by serial + eForm ID) and PDF checksums ->
+  any difference or try_only = `POST /api/import/undo` (server: allowed only while `meta import_mark` = the newest
+  change; empties the server again) -> else the CSVs are renamed `.moved-to-server-<date>.csv` (`_move_aside`, never
+  deleted). `copy_from_server()`: writes the CSVs (a non-empty one renamed `.replaced-by-server-<date>.csv` first),
+  fetches PDFs it doesn't have by checksum (`GET /api/pdfs/<sha>`) into out/approved + index, compares. Menu:
+  Settings > Where your inventory lives offers Move (when the server is empty), and on switching back Copy first /
+  Keep. **Phase 5 (filing + approvals):** server ops mark_pending (queued only; `force` = deliberate re-file),
+  mark_filed (pending/filed; "UNKNOWN" = filed without a number), unmark_pending, record_approvals ({updates:
+  [{serial, fields}] approval fields only, a length only fills an empty one; added: [rows]}), record_sbrs (upsert
+  by eForm ID, fills in); `POST /api/approval-pdfs` (uploaded first via /api/import/pdf). App: `_submit` calls
+  `_set_pending` (server: `mark_pending` with the row's version; ANY failure = "NOT submitting", Sign & Submit not
+  clicked); after the confirmation `log_submission` (out/submissions.csv) then `_set_filed`: server mode writes
+  `data/outbox.jsonl` (fsync) FIRST, then sends; `outbox_replay()` runs before every server call/read and removes an
+  entry only when the server confirms (request_id = harmless repeat); a waiting entry stops the batch before the next
+  row and blocks new filing (`_server_precheck`, before the browser opens: server reachable, outbox empty, every row
+  still queued there at the same version). `resolve_pending(serial, number)`. `apply_approvals`/`record_sbrs` send
+  their changes as ops in server mode; `send_approval_pdfs(records)` uploads PDFs the server lacks. The menu offers
+  everything in server mode except Open on my phone; the home screen shows waiting filing results. Tests:
+  `tests/test_server_filing.py` (fake portal + REAL server: pending refused = not submitted, result kept and
+  replayed, another device's change, unreachable, resolve, approvals); the `server` fixture lives in conftest. Server console: `reset` (type RESET; backup first; devices/certs stay) and `restore <file>`. Tests:
+  `tests/test_move.py` runs the REAL server from server/.venv in a temp folder (skipped without it) for the round
+  trip; `server/tests/test_move.py`. The test sandbox uses its own MonkeyPatch (a test's `monkeypatch.undo()` once
+  pointed atf at the real data/); use `monkeypatch.context()` in tests.
+  Settings > Where your inventory lives (`server_flow`): connect (address, compare fingerprint with the server
+  page's Devices, optional tailnet name, name "PC", pairing code) / Test the connection / Use this computer's
+  inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:
+  `tests/test_server_mode.py` (fake HTTPS server, `tests/fixtures/test_server_*.pem` test-only cert) and
+  `server/tests/test_app_client.py` (remote.py against the real server).
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
   settings (settings_problems minus the file lines), each file via `_check_file` (exists, `_online_only`: Windows

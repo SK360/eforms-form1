@@ -34,6 +34,7 @@ import argparse
 import base64
 import csv
 import json
+import os
 import re
 from datetime import datetime
 import sys
@@ -42,7 +43,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.0.0"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.1.0"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -82,8 +83,11 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
 
 
 def load_rows():
-    with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
-        rows = list(csv.DictReader(f))
+    if server_settings():
+        rows = [dict(r) for r in _server_inventory()[0]]
+    else:
+        with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
+            rows = list(csv.DictReader(f))
     for r in rows:
         for c in COLS:  # older files have fewer columns
             r[c] = (r.get(c) or "").strip()
@@ -98,7 +102,12 @@ def is_built(row):
 def record_builds(designs):
     """Mark suppressors as built, each with what it is: {serial: design} (or change the design of built ones). Only
     APPROVED rows: a Form 1 must be approved before the suppressor is made. Saves once; returns the serials updated;
-    raises ValueError if any serial is unknown or not approved (then nothing is saved)."""
+    raises ValueError if any serial is unknown or not approved (then nothing is saved). With a server: one operation,
+    all or nothing, based on the versions last read (another device's change since = nothing saved, ServerError)."""
+    if server_settings():
+        _server_op("set_built", {"items": [{"serial": s, "design": d.strip(), "version": _seen_version(s)}
+                                           for s, d in designs.items()]})
+        return list(designs)
     rows = load_rows()
     by = {r["serial_number"].upper(): r for r in rows}
     bad = [s for s in designs if (by.get(s.upper()) or {}).get("status") != "approved"]
@@ -131,11 +140,41 @@ def available_for_build(rows, caliber, length):
 
 def clear_build(serial):
     """Undo a build record (marked built by mistake)."""
+    if server_settings():
+        _server_op("clear_built", {"serial": serial, "version": _seen_version(serial)})
+        return
     rows = load_rows()
     for r in rows:
         if r["serial_number"].upper() == serial.upper():
             r.update(built="", design="")
     save_rows(rows)
+
+
+def add_queued(new_rows):
+    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new."""
+    if server_settings():
+        _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in ("serial_number", "caliber", "overall_length")}
+                                           for r in new_rows]})
+        return
+    save_rows(load_rows() + [dict(r, status="") for r in new_rows])
+
+
+def edit_queued(serial, changes, version=None):
+    """Change a queued row's serial_number / caliber / overall_length."""
+    if server_settings():
+        _server_op("edit_queued", {"serial": serial, "changes": changes, "version": version})
+        return
+    rows = load_rows()
+    r = next(r for r in rows if r["serial_number"].upper() == serial.upper() and r["status"] == "")
+    r.update(changes)
+    save_rows(rows)
+
+
+def remove_queued(serial, version=None):
+    if server_settings():
+        _server_op("remove_queued", {"serial": serial, "version": version})
+        return
+    save_rows([r for r in load_rows() if not (r["serial_number"].upper() == serial.upper() and r["status"] == "")])
 
 
 def serials_in(spec, rows):
@@ -165,6 +204,8 @@ def backfill_filed_dates(rows=None):
     """Fill filed_date for filed rows from out/submissions.csv (the filing log). Saves only if something changed."""
     log = OUT / "submissions.csv"
     rows = load_rows() if rows is None else rows
+    if server_settings():  # the server's records aren't changed from here (yet)
+        return rows
     if not log.exists() or not any(r["status"] in ("filed", "pending", "approved") and not r["filed_date"] for r in rows):
         return rows
     first = {}
@@ -183,6 +224,8 @@ def backfill_filed_dates(rows=None):
 
 
 def save_rows(rows):
+    if server_settings():
+        raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = SUPP.with_suffix(".csv.tmp")  # write-then-rename so a crash can't leave a half-written queue
     with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
@@ -242,6 +285,339 @@ def _token_match(want, got):
 
 
 # ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
+# ---------- Inventory server (optional: server/, connected in Settings > Where your inventory lives) ----------
+# data/server.yaml = the paired server (id, addresses, its CA and fingerprint, this computer's key). While it
+# exists, the inventory is the server's: load_rows / load_sbrs read it; builds and queue edits are the server's named
+# operations (record_builds, clear_build, add_queued, edit_queued, remove_queued); whole-file saves are refused
+# (save_rows / save_sbrs raise ServerReadOnly: filing and approvals come later). This computer's CSVs aren't used. When the
+# server can't be reached, the last data seen (data/server_cache.json) is shown, marked offline and read-only.
+SERVER_READ_ONLY = ("Your inventory is on your server: this can't be saved as a whole file. Please report it (it's a bug); "
+                    "nothing was changed.")
+SERVER_STATE = {}  # after a read: {"online": bool, "address", "problem", "seen"}
+_FETCHED = {}
+
+
+class ServerReadOnly(Exception):
+    pass
+
+
+def _server_path():  # looked up when used (tests point DATA elsewhere)
+    return DATA / "server.yaml"
+
+
+def _server_cache_path():
+    return DATA / "server_cache.json"
+
+
+def server_settings():
+    p = _server_path()
+    return (yaml.safe_load(p.read_text(encoding="utf-8")) or None) if p.exists() else None
+
+
+def save_server_settings(settings):
+    p = _server_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    try:
+        p.chmod(0o600)  # holds this computer's key
+    except OSError:
+        pass
+    _FETCHED.clear()
+
+
+def forget_server():
+    """Back to this computer's inventory: the server settings and the offline copy go (the CSVs were never changed)."""
+    for p in (_server_path(), _server_cache_path()):
+        if p.exists():
+            p.unlink()
+    _FETCHED.clear()
+    SERVER_STATE.clear()
+
+
+def _server(settings=None):
+    import remote
+    s = settings or server_settings()
+    return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"], ca=s.get("ca"))
+
+
+def _server_op(name, body):
+    """One named change on the server (server/atf_server/db.py OPERATIONS), with a fresh request id. Filing results
+    still waiting in the retry file go first."""
+    import uuid
+    import remote
+    if _outbox_path().exists():
+        outbox_replay()
+    try:
+        return _server().post(f"/api/ops/{name}", dict(body, request_id=uuid.uuid4().hex))
+    except remote.Unreachable as e:
+        raise remote.ServerError(f"Not saved: your server can't be reached. {e}")
+    finally:
+        _FETCHED.clear()  # the next read shows what the server has now
+
+
+# The retry file (data/outbox.jsonl): a filing result the server hasn't confirmed yet. Written (and flushed to disk)
+# BEFORE it's sent, removed only once the server confirms it; sent again before every server call and at every
+# start. Its request id makes a repeat harmless. While it isn't empty, filing doesn't start.
+def _outbox_path():
+    return DATA / "outbox.jsonl"
+
+
+def outbox():
+    p = _outbox_path()
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()] if p.exists() else []
+
+
+def _outbox_write(entries):
+    p = _outbox_path()
+    if not entries:
+        p.unlink(missing_ok=True)
+        return
+    tmp = p.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _outbox_add(entry):
+    p = _outbox_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def outbox_replay():
+    """Send the waiting filing results. Returns those still waiting (unreachable, or refused: then with "problem")."""
+    import remote
+    waiting = outbox()
+    if not waiting or not server_settings():
+        return waiting
+    left = []
+    for n, e in enumerate(waiting):
+        try:
+            _server().post(f"/api/ops/{e['op']}", e["body"])
+            _FETCHED.clear()
+        except remote.Unreachable:
+            left += waiting[n:]
+            break
+        except remote.ServerError as err:
+            left.append(dict(e, problem=str(err)))
+    _outbox_write(left)
+    return left
+
+
+def _seen_version(serial):
+    """The row's version as last read from the server (None = not read: the server then doesn't check it)."""
+    for r in (_FETCHED.get("data") or ([], []))[0]:
+        if r["serial_number"].upper() == serial.upper():
+            return r.get("version")
+    return None
+
+
+def _server_inventory():
+    """(suppressors, sbrs) from the server; reused for 2 s (one screen reads both). Unreachable: the last data seen."""
+    import time
+    import remote
+    if _FETCHED and time.monotonic() - _FETCHED["at"] < 2:
+        return _FETCHED["data"]
+    if _outbox_path().exists():  # a filing result waiting to reach the server goes first
+        outbox_replay()
+    server = _server()
+    try:
+        data = server.rows()
+    except remote.ServerError as e:
+        cache = _server_cache_path()
+        if not cache.exists():
+            SERVER_STATE.update(online=False, address=None, problem=str(e), seen=None)
+            raise
+        saved = json.loads(cache.read_text(encoding="utf-8"))
+        SERVER_STATE.update(online=False, address=None, problem=str(e), seen=saved["seen"])
+        data = (saved["suppressors"], saved["sbrs"])
+    else:
+        seen = datetime.now().strftime("%m/%d/%Y %H:%M")
+        tmp = _server_cache_path().with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"seen": seen, "suppressors": data[0], "sbrs": data[1]}), encoding="utf-8")
+        tmp.replace(_server_cache_path())
+        SERVER_STATE.update(online=True, address=server.address, problem=None, seen=seen)
+    _FETCHED.update(at=time.monotonic(), data=data)
+    return data
+
+
+# ---------- Moving the inventory to the server and back (phase 4) ----------
+# Moving: this computer's CSVs and approval PDFs go to an EMPTY server in one import; the app reads everything back and
+# compares every field of every row and every PDF's checksum; any difference = the import is taken back and nothing
+# here changes. Only on an exact match are the CSVs renamed (suppressors.moved-to-server-<date>.csv: kept, never
+# deleted) and the server used. try_only does all of it and then takes the import back. Copying back writes the
+# server's inventory into this computer's CSVs (any non-empty one renamed first) and fetches PDFs it doesn't have.
+
+def _read_csv(path):
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def _write_csv(path, cols, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(sorted(rows, key=lambda r: serial_key(r["serial_number"])))
+    tmp.replace(path)
+
+
+def _move_aside(path, word):
+    """suppressors.csv -> suppressors.<word>-<date>.csv (-2, -3 ... if taken). Returns the new name."""
+    stem = f"{path.stem}.{word}-{datetime.now():%Y-%m-%d}"
+    dest, n = path.with_name(stem + path.suffix), 2
+    while dest.exists():
+        dest, n = path.with_name(f"{stem}-{n}{path.suffix}"), n + 1
+    path.replace(dest)
+    return dest.name
+
+
+def local_for_move():
+    """This computer's own inventory, read from its files whatever mode it's in: (suppressors, sbrs, pdfs), the PDFs
+    as {eform_id, serial, path} (out/approved/index.csv, plus files named after a serial that aren't in it)."""
+    sup = [{c: (r.get(c) or "").strip() for c in COLS} for r in _read_csv(SUPP)]
+    sbrs = [{c: (r.get(c) or "").strip() for c in SBR_COLS} for r in _read_csv(_sbrs_path())]
+    folder = OUT / "approved"
+    by_eform = {r["eform_id"]: r["serial_number"] for r in sup + sbrs if r["eform_id"]}
+    serials = {r["serial_number"].upper(): r["serial_number"] for r in sup + sbrs}
+    pdfs, used = [], set()
+    for eform, name in (_approved_index(folder).items() if folder.exists() else []):
+        path = folder / name
+        if path.is_file():
+            stem = re.sub(r"_\d+$", "", path.stem)
+            pdfs.append({"eform_id": eform, "serial": by_eform.get(eform) or serials.get(stem.upper(), ""), "path": path})
+            used.add(name)
+    for path in sorted(folder.glob("*.pdf")) if folder.exists() else []:
+        if path.name not in used and path.stem.upper() in serials:
+            pdfs.append({"eform_id": None, "serial": serials[path.stem.upper()], "path": path})
+    return sup, sbrs, pdfs
+
+
+def _norm(rows, cols):
+    out = {}
+    for r in rows:
+        n = {}
+        for c in cols:
+            v = (r.get(c) or "").strip()
+            if c in ("status", "built"):
+                v = v.lower()
+            if c.endswith("_date") and v:
+                try:
+                    v = datetime.strptime(v, "%m/%d/%Y").strftime("%m/%d/%Y")
+                except ValueError:
+                    pass
+            n[c] = v
+        out[(n["serial_number"].upper(), n["eform_id"] if cols is SBR_COLS else "")] = n
+    return out
+
+
+def _differences(here, there, cols, what):
+    """Every field that differs between this computer's rows and the server's (by serial; SBRs by serial + eForm ID)."""
+    a, b = _norm(here, cols), _norm(there, cols)
+    problems = []
+    for k in sorted(set(a) | set(b), key=lambda k: serial_key(k[0])):
+        if k not in b:
+            problems.append(f"{what} {a[k]['serial_number']}: not on the server")
+        elif k not in a:
+            problems.append(f"{what} {b[k]['serial_number']}: on the server but not on this computer")
+        else:
+            problems += [f"{what} {a[k]['serial_number']}: {c} is {a[k][c]!r} here, {b[k][c]!r} on the server"
+                         for c in cols if a[k][c] != b[k][c]]
+    return problems
+
+
+def move_to_server(try_only=False, progress=lambda text: None):
+    """Move this computer's inventory to the (empty, connected) server; see above. The approval PDFs go one per
+    request first (all of them in one request was too much for a small container), then the rows in one import that
+    names them by checksum. progress(text) is told how far it got. Returns {suppressors, built, sbrs, pdfs, problems,
+    moved, renamed}."""
+    import hashlib
+    import remote
+    if not server_settings():
+        raise remote.ServerError("Connect to your server first (Settings > Where your inventory lives).")
+    server = _server()
+    sup, sbrs, pdfs = local_for_move()
+    if not sup and not sbrs:
+        raise remote.ServerError("There's no inventory on this computer to move.")
+    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "pdfs": len(pdfs)}
+    sent = []
+    try:
+        for n, p in enumerate(pdfs, 1):
+            progress(f"Sending approval PDFs ({n}/{len(pdfs)})…")
+            data = p["path"].read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if server.post("/api/import/pdf", data, timeout=60)["sha256"] != digest:
+                raise remote.ServerError(f"The approval PDF {p['path'].name} arrived damaged. Nothing was moved.")
+            sent.append((p, digest))
+        progress("Sending the inventory…")
+        server.post("/api/import", {"suppressors": sup, "sbrs": sbrs, "pdfs": [
+            {"eform_id": p["eform_id"], "serial": p["serial"], "sha256": d} for p, d in sent]}, timeout=300)
+    except BaseException:
+        try:  # an unfinished move: drop what was uploaded (an import that did land is taken back too)
+            server.post("/api/import/undo", {}, timeout=60)
+        except remote.ServerError:
+            pass
+        raise
+    progress("Checking every row and PDF on the server…")
+    try:
+        got_sup, got_sbrs = server.rows()
+        problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "SBR")
+        if sorted((p["eform_id"] or "", d) for p, d in sent) != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
+            problems.append("Approval PDFs: what the server stored isn't what was sent")
+    except BaseException:
+        server.post("/api/import/undo", {}, timeout=60)
+        raise
+    finally:
+        _FETCHED.clear()
+    if problems or try_only:
+        server.post("/api/import/undo", {}, timeout=60)
+        return dict(counts, problems=problems, moved=False, renamed=[])
+    renamed = [_move_aside(p, "moved-to-server") for p in (SUPP, _sbrs_path()) if p.exists()]
+    return dict(counts, problems=[], moved=True, renamed=renamed)
+
+
+def copy_from_server():
+    """Write the server's inventory into this computer's CSVs (a non-empty one is renamed first: .replaced-by-server-
+    <date>.csv) and fetch the approval PDFs this computer doesn't have; then read it back and compare. Doesn't
+    disconnect. Returns {suppressors, sbrs, pdfs (fetched), renamed, problems}."""
+    import hashlib
+    server = _server()
+    sup, sbrs = server.rows()
+    listed = server.get("/api/pdfs")["pdfs"]
+    renamed = []
+    for path, rows, cols in ((SUPP, sup, COLS), (_sbrs_path(), sbrs, SBR_COLS)):
+        if _read_csv(path):
+            renamed.append(_move_aside(path, "replaced-by-server"))
+        _write_csv(path, cols, rows)
+    folder = OUT / "approved"
+    folder.mkdir(parents=True, exist_ok=True)
+    index = _approved_index(folder)
+    have = {hashlib.sha256(f.read_bytes()).hexdigest() for f in folder.glob("*.pdf")}
+    fetched = 0
+    for p in listed:
+        if p["sha256"] in have:
+            continue
+        data = server.pdf_file(p["sha256"])
+        base = re.sub(r"[^A-Za-z0-9._-]", "_", p["serial"]) or f"eForm-{p['eform_id'] or p['sha256'][:12]}"
+        name, n = f"{base}.pdf", 2
+        while (folder / name).exists():
+            name, n = f"{base}_{n}.pdf", n + 1
+        (folder / name).write_bytes(data)
+        if p["eform_id"]:
+            index[p["eform_id"]] = name
+        have.add(p["sha256"])
+        fetched += 1
+    _save_approved_index(folder, index)
+    problems = (_differences(_read_csv(SUPP), sup, COLS, "Suppressor")
+                + _differences(_read_csv(_sbrs_path()), sbrs, SBR_COLS, "SBR"))
+    return {"suppressors": len(sup), "sbrs": len(sbrs), "pdfs": fetched, "renamed": renamed, "problems": problems}
+
+
 def _sbrs_path():  # looked up when used (not at import), so it always follows DATA
     return DATA / "sbrs.csv"
 
@@ -255,10 +631,13 @@ def is_sbr(record):
 
 
 def load_sbrs():
-    if not _sbrs_path().exists():
+    if server_settings():
+        rows = [dict(r) for r in _server_inventory()[1]]
+    elif not _sbrs_path().exists():
         return []
-    with _sbrs_path().open(newline="", encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
+    else:
+        with _sbrs_path().open(newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
     for r in rows:
         for c in SBR_COLS:
             r[c] = (r.get(c) or "").strip()
@@ -266,6 +645,8 @@ def load_sbrs():
 
 
 def save_sbrs(rows):
+    if server_settings():
+        raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = _sbrs_path().with_suffix(".csv.tmp")
     with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SBR_COLS, extrasaction="ignore")
@@ -289,20 +670,35 @@ def record_sbrs(records):
                "control_number": rec.get("control_number", ""), "conditions": rec.get("conditions", "")}
         old = by.get(key(new))
         if old is None:
-            rows.append(new)
-            by[key(new)] = new
+            rows.append(dict(new, _changed=True))
+            by[key(new)] = rows[-1]
             added += 1
             changed = True
         elif any(v and old.get(k) != v for k, v in new.items()):
-            old.update({k: v for k, v in new.items() if v})
+            old.update({k: v for k, v in new.items() if v}, _changed=True)
             changed = True
-    if changed:
+    if changed and server_settings():
+        _server_op("record_sbrs", {"rows": [r for r in rows if r.get("_changed")]})
+    elif changed:
         save_sbrs(rows)
     return added
 
 
 def approved_pdf_for(row):
-    """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None."""
+    """The saved approved Form 1 PDF for an inventory row (via out/approved/index.csv, else <serial>.pdf), or None.
+    With a server: the server's copy, fetched into out/server-pdfs/ (the copy there is used while it's unreachable)."""
+    if server_settings():
+        import remote
+        path = OUT / "server-pdfs" / (re.sub(r"[^A-Za-z0-9._-]", "_", row["serial_number"]) + ".pdf")
+        try:
+            data = _server().pdf(row["serial_number"])
+        except remote.ServerError:
+            return path if path.is_file() else None
+        if data is None:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
     folder = OUT / "approved"
     name = _approved_index(folder).get(row.get("eform_id", "")) if folder.exists() else None
     for candidate in filter(None, [name, f"{row['serial_number']}.pdf"]):
@@ -721,7 +1117,54 @@ def _tick(page, selector):
         raise RuntimeError(f"could not tick {selector}")
 
 
-def _submit(page, item, bad, rows, idx, length=""):
+def _set_pending(rows, idx, length, force=False):
+    """Mark a row pending just before Sign & Submit. With a server, only its confirmation counts: this raises if it
+    doesn't come, and the caller then doesn't click Sign & Submit."""
+    r, today = rows[idx], datetime.now().strftime("%m/%d/%Y")
+    length = r.get("overall_length") or length
+    if server_settings():
+        _server_op("mark_pending", {"serial": r["serial_number"], "version": r.get("version"), "filed_date": today,
+                                    "overall_length": length, "force": bool(force)})
+        r.update(status="pending", filed_date=today, overall_length=length)
+        return
+    r.update(status="pending", filed_date=today, overall_length=length)
+    save_rows(rows)
+
+
+def _set_filed(rows, idx, num):
+    """Record the application number (out/submissions.csv was written first). With a server: into the retry file,
+    then sent. Returns False if the server hasn't confirmed it yet (it stays in the retry file)."""
+    import uuid
+    rows[idx].update(status="filed", application_number=num)
+    if not server_settings():
+        save_rows(rows)
+        return True
+    serial = rows[idx]["serial_number"]
+    _outbox_add({"op": "mark_filed", "serial": serial, "number": num,
+                 "body": {"serial": serial, "application_number": num, "request_id": uuid.uuid4().hex}})
+    return not [e for e in outbox_replay() if e["serial"] == serial]
+
+
+def resolve_pending(serial, number=None):
+    """Resolve a pending row after checking the dashboard: filed (with its application number, also logged to
+    out/submissions.csv) or, with no number, not filed (back in the queue)."""
+    rows = load_rows()
+    i = next(n for n, r in enumerate(rows) if r["serial_number"].upper() == serial.upper())
+    if number:
+        log_submission(rows[i], number)
+        if server_settings():
+            _server_op("mark_filed", {"serial": rows[i]["serial_number"], "application_number": number})
+            return
+        rows[i].update(status="filed", application_number=number, filed_date=rows[i]["filed_date"] or datetime.now().strftime("%m/%d/%Y"))
+    elif server_settings():
+        _server_op("unmark_pending", {"serial": rows[i]["serial_number"]})
+        return
+    else:
+        rows[i]["status"] = ""
+    save_rows(rows)
+
+
+def _submit(page, item, bad, rows, idx, length="", force=False):
     """Opt-in: tick the certification and click Sign & Submit. You still enter the emailed code and your PIN."""
     if bad:
         emit("error", "*** NOT submitting: see the problem(s) above. ***"); return
@@ -738,10 +1181,12 @@ def _submit(page, item, bad, rows, idx, length=""):
         emit("error", "*** NOT submitting: Certify page does not say 'validated successfully'. ***"); return
     _tick(page, "#signed")
     # From here on the application may get filed: mark the row pending first, so a crash, timeout or Ctrl-C
-    # can't leave it looking unfiled (and get it filed twice by the next run).
-    rows[idx]["status"], rows[idx]["filed_date"] = "pending", datetime.now().strftime("%m/%d/%Y")
-    rows[idx]["overall_length"] = rows[idx].get("overall_length") or length
-    save_rows(rows)
+    # can't leave it looking unfiled (and get it filed twice by the next run). With a server, only once it confirmed.
+    try:
+        _set_pending(rows, idx, length, force)
+    except Exception as e:
+        emit("error", f"*** NOT submitting: PENDING couldn't be recorded ({str(e).splitlines()[0]}). Nothing was filed. ***")
+        return
     page.locator("#signAndSubmit").click()
     emit("banner", "Signed & submitted. In the browser: enter the 6-digit code from your email and click Verify,\n"
                    "then enter your eForms PIN and click Submit. Waiting up to 15 min for the confirmation...")
@@ -755,10 +1200,13 @@ def _submit(page, item, bad, rows, idx, length=""):
     m = re.search(r"application number is:?\s*(\d+)", txt)
     num = m.group(1) if m else "UNKNOWN"
     log = log_submission(item, num)
-    rows[idx]["status"], rows[idx]["application_number"] = "filed", num
-    save_rows(rows)
-    emit("done", f"SUBMITTED. Application number {num} logged to {log}; row {idx + 1} marked filed.",
-         serial=item["serial_number"], number=num)
+    if _set_filed(rows, idx, num):
+        emit("done", f"SUBMITTED. Application number {num} logged to {log}; row {idx + 1} marked filed.",
+             serial=item["serial_number"], number=num)
+    else:
+        emit("done", f"SUBMITTED. Application number {num} logged to {log}.", serial=item["serial_number"], number=num)
+        emit("error", f"*** Your server hasn't recorded it yet: kept in {_outbox_path()} and sent again automatically. "
+                      "The batch stops here. ***")
     try:
         page.locator("#OkBtn").click(timeout=3000)
     except Exception:
@@ -1154,11 +1602,40 @@ def apply_approvals(records, import_unknown=False):
             rows.append(row)
             by[row["serial_number"].upper()] = row
             added.append(row["serial_number"])
+    if server_settings():  # the same changes, as one operation on the server
+        if updated or added:
+            fields = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+            before = {r["serial_number"].upper(): r for r in load_rows()}
+            _server_op("record_approvals", {
+                "updates": [{"serial": s, "fields": {k: by[s.upper()][k] for k in fields
+                                                     if by[s.upper()][k] != before[s.upper()][k]}} for s in updated],
+                "added": [by[s.upper()] for s in added]})
+        return updated, added
     if added:
         rows.sort(key=lambda r: serial_key(r["serial_number"]))
     if updated or added:
         save_rows(rows)
     return updated, added
+
+
+def send_approval_pdfs(records):
+    """With a server: upload the approval PDFs it doesn't have yet (by eForm ID). Returns how many it added."""
+    import hashlib
+    if not server_settings():
+        return 0
+    server = _server()
+    have = {p["eform_id"] for p in server.get("/api/pdfs")["pdfs"]}
+    sent = []
+    for rec in records:
+        path = Path(rec.get("pdf") or "")
+        if rec.get("eform_id") and rec["eform_id"] not in have and path.is_file():
+            data = path.read_bytes()
+            if server.post("/api/import/pdf", data, timeout=60)["sha256"] != hashlib.sha256(data).hexdigest():
+                raise RuntimeError(f"The approval PDF {path.name} arrived damaged.")
+            sent.append({"eform_id": rec["eform_id"], "serial": (rec.get("serial") or "").strip(),
+                         "sha256": hashlib.sha256(data).hexdigest()})
+            have.add(rec["eform_id"])
+    return server.post("/api/approval-pdfs", {"pdfs": sent}, timeout=120)["added"] if sent else 0
 
 
 def _num(s):
@@ -1457,7 +1934,17 @@ def check_setup():
             c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
                  ("ok", c[1], "stamps correctly (test serial, today's date)", c[3]))
         out += [c] if c else []
-    if SUPP.exists():
+    if server_settings():
+        import remote
+        s = server_settings()
+        try:
+            server = _server(s)
+            sup, sbrs = server.rows()
+            out.append(("ok", "Inventory server", f"reachable at {server.address} · {len(sup)} suppressors, {len(sbrs)} SBRs",
+                        server.address))
+        except remote.ServerError as e:
+            out.append(("fail", "Inventory server", str(e), ", ".join(s["addresses"])))
+    elif SUPP.exists():
         rows = load_rows()
         pending = [r["serial_number"] for r in rows if r["status"] == "pending"]
         try:
@@ -1763,7 +2250,7 @@ def _file_one(page, args, trust, steps, rows, idx):
         emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")
     if args.submit:
         try:
-            _submit(page, item, bad, rows, idx, ctx_vals["overall_length"])
+            _submit(page, item, bad, rows, idx, ctx_vals["overall_length"], force=getattr(args, "force", False))
         except Exception as e:
             emit("error", f"\n*** SUBMIT STEP FAILED: {str(e).splitlines()[0]} ***")
             if rows[idx]["status"] == "pending":
@@ -1833,6 +2320,8 @@ def file_rows(rows, todo, args):
         emit("warn", "5320.23 problems:\n  " + "\n  ".join(probs))
         if ask("Continue anyway? [y/N] ").strip().lower() != "y":
             sys.exit(1)
+    if args.submit and server_settings():
+        _server_precheck(rows, todo, getattr(args, "force", False))
     pw, ctx, page = _browser()
     try:
         if portal.get("new_form_steps"):
@@ -1845,6 +2334,9 @@ def file_rows(rows, todo, args):
             if not _file_one(page, args, trust, steps, rows, idx) and args.submit:
                 emit("warn", f"Row {idx + 1} was not filed; stopping the batch.")
                 break
+            if args.submit and outbox():
+                emit("warn", "A filing result hasn't reached your server yet; stopping the batch before the next row.")
+                break
         if args.capture:
             OUT.mkdir(exist_ok=True)
             dest = OUT / f"capture_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
@@ -1853,6 +2345,25 @@ def file_rows(rows, todo, args):
         ask("Press Enter to log out and close the browser... ")
     finally:  # runs on errors, sys.exit and Ctrl-C too: eForms allows one session, so always log out
         _shutdown(page, ctx, pw)
+
+
+def _server_precheck(rows, todo, force=False):
+    """Before the browser opens, with a server: it must answer, nothing may be waiting in the retry file, and every
+    row to file must still be queued THERE (another device may have filed or changed it). Exits otherwise."""
+    import remote
+    try:
+        waiting = outbox_replay()
+        if waiting:
+            sys.exit(f"A filing result hasn't reached your server yet ({', '.join(e['serial'] for e in waiting)}): "
+                     "filing doesn't start until it has. Check the server, then try again.")
+        fresh = {r["serial_number"].upper(): r for r in _server().rows()[0]}
+    except remote.ServerError as e:
+        sys.exit(f"Your inventory server can't be reached, so filing doesn't start: {e}")
+    for i in todo:
+        there = fresh.get(rows[i]["serial_number"].upper())
+        if there is None or (there["status"] != "" and not force) or there.get("version") != rows[i].get("version"):
+            sys.exit(f"{rows[i]['serial_number']} changed on your server since this list was read (another device?). "
+                     "Nothing was filed; open File again.")
 
 
 def cmd_fill_form1(args):

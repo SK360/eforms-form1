@@ -3,11 +3,20 @@
 Nothing personal can appear: the script runs in a temporary folder with a fake trust, fake serials (A101 ...),
 fake application numbers and eForm IDs, and never opens eForms (the browser parts are replayed as the same events
 the engine sends). Run:  .venv/bin/python docs/make_screenshots.py   ->  docs/screenshots/*.png
+Only some:  .venv/bin/python docs/make_screenshots.py shot_phone_qr shot_server   (the functions' names)
+The inventory server's pages (shot_server) need server/.venv (see server/LXC.md); without it they're skipped.
 """
 import io
+import json
+import re
 import shutil
+import socket
+import ssl
+import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -235,6 +244,91 @@ def shot_check_setup():
     ui.check_setup_flow()
 
 
+def _shoot(page, name):
+    """Save a browser page as docs/screenshots/<name>.png after scanning its text for values from YOUR records."""
+    page.wait_for_timeout(300)
+    hits = scan_personal.scan_text(page.inner_text("body"), PERSONAL)
+    if hits:
+        sys.exit(f"{name}: {len(hits)} possible personal value(s) on the page; not saved")
+    page.screenshot(path=str(OUT / f"{name}.png"))
+    print(f"docs/screenshots/{name}.png")
+
+
+def shot_phone_qr():
+    """Inventory > Open on my phone: the QR code panel (with a made-up home-network address)."""
+    import phone
+    lan = phone.lan_address
+    phone.lan_address = lambda: "192.168.1.20"
+    try:
+        answered("Inventory:", "Open on my phone (same Wi-Fi)")
+        ui.phone_flow()
+    finally:
+        phone.lan_address = lan
+
+
+def shot_server():
+    """The inventory server's own page (server/), run from server/.venv in a temp folder with its made-up inventory:
+    pairing with "Trust this server" open, one suppressor with its history, and Devices."""
+    from playwright.sync_api import sync_playwright
+    py = ROOT / "server" / ".venv" / "bin" / "python"
+    if not py.exists():
+        print("server/.venv isn't installed: the server screenshots were skipped")
+        return
+    data = Path(tempfile.mkdtemp()) / "server-data"
+
+    def cli(*args):
+        return subprocess.run([str(py), "-m", "atf_server", "--data", str(data), *args], cwd=ROOT / "server",
+                              capture_output=True, text=True, check=True).stdout
+    cli("demo")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base = f"https://127.0.0.1:{port}"
+    proc = subprocess.Popen([str(py), "-m", "atf_server", "--data", str(data), "serve", "--host", "127.0.0.1", "--port", str(port)],
+                            cwd=ROOT / "server", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    loose = ssl.create_default_context()
+    loose.check_hostname, loose.verify_mode = False, ssl.CERT_NONE
+
+    def call(path, body=None, key=None):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})})
+        with urllib.request.urlopen(req, context=loose, timeout=10) as r:
+            return json.loads(r.read())
+    try:
+        for _ in range(100):
+            try:
+                call("/api/hello")
+                break
+            except OSError:
+                time.sleep(0.1)
+        code = lambda: re.search(r"\d{6}", cli("pair-code")).group()  # noqa: E731
+        pc = call("/api/pair", {"code": code(), "name": "PC"})["key"]   # the helper on a computer, for a bit of history
+        call("/api/ops/edit_queued", {"serial": "A136", "changes": {"overall_length": "6.5"}}, pc)
+        with sync_playwright() as pw:
+            page = pw.chromium.launch().new_context(viewport={"width": 390, "height": 760}, device_scale_factor=3,
+                                                    ignore_https_errors=True).new_page()
+            page.goto(base + "/")
+            page.wait_for_selector("#trust .fp", state="attached")
+            page.click("#trust summary")
+            page.fill("#devname", "iPhone")
+            _shoot(page, "16-server-pair")
+            page.fill("#code", code())
+            page.click("#pairbtn")
+            page.wait_for_selector(".row")
+            page.goto(base + "/s/A136")
+            page.wait_for_selector("#hist .kv >> nth=1")
+            _shoot(page, "17-server-detail")
+            page.click("#back")
+            page.click("#devlink")
+            page.click("#addDevice")
+            page.wait_for_selector("#paircode")
+            _shoot(page, "18-server-devices")
+    finally:
+        proc.terminate()
+        proc.wait(10)
+        shutil.rmtree(data.parent, ignore_errors=True)
+
+
 def shot_phone():
     """The phone page (./atf serve) at iPhone size, served from the made-up records: the list with a number-pad search,
     and one suppressor's details. Its text is scanned like the terminal screens."""
@@ -248,12 +342,7 @@ def shot_phone():
             page.wait_for_selector(".row")
             for name, step in (("13-phone-list", lambda: page.fill("#q", "")), ("14-phone-detail", lambda: page.click(".row[data-s='A101']"))):
                 step()
-                page.wait_for_timeout(300)
-                hits = scan_personal.scan_text(page.inner_text("body"), PERSONAL)
-                if hits:
-                    sys.exit(f"{name}: {len(hits)} possible personal value(s) on the page; not saved")
-                page.screenshot(path=str(OUT / f"{name}.png"))
-                print(f"docs/screenshots/{name}.png")
+                _shoot(page, name)
     finally:
         server.shutdown()
         server.server_close()
@@ -340,6 +429,7 @@ SHOTS = [("01-home", shot_home), ("02-add", shot_add), (None, shot_file),  # sho
          ("05-inventory", shot_inventory), ("06-sbrs", shot_sbrs),
          ("11-build-serial", shot_build_serial), ("10-builds", shot_builds),  # before 10: that one builds A105-A106
          ("07-approvals", shot_approvals), ("12-check-setup", shot_check_setup), (None, shot_phone),
+         ("15-phone-qr", shot_phone_qr), (None, shot_server),  # 16-server-pair, 17-server-detail, 18-server-devices
          (None, shot_individual)]  # 08-individual-confirm, 09-individual-readback (last: it switches the settings)
 
 
@@ -364,12 +454,15 @@ def cut(name):
 
 
 def main():
+    only = set(sys.argv[1:])
     tmp = sandbox()
     try:
         inventory()
         OUT.mkdir(parents=True, exist_ok=True)
         ui.pause = lambda: None
         for name, make in SHOTS:
+            if only and make.__name__ not in only:
+                continue
             recorder()
             make()
             if name:

@@ -7,7 +7,10 @@ import builtins
 import io
 import re
 import shutil
+import socket
+import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -20,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 import atf  # noqa: E402
 import ui  # noqa: E402
+import remote  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320.pdf"
 TODAY = date.today().strftime("%m/%d/%Y")
@@ -34,20 +38,27 @@ FIXTURE_SSN = "123-45-6789"
 
 
 @pytest.fixture(autouse=True)
-def sandbox(tmp_path, monkeypatch):
+def sandbox(tmp_path):
     """Empty data/out/forms folders; atf points at them. Restores atf.emit/ask (the menu swaps them).
-    autouse: EVERY test runs here, including one that forgets to ask for it (data/ is the user's only copy)."""
+    autouse: EVERY test runs here, including one that forgets to ask for it (data/ is the user's only copy).
+    Its own MonkeyPatch, not the test's: a test calling monkeypatch.undo() once pointed the app back at the real
+    folders (2026-10-28, it read the real server.yaml); now only this fixture's teardown undoes the sandbox."""
+    monkeypatch = pytest.MonkeyPatch()
     for d in ("data", "out", "forms", "files"):
         (tmp_path / d).mkdir()
     for name, sub in (("DATA", "data"), ("OUT", "out"), ("FORMS", "forms")):
         monkeypatch.setattr(atf, name, tmp_path / sub)
     monkeypatch.setattr(atf, "SUPP", tmp_path / "data" / "suppressors.csv")
+    monkeypatch.setattr(atf, "_FETCHED", {})          # the inventory server's per-run state (server mode)
+    monkeypatch.setattr(atf, "SERVER_STATE", {})
+    monkeypatch.setattr(remote.Server, "working", {})
     real_data = ROOT / "data"
     before = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     monkeypatch.setattr(atf, "emit", atf.emit)
     monkeypatch.setattr(atf, "ask", atf.ask)
     monkeypatch.setattr(builtins, "input", lambda *a: "")
     yield tmp_path
+    monkeypatch.undo()
     # guard: a test must never touch the real data/ folder (personal records)
     after = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     assert after == before, f"a test changed the real data/ folder: {sorted(set(after.items()) ^ set(before.items()))}"
@@ -102,6 +113,43 @@ def add_other_rp(**over):
     t["responsible_persons"].append(person)
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
     return person
+
+
+SERVER_PY = ROOT / "server" / ".venv" / "bin" / "python"
+
+
+@pytest.fixture
+def server(tmp_path):
+    """The REAL inventory server (server/atf_server, from server/.venv) on 127.0.0.1 in a temp folder; skipped where
+    that isn't installed. {"address", "data", "code": () -> a fresh pairing code}."""
+    if not SERVER_PY.exists():
+        pytest.skip("the server's environment (server/.venv) isn't installed")
+    data = tmp_path / "server-data"
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    cli = lambda *a: subprocess.run([str(SERVER_PY), "-m", "atf_server", "--data", str(data), *a], cwd=ROOT / "server",  # noqa: E731
+                                    capture_output=True, text=True, timeout=60).stdout
+    proc = subprocess.Popen([str(SERVER_PY), "-m", "atf_server", "--data", str(data), "serve", "--host", "127.0.0.1",
+                             "--port", str(port)], cwd=ROOT / "server", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    address = f"https://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            remote.probe(address, timeout=1)
+            break
+        except remote.ServerError:
+            time.sleep(0.1)
+    yield {"address": address, "data": data, "code": lambda: re.search(r"\d{6}", cli("pair-code")).group()}
+    proc.terminate()
+    proc.wait(10)
+
+
+def connect(server):
+    """Pair this (sandboxed) app with the test server and switch it to server mode."""
+    found = remote.probe(server["address"])
+    paired = remote.pair(found, server["code"](), "PC")
+    atf.save_server_settings({"server_id": found["server_id"], "addresses": [found["address"]], "fingerprint": found["fingerprint"],
+                              "ca": found["ca"], "key": paired["key"], "device_id": paired["device_id"]})
 
 
 @pytest.fixture
