@@ -15,7 +15,7 @@ import ssl
 from urllib.parse import quote, urlparse
 
 PORT = 8765
-API = 1  # the server API this helper speaks (server: atf_server.app.API_VERSION)
+API = 2  # the server API this helper speaks (server: atf_server.app.API_VERSION)
 TIMEOUT = 5
 
 

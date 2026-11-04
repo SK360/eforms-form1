@@ -101,8 +101,30 @@ def test_menu_moves_and_comes_back(server, configured, answers, screen):
     answers(pick("Settings"), pick("Where your inventory lives"), "local", "copy", QUIT)
     ui.menu()
     out = screen.getvalue()
-    assert "Copied: 7 suppressors, 1 SBRs" in out and "This computer's inventory is used again" in out
+    assert "Copied: 7 suppressors, 1 SBR" in out and "This computer's inventory is used again" in out
     assert atf.server_settings() is None and len(atf.load_rows()) == 7
+
+
+def test_types_survive_the_move_and_back(server, configured):
+    inventory()                                                              # R1 is from before types: no type saved
+    older = atf._read_csv(atf._sbrs_path())[0]
+    atf.save_sbrs([older, dict(older, serial_number="G1", type="SHORT BARRELED SHOTGUN", eform_id="2000002")])
+    connect(server)
+    moved = atf.move_to_server()
+    assert moved["moved"] and moved["problems"] == [] and moved["nfa"] == "1 SBR, 1 SBS"
+    want = {"R1": "SHORT BARRELED RIFLE", "G1": "SHORT BARRELED SHOTGUN"}
+    assert {s["serial_number"]: s["type"] for s in atf.load_sbrs()} == want
+    back = atf.copy_from_server()
+    assert back["problems"] == [] and back["nfa"] == "1 SBR, 1 SBS"
+    assert {s["serial_number"]: s["type"] for s in atf._read_csv(atf._sbrs_path())} == want
+
+
+def test_a_server_that_loses_the_type_counts_as_a_difference(configured):
+    """An older server drops the type: moving a shotgun there must not pass the check. A blank type = an SBR."""
+    here = {"serial_number": "G1", "eform_id": "2000002", "type": "SHORT BARRELED SHOTGUN"}
+    there = {"serial_number": "G1", "eform_id": "2000002"}
+    assert atf._differences([here], [there], atf.SBR_COLS, "Other NFA item")
+    assert atf._differences([dict(here, type="SHORT BARRELED RIFLE")], [there], atf.SBR_COLS, "Other NFA item") == []
 
 
 def test_monkeypatch_undo_cant_leave_the_sandbox(monkeypatch, sandbox):

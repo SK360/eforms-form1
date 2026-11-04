@@ -40,7 +40,7 @@ def inventory():
         if n == 103:
             r["conditions"] = "Mark per 27 CFR 479.102"
         sup.append(r)
-    sbrs = [{"serial_number": f"R{n}", "caliber": "9", "model": "PCC", "barrel_length": "8", "overall_length": "24",
+    sbrs = [{"serial_number": f"R{n}", "type": "SHORT BARRELED RIFLE", "caliber": "9", "model": "PCC", "barrel_length": "8", "overall_length": "24",
              "approved_date": "09/02/2026", "eform_id": f"20{n:05d}", "control_number": "", "conditions": ""}
             for n in (1, 2)]
     pdfs += [{"eform_id": s["eform_id"], "serial": s["serial_number"], "data": _pdf(f"Made-up SBR {s['serial_number']}")}

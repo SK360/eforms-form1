@@ -127,3 +127,15 @@ def test_approval_operations(filled):
                                     {"serial_number": "R1", "eform_id": "2000001", "conditions": "Mark it"}])
     sbrs = {s["serial_number"]: s for s in db.sbrs(filled)}
     assert sbrs["R3"]["approved_date"] == "10/30/2026" and sbrs["R1"]["conditions"] == "Mark it" and sbrs["R1"]["model"] == "PCC"
+    assert sbrs["R3"]["type"] == "SHORT BARRELED RIFLE"                     # an app that sends no type: all it could record
+
+
+def test_record_sbrs_keeps_each_type(filled):
+    op(filled, "record_sbrs", rows=[{"serial_number": "G1", "type": "SHORT BARRELED SHOTGUN", "caliber": "12", "eform_id": "2000009"}])
+    types = lambda: {s["serial_number"]: s["type"] for s in db.sbrs(filled)}  # noqa: E731
+    assert types()["G1"] == "SHORT BARRELED SHOTGUN"
+    op(filled, "record_sbrs", rows=[{"serial_number": "G1", "eform_id": "2000009", "conditions": "Mark it"}])
+    assert types()["G1"] == "SHORT BARRELED SHOTGUN"                        # no type given: the recorded one stays
+    op(filled, "record_sbrs", rows=[{"serial_number": "G1", "type": "ANY OTHER WEAPON", "eform_id": "2000009"}])
+    assert types()["G1"] == "ANY OTHER WEAPON"                              # the same eForm: corrected
+    assert len(db.sbrs(filled)) == 3

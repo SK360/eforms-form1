@@ -25,9 +25,10 @@ from pathlib import Path
 # The app's CSV columns (src/atf.py COLS / SBR_COLS): import and export are straight copies of the app's files.
 COLS = ["caliber", "serial_number", "overall_length", "status", "application_number", "filed_date", "approved_date",
         "eform_id", "control_number", "conditions", "built", "design"]
-SBR_COLS = ["serial_number", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
+SBR_COLS = ["serial_number", "type", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
             "control_number", "conditions"]
 STATUSES = ("queued", "pending", "filed", "approved", "disapproved", "skip")  # "" in the app's CSV = queued
+NFA_DEFAULT_TYPE = "SHORT BARRELED RIFLE"  # table sbrs holds every non-suppressor type; before schema 4, only SBRs
 PAIR_MINUTES, PAIR_TRIES = 5, 5
 ISO = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'"
 
@@ -101,6 +102,8 @@ DROP TRIGGER history_no_delete;
 DELETE FROM history WHERE operation IN ('set_built', 'clear_built');
 CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
 DELETE FROM requests WHERE operation IN ('set_built', 'clear_built');
+""", 4: f"""
+ALTER TABLE sbrs ADD COLUMN type TEXT NOT NULL DEFAULT '{NFA_DEFAULT_TYPE}';
 """}
 PRIVATE_OPS = ("set_built", "clear_built")  # leave no record of when (see above); migration 3 removed earlier ones
 SCHEMA_VERSION = max(MIGRATIONS)
@@ -232,7 +235,7 @@ def _app_row(r):
 
 
 def _app_sbr(r):
-    return {"serial_number": r["serial"], "caliber": r["caliber"], "model": r["model"], "barrel_length": r["barrel_length"],
+    return {"serial_number": r["serial"], "type": r["type"], "caliber": r["caliber"], "model": r["model"], "barrel_length": r["barrel_length"],
             "overall_length": r["overall_length"], "approved_date": to_us(r["approved_date"]), "eform_id": r["eform_id"] or "",
             "control_number": r["control_number"], "conditions": r["conditions"]}
 
@@ -320,12 +323,12 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
         for r in sbr_rows:
             r = {c: (r.get(c) or "").strip() for c in SBR_COLS}
             try:
-                conn.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, "
-                             "eform_id, control_number, conditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                             (r["serial_number"], r["caliber"], r["model"], r["barrel_length"], r["overall_length"],
+                conn.execute("INSERT INTO sbrs (serial, type, caliber, model, barrel_length, overall_length, approved_date, "
+                             "eform_id, control_number, conditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (r["serial_number"], r["type"] or NFA_DEFAULT_TYPE, r["caliber"], r["model"], r["barrel_length"], r["overall_length"],
                               to_iso(r["approved_date"]), r["eform_id"] or None, r["control_number"], r["conditions"]))
             except sqlite3.IntegrityError as e:
-                raise Refused(f"SBR {r['serial_number'] or '(no serial)'}: {_why(e)}")
+                raise Refused(f"{r['type'] or 'SBR'} {r['serial_number'] or '(no serial)'}: {_why(e)}")
             _log(conn, at, device, "import", r["serial_number"], None, r)
         stored = 0
         for p in pdfs:  # {"data": bytes} or {"path": an uploaded file}: read one at a time (a small container)
@@ -645,20 +648,22 @@ def _record_approvals(conn, body, device, at, rid):
 
 
 def _record_sbrs(conn, body, device, at, rid):
-    """Check approvals: approved SBRs, added or (by eForm ID) filled in with the details given."""
+    """Check approvals: approved non-suppressors, added or (by eForm ID) filled in with the details given. Rows from
+    an app that doesn't send a type are SBRs (all it could record)."""
     for s in body.get("rows") or []:
         s = {c: str(s.get(c) or "").strip() for c in SBR_COLS}
         if not s["serial_number"]:
-            raise Refused("An SBR without a serial number.")
+            raise Refused("An approved firearm without a serial number.")
         have = conn.execute("SELECT * FROM sbrs WHERE eform_id = ?", (s["eform_id"],)).fetchone() if s["eform_id"] else \
             conn.execute("SELECT * FROM sbrs WHERE serial = ? COLLATE NOCASE AND eform_id IS NULL", (s["serial_number"],)).fetchone()
-        values = (s["serial_number"], s["caliber"], s["model"], s["barrel_length"], s["overall_length"], to_iso(s["approved_date"]),
+        values = (s["serial_number"], s["type"], s["caliber"], s["model"], s["barrel_length"], s["overall_length"], to_iso(s["approved_date"]),
                   s["control_number"], s["conditions"])
         if have is None:
-            conn.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, control_number, "
-                         "conditions, eform_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, s["eform_id"] or None))
+            conn.execute("INSERT INTO sbrs (serial, type, caliber, model, barrel_length, overall_length, approved_date, control_number, "
+                         "conditions, eform_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (values[0], s["type"] or NFA_DEFAULT_TYPE, *values[2:], s["eform_id"] or None))
         else:
-            cols = ("serial", "caliber", "model", "barrel_length", "overall_length", "approved_date", "control_number", "conditions")
+            cols = ("serial", "type", "caliber", "model", "barrel_length", "overall_length", "approved_date", "control_number", "conditions")
             keep = [(c, v) for c, v in zip(cols, values) if v]  # fills in; never blanks a recorded detail
             if keep:
                 conn.execute(f"UPDATE sbrs SET {', '.join(f'{c} = ?' for c, _ in keep)} WHERE id = ?", (*[v for _, v in keep], have["id"]))

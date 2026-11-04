@@ -45,7 +45,7 @@ def old_fake():
 
 def _fake(own_ca):
     """A fake inventory server on 127.0.0.1 (HTTPS). Pairing code 123456 gives key "k1" (device 7)."""
-    state = {"calls": [], "server_id": SID}
+    state = {"calls": [], "server_id": SID, "api": remote.API}
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -67,7 +67,7 @@ def _fake(own_ca):
         def do_GET(self):
             state["calls"].append(("GET", self.path))
             if self.path == "/api/hello":
-                return self._send(200, {"server_id": state["server_id"], "name": "Test server", "version": "0.1.0", "api": 1})
+                return self._send(200, {"server_id": state["server_id"], "name": "Test server", "version": "0.1.0", "api": state["api"]})
             if self.path == "/ca.crt" and own_ca:
                 return self._send(200, CA.encode(), "application/x-x509-ca-cert")
             if not self._authed():
@@ -128,7 +128,7 @@ def test_addresses():
 
 def test_probe_and_pair(fake):
     found = remote.probe(fake["address"])
-    assert found["fingerprint"] == _fingerprint() and found["ca"] == CA and found["server_id"] == SID and found["api"] == 1
+    assert found["fingerprint"] == _fingerprint() and found["ca"] == CA and found["server_id"] == SID and found["api"] == remote.API
     with pytest.raises(remote.ServerError, match="wrong"):
         remote.pair(found, "000000", "PC")
     assert remote.pair(found, " 123456 ", "PC") == {"key": "k1", "device_id": 7, "server_id": SID}
@@ -229,7 +229,7 @@ def test_offline_shows_the_last_data_seen(fake, configured):
 def test_check_setup_names_the_server(fake, configured):
     connect(fake)
     line = next(c for c in atf.check_setup() if c[1] == "Inventory server")
-    assert line[0] == "ok" and "2 suppressors, 1 SBRs" in line[2]
+    assert line[0] == "ok" and "2 suppressors, 1 SBR" in line[2]
     connect(fake, [_dead_address()])
     remote.Server.working.clear()
     line = next(c for c in atf.check_setup() if c[1] == "Inventory server")
@@ -244,7 +244,7 @@ def test_menu_connects_shows_the_server_and_switches_back(fake, configured, answ
             and any(str(c.title).startswith("File 1 queued") for c in kw["choices"]) else "unexpected")   # everything, on the server
     ui.menu()
     out = screen.getvalue()
-    assert _fingerprint() in out and "Connected:" in out and "2 suppressors, 1 SBRs" in out
+    assert _fingerprint() in out and "Connected:" in out and "2 suppressors, 1 SBR" in out
     assert "A101" in out and "On your server (https://127.0.0.1:" in out
     saved = atf.server_settings()
     assert saved["key"] == "k1" and saved["addresses"] == [fake["address"]] and saved["fingerprint"] == _fingerprint()
@@ -265,6 +265,46 @@ def test_menu_refuses_a_certificate_that_doesnt_match(fake, configured, answers,
     ui.menu()
     assert atf.server_settings() is None and "Not connected" in screen.getvalue()
     assert not any(c[0] == "POST" for c in fake["calls"])          # never paired
+
+
+@pytest.mark.parametrize("offset, who", [(-1, "the server"), (1, "the helper")])
+def test_pairing_needs_the_same_api_on_both_sides(fake, configured, answers, screen, offset, who):
+    fake["api"] = remote.API + offset
+    answers(pick("Settings"), pick("Where your inventory lives"), "connect", fake["address"], QUIT)
+    ui.menu()
+    assert f"update {who} first" in " ".join(screen.getvalue().split()) and atf.server_settings() is None
+    assert not any(c[0] == "POST" for c in fake["calls"])
+
+
+SHOTGUN = {"type": "SHORT BARRELED SHOTGUN", "approved": True, "serial": "G1", "approval_date": "10/30/2026", "eform_id": "2000002",
+           "control_number": "", "conditions": "", "overall_length": "12", "caliber": "12", "model": "X", "barrel_length": "14", "pdf": ""}
+
+
+def test_an_older_server_cant_record_other_types(fake, configured):
+    """It would drop the type and show the row as an SBR. SBRs are all it knows, so those still go through."""
+    connect(fake)
+    fake["api"] = 1
+    with pytest.raises(atf.ServerReadOnly, match=r"needs updating.*1 SBS\."):
+        atf.record_sbrs([SHOTGUN])
+    assert _ops(fake) == []
+    assert atf.record_sbrs([dict(SHOTGUN, type="SHORT BARRELED RIFLE", serial="R7", eform_id="2000007")]) == 1
+    assert [name for name, _ in _ops(fake)] == ["record_sbrs"]
+
+    fake["api"] = remote.API                                       # once it's updated
+    assert atf.record_sbrs([SHOTGUN]) == 1
+    assert _ops(fake)[-1][1]["rows"][0]["type"] == "SHORT BARRELED SHOTGUN"
+
+
+def test_check_approvals_says_when_the_server_needs_updating(fake, configured, answers, screen, monkeypatch):
+    connect(fake)
+    fake["api"] = 1
+    suppressor = dict(SHOTGUN, type="SILENCER", serial="A136", eform_id="1000136", barrel_length="")
+    monkeypatch.setattr(atf, "fetch_approved", lambda *a, **k: ([], []))
+    monkeypatch.setattr(atf, "read_approved", lambda found: ([suppressor, SHOTGUN], []))
+    answers(pick("Check approvals"), True, QUIT)
+    ui.menu()
+    assert "Your inventory server needs updating" in " ".join(screen.getvalue().split())
+    assert [name for name, _ in _ops(fake)] == ["record_approvals"]  # the suppressor's approval is kept; the shotgun waits
 
 
 def test_menu_when_the_server_is_gone(fake, configured, answers, screen):

@@ -212,7 +212,7 @@ def test_check_approvals_end_to_end(configured, dashboard):
     assert [r["serial"] for r, _ in rep["matched"]] == ["T201"]
     assert {r["serial"]: n for r, n in rep["differs"]} == {"T202": ["caliber 22 (records: 9)"], "T203": ["overall length 13 (settings: 12)"]}
     assert sorted(r["serial"] for r, _ in rep["unknown"]) == [f"OLD{n}" for n in range(10, 13)] + [f"OLD{n}" for n in range(6, 10)]
-    assert dict(rep["skipped"]) == {"SHORT BARRELED RIFLE": 2} and rep["duplicates"] == []
+    assert dict(rep["skipped"]) == {} and rep["duplicates"] == []                                  # SBRs are recorded, not skipped
     assert [r["serial_number"] for r in rep["waiting"]] == ["T204"]                                # T205 not filed yet
 
     # approvals are recorded in the inventory; SBRs never are; unknown suppressors only when importing
@@ -356,11 +356,63 @@ def test_menu_shows_the_report(configured, dashboard, answers, screen):
     ui.menu()
     out = screen.getvalue()
     assert "Inventory updated: 1 approval(s) recorded, 2 suppressor(s) added" in out
-    for shown in ("5 approved Form 1s", "3 suppressor(s), 2 SBR(s)", "SBR inventory: 2 added", "Approved, matches your records (1)",
+    for shown in ("5 approved Form 1s", "3 suppressor(s), 2 SBRs", "SBRs: 2 added", "Approved, matches your records (1)",
                   "Approved, NOT in your records (2)", "Filed, not approved yet: 1", "T204"):
         assert shown in out, shown
     assert "DOE" not in out.upper()
     assert answers.kw["Open the browser?"]["auto_enter"] is False   # 'y' alone doesn't start it: Enter does
+
+
+NFA_KINDS = [("SHORT BARRELED RIFLE", "R1", "5.56"), ("SHORT BARRELED SHOTGUN", "G1", "12"), ("ANY OTHER WEAPON", "W1", "9"),
+             ("DESTRUCTIVE DEVICE", "D1", "37"), ("MACHINEGUN", "M1", "9")]
+
+
+def _nfa_record(kind, serial, eform_id="2000001", caliber="12"):
+    return {"type": kind, "approved": True, "serial": serial, "approval_date": "10/30/2026", "eform_id": eform_id, "control_number": "",
+            "conditions": "", "overall_length": "26", "caliber": caliber, "model": "X", "barrel_length": "14", "pdf": ""}
+
+
+def test_every_other_type_is_read_and_kept_with_its_type(configured, tmp_path):
+    queue(("T201", "22", "filed", "1"))
+    records = []
+    for n, (kind, serial, caliber) in enumerate(NFA_KINDS):
+        f = tmp_path / f"{serial}.pdf"
+        f.write_bytes(approved_pdf(kind, serial, caliber, "26", barrel="10.5"))
+        r = atf.read_approved_pdf(f)
+        assert (r["type"], r["serial"], r["caliber"]) == (kind, serial, caliber)
+        records.append(dict(r, eform_id=f"200000{n}"))
+    before = atf.SUPP.read_bytes()
+    assert atf.record_sbrs(records) == 5 and atf.record_sbrs(records) == 0                         # no duplicates
+    assert atf.apply_approvals(records) == ([], []) and atf.SUPP.read_bytes() == before            # never suppressors
+    rows = atf.load_sbrs()
+    assert {r["serial_number"]: r["type"] for r in rows} == {s: k for k, s, _ in NFA_KINDS}
+    assert atf.nfa_counts(rows) == "1 SBR, 1 SBS, 1 AOW, 1 DD, 1 MG" and atf.nfa_label(rows) == "Other NFA items"
+    assert dict(atf.approval_report(records, atf.load_rows(), atf.load_trust())["skipped"]) == {}
+
+
+def test_a_type_that_cant_be_read_is_reported_not_recorded(configured):
+    rec = _nfa_record("", "U1")
+    assert atf.is_other_nfa(rec) is False and atf.record_sbrs([rec]) == 0 and atf.load_sbrs() == []
+    assert dict(atf.approval_report([rec], [], atf.load_trust())["skipped"]) == {"unknown type": 1}
+    assert atf.is_other_nfa({"type": " silencer "}) is False and atf.is_other_nfa(_nfa_record("MACHINEGUN", "M1")) is True
+
+
+def test_older_rows_count_as_sbrs_until_check_approvals_corrects_them(configured):
+    atf._sbrs_path().write_text("serial_number,caliber,model,barrel_length,overall_length,approved_date,eform_id,control_number,conditions\n"
+                                "R1,12,X,14,26,09/02/2026,2000001,,\n", encoding="utf-8")       # a file from before types
+    assert atf.load_sbrs()[0]["type"] == "SHORT BARRELED RIFLE" and atf.nfa_label(atf.load_sbrs()) == "SBRs"
+    assert atf.record_sbrs([_nfa_record(" short  barreled shotgun ", "R1")]) == 0                  # the same eForm: corrected
+    assert atf.load_sbrs()[0]["type"] == "SHORT BARRELED SHOTGUN" and len(atf.load_sbrs()) == 1
+    assert atf.nfa_counts(atf.load_sbrs()) == "1 SBS" and atf.nfa_label(atf.load_sbrs()) == "SBSs"
+
+
+def test_a_type_this_tool_doesnt_know_is_shown_as_printed(configured):
+    assert atf.record_sbrs([_nfa_record("SOME NEW TYPE", "N1"), _nfa_record("SHORT BARRELED RIFLE", "R1", "2000002"),
+                            _nfa_record("SHORT BARRELED RIFLE", "R2", "2000003")]) == 3
+    rows = atf.load_sbrs()
+    assert atf.nfa_counts(rows) == "2 SBRs, 1 SOME NEW TYPE" and atf.nfa_short("SOME NEW TYPE") == "SOME NEW TYPE"
+    assert atf.nfa_label(rows) == "Other NFA items" and atf.nfa_label(rows[:1]) == "Other NFA items"    # only the new type: still generic
+    assert atf.nfa_counts([]) == "0 other NFA items"
 
 
 def test_lengths_are_filled_and_checked(configured, tmp_path):
