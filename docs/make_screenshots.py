@@ -89,7 +89,9 @@ def inventory():
         {"serial_number": "R2001", "caliber": "5.56", "model": "AR-15", "barrel_length": "10.5", "overall_length": "26.5",
          "approved_date": d(200), "eform_id": "1000201", "control_number": "", "conditions": ""},
         {"serial_number": "R2002", "caliber": "9", "model": "PCC", "barrel_length": "8", "overall_length": "24",
-         "approved_date": d(90), "eform_id": "1000202", "control_number": "", "conditions": ""}])
+         "approved_date": d(90), "eform_id": "1000202", "control_number": "", "conditions": ""},
+        {"serial_number": "G2003", "type": "SHORT BARRELED SHOTGUN", "caliber": "12", "model": "Pump", "barrel_length": "14", "overall_length": "28",
+         "approved_date": d(60), "eform_id": "1000203", "control_number": "", "conditions": ""}])
 
 
 # ---------- recording console + questionary prompts echoed the way questionary leaves them on screen ----------
@@ -223,8 +225,8 @@ def shot_inventory():
 def shot_sbrs():
     sbrs = atf.load_sbrs()
     answered("Inventory:", "Show another view…")
-    answered("Show:", "SBRs")
-    ui.con.print(ui.sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
+    answered("Show:", atf.nfa_label(sbrs))
+    ui.con.print(ui.sbr_table(sbrs, f"[bold]Inventory[/] · {atf.nfa_label(sbrs)} ({len(sbrs)})"))
     ui.con.print(f"  {ui.sbr_summary(sbrs)}")
 
 

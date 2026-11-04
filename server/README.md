@@ -54,11 +54,13 @@ You'll need: a machine at home that's always on, and to be comfortable following
   - Each filing result is written to a small retry file on your computer *before* it's sent to the server. If the
     server goes away mid-batch, nothing is lost: it's sent again automatically, the batch stops until it's delivered,
     and it's never applied twice.
-- **Check approvals** records new approvals, SBRs and approval PDFs straight onto the server.
+- **Check approvals** records new approvals, SBRs and other NFA items, and approval PDFs straight onto the server.
+  Update the server along with the helper: an older server can't keep an item's type, so the helper won't record
+  anything but SBRs there until it's updated, and a new device can't pair until both are on the same version.
 
 ## What stays on your computer
 
-The server only ever holds the inventory: suppressors, SBRs, builds, approval PDFs and the change history. Everything
+The server only ever holds the inventory: suppressors, SBRs and other NFA items, builds, approval PDFs and the change history. Everything
 else stays on your computer, as before:
 
 - your settings, 5320.23 templates, fingerprint files, photos and trust document;

@@ -8,7 +8,7 @@ def test_unpaired_gets_only_the_page_and_hello(client):
     assert page.status_code == 200 and "<title>Inventory</title>" in page.text
     assert "default-src 'none'" in page.headers["content-security-policy"]
     hello = client.get("/api/hello").json()
-    assert hello["api"] == 1 and hello["paired"] is False and len(hello["server_id"]) == 32
+    assert hello["api"] == 2 and hello["paired"] is False and len(hello["server_id"]) == 32
     for path in ("/api/inventory", "/api/rows", "/api/rows/A101", "/api/history/A101", "/pdf/A101", "/export.csv",
                  "/api/devices"):
         r = client.get(path)
@@ -46,6 +46,7 @@ def test_inventory_for_the_page(client, auth, ca_fp):
     assert a101["application"] == "…0101" and a101["eform"] == "…0101"           # last 4, like the menu
     assert {r["status"] for r in data["suppressors"]} == {"approved", "filed", "queued"}
     assert [s["serial"] for s in data["sbrs"]] == ["R1", "R2"] and data["sbrs"][0]["pdf"] is True
+    assert data["sbrs"][0]["type"] == "SHORT BARRELED RIFLE"
     assert data["can_build"] is True and a101["version"] == 1 and data["server"]["fingerprint"] == ca_fp and data["server"]["device"] == "PC"
 
 

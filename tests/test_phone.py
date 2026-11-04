@@ -66,6 +66,34 @@ def test_inventory_shows_last_4_only(served):
     assert (t1["built"], t1["design"], t1["application"], t1["pdf"]) == (True, "Rimfire Short", "…0001", True)
     assert data["suppressors"][4]["status"] == "queued" and data["sbrs"][0]["model"] == "PCC"
     assert b"900000001" not in body                                  # never the full application number
+    assert data["sbrs"][0]["type"] == "SHORT BARRELED RIFLE"         # R9 was saved without one: older rows are SBRs
+
+
+def test_the_page_names_each_type(served):
+    from playwright.sync_api import sync_playwright
+    link, _ = served
+    older = atf.load_sbrs()[0]
+    shotgun = dict(older, serial_number="G2", type="SHORT BARRELED SHOTGUN", caliber="12", eform_id="1000098")
+    atf.save_sbrs([older, shotgun])
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page(viewport={"width": 390, "height": 844})
+        page.set_default_timeout(5000)
+        page.goto(link)
+        page.wait_for_selector(".row")
+        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 1 SBR · 1 SBS"
+        assert page.inner_text(".chip[data-f='sbr']") == "Other NFA"
+        page.click(".chip[data-f='sbr']")
+        assert page.locator(".row .serial").all_inner_texts() == ["G2", "R9"]
+        assert page.locator(".row .pill").all_inner_texts() == ["SBS", "SBR"]
+        page.click(".row[data-s='G2']")
+        detail = page.inner_text("#detailView")
+        assert "SHORT BARRELED SHOTGUN" in detail and "Caliber/gauge 12" in detail
+
+        atf.save_sbrs([shotgun])                                     # only shotguns: the filter says so
+        page.goto(link)
+        page.reload()
+        page.wait_for_selector(".row")
+        assert page.inner_text("#sum").endswith("· 1 SBS") and page.inner_text(".chip[data-f='sbr']") == "SBSs"
 
 
 def test_build_and_clear(served):

@@ -67,9 +67,17 @@ plain CLI, kept for debugging/scripting:
   one), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
   order); sorting happens ONLY there (never during filing: file_rows holds row indices). out/submissions.csv stays a
   write-only filing log. There is no approved.csv any more.
-- **`data/sbrs.csv` = SBR inventory** (`SBR_COLS`): approved short-barreled rifles (type contains RIFLE), filled by
-  `record_sbrs()` from Check approvals (keyed by eForm ID; no duplicates); never filed or queued by this tool.
-  Path via `_sbrs_path()` (resolved at call time so tests' sandbox redirects it). Inventory > Show SBRs, Excel sheet.
+- **`data/sbrs.csv` = every approved non-suppressor** (`SBR_COLS`; the file, table and function names date from when
+  it held only SBRs): `type` as the PDF and the portal's `#productType` print it (`NFA_TYPES`: SHORT BARRELED RIFLE,
+  SHORT BARRELED SHOTGUN, ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN; live PDFs seen only for SILENCER and the
+  rifle, the rest from a portal capture), filled by `record_sbrs()` from Check approvals (`is_other_nfa`: a type was
+  read and isn't SILENCER; keyed by eForm ID; no duplicates; a changed type is corrected); never filed or queued by this
+  tool. A blank type = `NFA_DEFAULT_TYPE` (the rifle: rows saved before types). Screens use `nfa_counts` ("2 SBRs, 1
+  SBS"), `nfa_label` ("SBRs" if one known type, else "Other NFA items"), `nfa_short`; `phone.html` has its own `NFA`.
+  Path via `_sbrs_path()` (resolved at call time so tests' sandbox redirects it). Inventory > Show another view, Excel
+  sheet. Server: schema 4 adds `sbrs.type`, API 2. `remote.API` must equal the server's to pair; an already paired app
+  on an API 1 server records SBRs but `record_sbrs` refuses any other type (`ServerReadOnly`), since that server would
+  drop the type and show it as an SBR.
 - **Development and tests must never write the real records** (`data/`, `forms/`, `out/submissions.csv`,
   `out/approved/`: production data, the user's only copy). The `sandbox` fixture is autouse (every test runs in a temp
   folder) and asserts the real data/ folder is unchanged after each test (a module-level path once leaked fake rows
@@ -230,7 +238,7 @@ plain CLI, kept for debugging/scripting:
   search finds first; conditions = last-page text above its "Approval Conditions" heading; approval date under the
   "Date" label below the decision line)
   by position relative to labels, ignoring the label font. Report = SUPPRESSORS (type contains SILENCER) matched to
-  suppressors.csv by serial; other types (SBRs) only counted. eForm IDs (7-8 digits) and control numbers (11) do NOT
+  suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (7-8 digits) and control numbers (11) do NOT
   equal the 9-digit application numbers recorded at filing, hence matching by serial. Report only; nothing imported.
   Results-table rows are found from each VISIBLE "View Form" button (the page has hidden duplicates whose innerText
   still reads "View Form"), climbing to the smallest ancestor with one such button and a 7+ digit ID; buttons are
@@ -401,7 +409,8 @@ prints steps without a browser. `--capture` records screens after the automated 
 - Other responsible persons (added 2026-10-21 on request): practice run passed 2026-10-22 with the user as RP 2 (own
   EFT); a real second person (their own EFT/name) not yet. Verify page RP read-back not mapped. U.S. citizens only.
 - Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
-- Suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields.
+- Files suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields. They are only
+  inventoried, from Check approvals.
 - Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on
   GitHub's Windows runners. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
 - Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);

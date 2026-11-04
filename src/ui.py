@@ -160,8 +160,8 @@ def summary(rows):
     built = sum(1 for r in rows if atf.is_built(r))
     parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]"] + ([f"[green]{built} built[/]"] if built else []) + [
              f"[blue]{n(*IN_PROGRESS)} in progress[/]", f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
-    sbrs = len(atf.load_sbrs())
-    return " · ".join(parts + ([f"[magenta]{sbrs} SBR{'s' if sbrs != 1 else ''}[/]"] if sbrs else []))
+    sbrs = atf.load_sbrs()
+    return " · ".join(parts + ([f"[magenta]{escape(atf.nfa_counts(sbrs))}[/]"] if sbrs else []))
 
 
 def home(rows):
@@ -223,13 +223,13 @@ def build_table(rows, title):
 
 
 def sbr_table(rows, title):
-    """Same look as the suppressor inventory; SBRs add Model and Barrel. They come only from approvals (always approved,
-    no filed date), so there is no Filed or waiting column."""
+    """Same look as the suppressor inventory, for the other NFA types (SBRs, SBSs, ...); they add Type, Model and Barrel.
+    They come only from approvals (always approved, no filed date), so there is no Filed or waiting column."""
     t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
-    for col in ("Serial", "Caliber", "Model", "Barrel", "Length", "Status", "Approved", "eForm"):
+    for col in ("Serial", "Type", "Caliber/gauge", "Model", "Barrel", "Length", "Status", "Approved", "eForm"):
         t.add_column(col)
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
-        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["model"]), escape(r["barrel_length"]),
+        t.add_row(escape(r["serial_number"]), escape(atf.nfa_short(r["type"])), escape(r["caliber"]), escape(r["model"]), escape(r["barrel_length"]),
                   escape(r["overall_length"]), STATUS["approved"],
                   escape(r["approved_date"]) + (" [yellow]⚠ conditions[/]" if r["conditions"] else ""),
                   f"eForm {escape(short(r['eform_id']))}" if r["eform_id"] else "")
@@ -237,7 +237,7 @@ def sbr_table(rows, title):
 
 
 def sbr_summary(sbrs):
-    return f"[bold]{len(sbrs)}[/] SBR{'s' if len(sbrs) != 1 else ''} · [green]{len(sbrs)} approved[/]"
+    return f"[bold]{escape(atf.nfa_counts(sbrs))}[/] · [green]{len(sbrs)} approved[/]"
 
 
 def inventory_flow():
@@ -250,7 +250,7 @@ def inventory_flow():
         con.clear()
         if view == "sbrs":
             sbrs = atf.load_sbrs()
-            con.print(sbr_table(sbrs, f"[bold]Inventory[/] · SBRs ({len(sbrs)})"))
+            con.print(sbr_table(sbrs, f"[bold]Inventory[/] · {atf.nfa_label(sbrs)} ({len(sbrs)})"))
             con.print(f"  {sbr_summary(sbrs)}")
             cond, where = [r["serial_number"] for r in sbrs if r["conditions"]], "on your server" if atf.server_settings() else "in data/sbrs.csv"
         else:
@@ -268,7 +268,7 @@ def inventory_flow():
             con.print(f"  [yellow]⚠ approved with conditions: {escape(', '.join(cond))}[/] [dim](conditions are {where})[/]")
         views = [questionary.Choice(label, key) for key, (label, _) in filters.items() if key != view]
         if view != "sbrs" and atf.load_sbrs():
-            views.append(questionary.Choice("SBRs", "sbrs"))
+            views.append(questionary.Choice(atf.nfa_label(atf.load_sbrs()), "sbrs"))
         choices = [questionary.Choice("Show another view…", "show")]
         server = atf.server_settings()  # with a server, its own page is the phone's
         if any(r["status"] == "" for r in rows):
@@ -491,7 +491,7 @@ def _change_build(built):
 def open_approved_flow():
     rows = sorted([r for r in atf.load_rows() if r["status"] == "approved"] + [{**r, "_sbr": True} for r in atf.load_sbrs()],
                   key=lambda r: atf.serial_key(r["serial_number"]))
-    choices = [questionary.Choice(f"{r['serial_number']}  ({'SBR, ' if r.get('_sbr') else ''}approved {r['approved_date']})", n)
+    choices = [questionary.Choice(f"{r['serial_number']}  ({atf.nfa_short(r['type']) + ', ' if r.get('_sbr') else ''}approved {r['approved_date']})", n)
                for n, r in enumerate(rows)]
     n = questionary.select("Open which approved Form 1?", choices=choices + [questionary.Choice("Back", "back")]).ask()
     if n in (None, "back"):
@@ -1149,7 +1149,7 @@ def server_flow():
             try:
                 server = atf._server(s)
                 sup, sbrs = server.rows()
-                con.print(f"  [green]✔[/] Your server answers at {escape(server.address)}: {len(sup)} suppressors, {len(sbrs)} SBRs.")
+                con.print(f"  [green]✔[/] Your server answers at {escape(server.address)}: {len(sup)} suppressors, {escape(atf.nfa_counts(sbrs))}.")
             except remote.ServerError as e:
                 con.print(f"  [red]✖ {escape(str(e))}[/]")
         pause()
@@ -1174,7 +1174,7 @@ def server_flow():
                 for line in rep["problems"][:10]:
                     con.print(f"    {escape(line)}")
                 return pause()
-            con.print(f"  [green]✔[/] Copied: {rep['suppressors']} suppressors, {rep['sbrs']} SBRs, {rep['pdfs']} approval PDFs "
+            con.print(f"  [green]✔[/] Copied: {rep['suppressors']} suppressors, {escape(rep['nfa'])}, {rep['pdfs']} approval PDFs "
                       "fetched; checked field by field." + (f" Kept the earlier files as {escape(', '.join(rep['renamed']))}."
                                                             if rep["renamed"] else ""))
         try:
@@ -1194,7 +1194,7 @@ def move_flow():
     sup, sbrs, pdfs = atf.local_for_move()
     built = sum(1 for r in sup if atf.is_built(r))
     con.print(Panel(f"This moves your inventory to your server: [bold]{len(sup)} suppressors[/] ({built} built), "
-                    f"[bold]{len(sbrs)} SBRs[/], [bold]{len(pdfs)} approval PDFs[/].\n"
+                    f"[bold]{escape(atf.nfa_counts(sbrs))}[/], [bold]{len(pdfs)} approval PDFs[/].\n"
                     "Every field of every row and every PDF is checked on the server before anything changes here.\n"
                     "Only then are this computer's inventory files renamed (…moved-to-server-<date>.csv: kept, not\n"
                     "deleted) and the server used from then on. Any difference: the server is emptied again and\n"
@@ -1205,7 +1205,7 @@ def move_flow():
         questionary.Choice("Move it now", "move"), questionary.Choice("Back", "back")]).ask()
     if how in (None, "back"):
         return
-    if how == "move" and not questionary.confirm(f"Move {len(sup)} suppressors and {len(sbrs)} SBRs to your server now?",
+    if how == "move" and not questionary.confirm(f"Move {len(sup)} suppressors and {atf.nfa_counts(sbrs)} to your server now?",
                                                  default=False, auto_enter=False).ask():
         return
     try:
@@ -1214,7 +1214,7 @@ def move_flow():
     except remote.ServerError as e:  # (outside the status: its spinner would sit over the Enter prompt)
         con.print(f"  [red]✖ Nothing was moved: {escape(str(e))}[/]")
         return pause()
-    what = f"{rep['suppressors']} suppressors ({rep['built']} built), {rep['sbrs']} SBRs, {rep['pdfs']} approval PDFs"
+    what = f"{rep['suppressors']} suppressors ({rep['built']} built), {escape(rep['nfa'])}, {rep['pdfs']} approval PDFs"
     if rep["problems"]:
         con.print(f"  [red]✖ The server's copy didn't match ({len(rep['problems'])} difference(s)), so nothing was moved "
                   "and nothing here changed:[/]")
@@ -1275,7 +1275,7 @@ def _connect_server():
                               "this_computer": name.strip() or "PC", "paired": date.today().strftime("%m/%d/%Y")})
     try:
         rows, sbrs = atf.load_rows(), atf.load_sbrs()
-        con.print(f"  [green]✔ Connected:[/] the menu now shows your server's inventory ({len(rows)} suppressors, {len(sbrs)} SBRs).\n"
+        con.print(f"  [green]✔ Connected:[/] the menu now shows your server's inventory ({len(rows)} suppressors, {escape(atf.nfa_counts(sbrs))}).\n"
                   "  [dim]This computer's inventory is unchanged. Settings > Where your inventory lives switches back.[/]")
     except remote.ServerError as e:
         con.print(f"  [yellow]Paired, but reading the inventory failed: {escape(str(e))}[/]")
@@ -1337,7 +1337,7 @@ def _approved_table(items, title, style):
 def approvals_flow():
     con.print(Panel("Reads your [bold]approved[/] Form 1s on eForms. Read-only: it only clicks Search, View Form, View PDF\n"
                     "and Go Home. Each PDF is saved to out/approved/, and suppressors are checked against your records by\n"
-                    "serial (caliber, overall length). SBRs and other types are only counted. The first run fetches every\n"
+                    "serial (caliber, overall length). SBRs, SBSs and other types go in their own list. The first run fetches every\n"
                     "approved form (roughly 10-20 seconds each); later runs only fetch new approvals.",
                     title="Check approvals", border_style="cyan", expand=False))
     if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
@@ -1349,10 +1349,11 @@ def approvals_flow():
     records, more = atf.read_approved(found)
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
-    sbr = sum(1 for r in records if atf.is_sbr(r))
-    other = ", ".join(f"{n} {escape(k.lower())}" for k, n in rep["skipped"].items() if "RIFLE" not in k.upper())
-    con.print(f"\n  [bold]{len(records)}[/] approved Form 1s: [bold]{sup}[/] suppressor(s), [bold]{sbr}[/] SBR(s)"
-              + (f"; other types skipped: {other}" if other else "") + "\n")
+    nfa = [{"type": " ".join(r["type"].upper().split())} for r in records if atf.is_other_nfa(r)]
+    unread = sum(rep["skipped"].values())
+    con.print(f"\n  [bold]{len(records)}[/] approved Form 1s: [bold]{sup}[/] suppressor(s)"
+              + (f", [bold]{escape(atf.nfa_counts(nfa))}[/]" if nfa else "")
+              + (f"; [yellow]{unread} with a type that couldn't be read (not recorded)[/]" if unread else "") + "\n")
     if rep["matched"]:
         con.print(_approved_table(rep["matched"], f"[bold]Approved, matches your records ({len(rep['matched'])})[/]", "green"))
     if rep["differs"]:
@@ -1372,7 +1373,7 @@ def approvals_flow():
                                default=True).ask():
             more_updated, added = atf.apply_approvals(records, import_unknown=True)
             updated += more_updated
-    new_sbrs = atf.record_sbrs(records)
+    new_nfa = atf.record_sbrs(records)
     if atf.server_settings():
         with con.status("Saving new approval PDFs on your server…"):
             sent = atf.send_approval_pdfs(records)
@@ -1380,8 +1381,9 @@ def approvals_flow():
             con.print(f"  [green]✔[/] {sent} approval PDF(s) saved on your server.")
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
-    if new_sbrs:
-        con.print(f"  [green]✔[/] SBR inventory: {new_sbrs} added (Inventory > Show SBRs).")
+    if new_nfa:
+        label = atf.nfa_label(atf.load_sbrs())
+        con.print(f"  [green]✔[/] {label}: {new_nfa} added (Inventory > Show another view > {label}).")
     con.print("  [dim]PDFs: out/approved/[/]")
     pause()
 

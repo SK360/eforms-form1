@@ -114,14 +114,14 @@ def main(argv=None):
         elif args.cmd in ("import", "demo"):
             sup, sbrs, pdfs = db.read_app_folder(args.folder) if args.cmd == "import" else demo.inventory()
             counts = db.import_inventory(conn, folder / "approved", sup, sbrs, pdfs, device=f"server console ({args.cmd})")
-            print(f"Imported {counts['suppressors']} suppressors, {counts['sbrs']} SBRs, {counts['pdfs']} approval PDFs.")
+            print(f"Imported {counts['suppressors']} suppressors, {counts['sbrs']} other NFA items, {counts['pdfs']} approval PDFs.")
         elif args.cmd == "restore":
             saved = db.restore(conn, args.file, folder / "backups")
-            print(f"Restored {Path(args.file).name}: {len(db.rows(conn))} suppressors, {len(db.sbrs(conn))} SBRs. "
+            print(f"Restored {Path(args.file).name}: {len(db.rows(conn))} suppressors, {len(db.sbrs(conn))} other NFA items. "
                   f"The database before it: {saved}")
         elif args.cmd == "reset":
             n = len(db.rows(conn))
-            if not args.yes and input(f"Remove the whole inventory on this server ({n} suppressors, its SBRs, approval "
+            if not args.yes and input(f"Remove the whole inventory on this server ({n} suppressors, its other NFA items, approval "
                                       "PDFs and their history)? A backup is made first. Type RESET: ").strip() != "RESET":
                 print("Nothing removed.")
                 return 1

@@ -43,7 +43,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.1.0"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.2.0"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -284,7 +284,7 @@ def _token_match(want, got):
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(str(want).strip())}(?![A-Za-z0-9])", got or "", re.I) is not None
 
 
-# ---------- SBR inventory (data/sbrs.csv): approved short-barreled rifles, filled by Check approvals; never filed here ----------
+# ---------- Other NFA items (data/sbrs.csv): approved SBRs, SBSs, ..., filled by Check approvals; never filed here ----------
 # ---------- Inventory server (optional: server/, connected in Settings > Where your inventory lives) ----------
 # data/server.yaml = the paired server (id, addresses, its CA and fingerprint, this computer's key). While it
 # exists, the inventory is the server's: load_rows / load_sbrs read it; builds and queue edits are the server's named
@@ -511,7 +511,7 @@ def _norm(rows, cols):
                     v = datetime.strptime(v, "%m/%d/%Y").strftime("%m/%d/%Y")
                 except ValueError:
                     pass
-            n[c] = v
+            n[c] = (v or NFA_DEFAULT_TYPE) if c == "type" else v
         out[(n["serial_number"].upper(), n["eform_id"] if cols is SBR_COLS else "")] = n
     return out
 
@@ -544,7 +544,8 @@ def move_to_server(try_only=False, progress=lambda text: None):
     sup, sbrs, pdfs = local_for_move()
     if not sup and not sbrs:
         raise remote.ServerError("There's no inventory on this computer to move.")
-    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "pdfs": len(pdfs)}
+    counts = {"suppressors": len(sup), "built": sum(1 for r in sup if is_built(r)), "sbrs": len(sbrs), "nfa": nfa_counts(sbrs),
+              "pdfs": len(pdfs)}
     sent = []
     try:
         for n, p in enumerate(pdfs, 1):
@@ -566,7 +567,7 @@ def move_to_server(try_only=False, progress=lambda text: None):
     progress("Checking every row and PDF on the server…")
     try:
         got_sup, got_sbrs = server.rows()
-        problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "SBR")
+        problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "Other NFA item")
         if sorted((p["eform_id"] or "", d) for p, d in sent) != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
             problems.append("Approval PDFs: what the server stored isn't what was sent")
     except BaseException:
@@ -614,20 +615,47 @@ def copy_from_server():
         fetched += 1
     _save_approved_index(folder, index)
     problems = (_differences(_read_csv(SUPP), sup, COLS, "Suppressor")
-                + _differences(_read_csv(_sbrs_path()), sbrs, SBR_COLS, "SBR"))
-    return {"suppressors": len(sup), "sbrs": len(sbrs), "pdfs": fetched, "renamed": renamed, "problems": problems}
+                + _differences(_read_csv(_sbrs_path()), sbrs, SBR_COLS, "Other NFA item"))
+    return {"suppressors": len(sup), "sbrs": len(sbrs), "nfa": nfa_counts(sbrs), "pdfs": fetched, "renamed": renamed, "problems": problems}
 
 
 def _sbrs_path():  # looked up when used (not at import), so it always follows DATA
     return DATA / "sbrs.csv"
 
 
-SBR_COLS = ["serial_number", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
+SBR_COLS = ["serial_number", "type", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
             "control_number", "conditions"]
+# The Form 1 types other than SILENCER, as the portal's #productType lists them and the approval PDF prints them
+# (short name, plural). data/sbrs.csv holds them all (the name is from when it held only SBRs); a row with no type was
+# saved before the type was kept, when only SBRs got in.
+NFA_TYPES = {"SHORT BARRELED RIFLE": ("SBR", "SBRs"), "SHORT BARRELED SHOTGUN": ("SBS", "SBSs"), "ANY OTHER WEAPON": ("AOW", "AOWs"),
+             "DESTRUCTIVE DEVICE": ("DD", "DDs"), "MACHINEGUN": ("MG", "MGs")}
+NFA_DEFAULT_TYPE = "SHORT BARRELED RIFLE"
 
 
-def is_sbr(record):
-    return "RIFLE" in (record.get("type") or "").upper()
+def is_other_nfa(record):
+    """An approved Form 1 for anything but a suppressor. A type that couldn't be read is neither: it gets reported."""
+    kind = (record.get("type") or "").strip().upper()
+    return bool(kind) and "SILENCER" not in kind
+
+
+def nfa_short(kind):
+    """SBR, SBS, ... (a type this tool doesn't know: as printed)."""
+    return NFA_TYPES.get(kind, (kind,))[0]
+
+
+def nfa_counts(rows):
+    """"3 SBRs, 1 SBS" for rows of data/sbrs.csv, in the order of NFA_TYPES."""
+    from collections import Counter
+    n = Counter(r.get("type") or NFA_DEFAULT_TYPE for r in rows)
+    known = [k for k in NFA_TYPES if n[k]] + sorted(k for k in n if k not in NFA_TYPES)
+    return ", ".join(f"{n[k]} {NFA_TYPES[k][0 if n[k] == 1 else 1] if k in NFA_TYPES else k}" for k in known) or "0 other NFA items"
+
+
+def nfa_label(rows):
+    """What to call these rows on a screen: "SBRs" while they're all SBRs, else "Other NFA items"."""
+    kinds = {r.get("type") or NFA_DEFAULT_TYPE for r in rows}
+    return NFA_TYPES[kinds.pop()][1] if len(kinds) == 1 and kinds <= set(NFA_TYPES) else "Other NFA items"
 
 
 def load_sbrs():
@@ -641,6 +669,7 @@ def load_sbrs():
     for r in rows:
         for c in SBR_COLS:
             r[c] = (r.get(c) or "").strip()
+        r["type"] = r["type"] or NFA_DEFAULT_TYPE
     return rows
 
 
@@ -656,15 +685,16 @@ def save_sbrs(rows):
 
 
 def record_sbrs(records):
-    """Add/refresh approved SBRs in data/sbrs.csv (keyed by eForm ID, else serial). Returns how many were added."""
+    """Add/refresh approved non-suppressors (SBRs, SBSs, ...) in data/sbrs.csv (keyed by eForm ID, else serial). Returns
+    how many were added."""
     rows = load_sbrs()
     key = lambda r: r["eform_id"] or r["serial_number"].upper()  # noqa: E731
     by = {key(r): r for r in rows}
     added, changed = 0, False
     for rec in records:
-        if not is_sbr(rec) or not rec["approved"] or not rec["serial"].strip():
+        if not is_other_nfa(rec) or not rec["approved"] or not rec["serial"].strip():
             continue
-        new = {"serial_number": rec["serial"].strip(), "caliber": rec["caliber"], "model": rec["model"],
+        new = {"serial_number": rec["serial"].strip(), "type": " ".join(rec["type"].upper().split()), "caliber": rec["caliber"], "model": rec["model"],
                "barrel_length": rec["barrel_length"], "overall_length": rec["overall_length"],
                "approved_date": rec["approval_date"], "eform_id": rec["eform_id"],
                "control_number": rec.get("control_number", ""), "conditions": rec.get("conditions", "")}
@@ -678,7 +708,13 @@ def record_sbrs(records):
             old.update({k: v for k, v in new.items() if v}, _changed=True)
             changed = True
     if changed and server_settings():
-        _server_op("record_sbrs", {"rows": [r for r in rows if r.get("_changed")]})
+        send = [r for r in rows if r.get("_changed")]
+        # A server from before types (API 1) would drop the type and show the row as an SBR: don't let it.
+        if any(r["type"] != NFA_DEFAULT_TYPE for r in send) and (_server().get("/api/hello").get("api") or 1) < 2:
+            raise ServerReadOnly("Your inventory server needs updating before it can record this type of firearm: "
+                                 f"{nfa_counts([r for r in send if r['type'] != NFA_DEFAULT_TYPE])}. "
+                                 "Update it, then run Check approvals again.")
+        _server_op("record_sbrs", {"rows": send})
     elif changed:
         save_sbrs(rows)
     return added
@@ -734,10 +770,10 @@ def export_inventory(dest=None):
     ws.auto_filter.ref = ws.dimensions
     sbrs = load_sbrs()
     if sbrs:
-        cols = [("Serial", "serial_number", 10), ("Caliber", "caliber", 9), ("Model", "model", 14), ("Barrel (in)", "barrel_length", 11),
+        cols = [("Serial", "serial_number", 10), ("Type", "type", 26), ("Caliber/gauge", "caliber", 13), ("Model", "model", 14), ("Barrel (in)", "barrel_length", 11),
                 ("Overall (in)", "overall_length", 11), ("Approved", "approved_date", 11), ("Conditions", "conditions", 60),
                 ("eForm ID", "eform_id", 11), ("Control #", "control_number", 14)]
-        ws2 = wb.create_sheet("SBRs")
+        ws2 = wb.create_sheet(nfa_label(sbrs))
         ws2.append([c[0] for c in cols])
         for row in sorted(sbrs, key=lambda r: serial_key(r["serial_number"])):
             ws2.append([float(row[c[1]]) if c[1].endswith("length") and re.fullmatch(r"\d+(\.\d+)?", row[c[1]]) else row[c[1]]
@@ -1580,7 +1616,7 @@ def apply_approvals(records, import_unknown=False):
     """Record approvals in the inventory (data/suppressors.csv): for each approved SUPPRESSOR whose serial is there,
     set status approved + approval date, eForm ID, control number, conditions (a pending row is resolved this way too).
     With import_unknown, approved suppressors missing from the inventory are added as approved rows and the file is
-    re-sorted by serial. SBRs/other types are never touched. Returns (serials updated, serials added)."""
+    re-sorted by serial. Other types (record_sbrs) are never touched. Returns (serials updated, serials added)."""
     rows = load_rows()
     by = {r["serial_number"].upper(): r for r in rows}
     updated, added = [], []
@@ -1646,13 +1682,14 @@ def _num(s):
 
 
 def approval_report(records, rows, trust):
-    """Compare approved SUPPRESSORS (type SILENCER) with your records by serial. Other types (e.g. SBRs) are only counted."""
+    """Compare approved SUPPRESSORS (type SILENCER) with your records by serial. Other types go to record_sbrs;
+    "skipped" counts only forms whose type couldn't be read, which nothing records."""
     from collections import Counter
     mine = {r["serial_number"].strip().upper(): r for r in rows}
     want_len = str((trust.get("firearm") or {}).get("overall_length") or "")
     sup = [r for r in records if "SILENCER" in r["type"].upper()]
     counts = Counter(r["serial"].strip().upper() for r in sup)
-    rep = {"matched": [], "differs": [], "unknown": [], "skipped": Counter(r["type"] or "unknown type" for r in records if r not in sup),
+    rep = {"matched": [], "differs": [], "unknown": [], "skipped": Counter("unknown type" for r in records if r not in sup and not is_other_nfa(r)),
            "duplicates": sorted(s for s, n in counts.items() if n > 1)}
     for r in sorted(sup, key=lambda r: r["serial"]):
         notes = []
@@ -1682,9 +1719,9 @@ def cmd_check_approved(_):
     rep = approval_report(records, load_rows(), load_trust())
     updated, added = apply_approvals(records, import_unknown=getattr(_, "import_unknown", False))
     print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s); "
-          f"{record_sbrs(records)} new SBR(s) in data/sbrs.csv.")
+          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv.")
     print(f"\n{len(records)} approved Form 1(s); suppressors: {sum(1 for r in records if 'SILENCER' in r['type'].upper())}; "
-          f"skipped: {dict(rep['skipped']) or 'none'}")
+          f"other NFA items: {sum(1 for r in records if is_other_nfa(r))}; skipped: {dict(rep['skipped']) or 'none'}")
     for title, key in (("Approved and in your records", "matched"), ("Approved, but check these", "differs"),
                        ("Approved, NOT in your records", "unknown")):
         print(f"\n{title}: {len(rep[key])}")
@@ -1940,7 +1977,7 @@ def check_setup():
         try:
             server = _server(s)
             sup, sbrs = server.rows()
-            out.append(("ok", "Inventory server", f"reachable at {server.address} · {len(sup)} suppressors, {len(sbrs)} SBRs",
+            out.append(("ok", "Inventory server", f"reachable at {server.address} · {len(sup)} suppressors, {nfa_counts(sbrs)}",
                         server.address))
         except remote.ServerError as e:
             out.append(("fail", "Inventory server", str(e), ", ".join(s["addresses"])))

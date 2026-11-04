@@ -44,11 +44,11 @@ are shown in the confirmation, then read back on the verify page, with your citi
 ![Confirming a batch as an individual](docs/screenshots/08-individual-confirm.png)
 ![Read-back as an individual](docs/screenshots/09-individual-readback.png)
 
-**Inventory** (suppressors and SBRs), **builds**, **Check approvals** (reads your approved Form 1s from eForms and
+**Inventory** (suppressors, plus any SBRs and other NFA items you've had approved), **builds**, **Check approvals** (reads your approved Form 1s from eForms and
 compares them with your records) and **Check my setup**. Your inventory on your phone is [further down](#on-your-phone).
 
 ![Inventory](docs/screenshots/05-inventory.png)
-![SBR inventory](docs/screenshots/06-sbrs.png)
+![Other NFA items](docs/screenshots/06-sbrs.png)
 ![Finding the serial for a build](docs/screenshots/11-build-serial.png)
 ![Recording builds](docs/screenshots/10-builds.png)
 ![Check approvals](docs/screenshots/07-approvals.png)
@@ -190,17 +190,19 @@ of eForms first (eForms allows one session at a time).
 - **Check approvals on eForms**: read-only. After you log in (and press Enter) it lists your approved Form 1s, saves
   each one's PDF to `out/approved/` (only new ones on later runs), reads the serial, caliber and overall length from
   each, and reports your suppressors: matching your records, differing (caliber/length), approved but not in your
-  records, and filed but not approved yet. Approved SBRs go into a separate SBR inventory (`data/sbrs.csv`: caliber,
-  model, barrel and overall length, approval date); other types are only counted. Approvals are recorded in your
-  inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed before using this
-  tool).
+  records, and filed but not approved yet. Everything else you've had approved on a Form 1 (SBR, SBS, AOW, destructive
+  device, machinegun) goes into a separate list (`data/sbrs.csv`: type, caliber or gauge, model, barrel and overall
+  length, approval date); a form whose type can't be read gets a warning instead of being recorded. Approvals are
+  recorded in your inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed
+  before using this tool). The helper still only files suppressors.
 
 ### Your inventory
 - **Inventory**: every suppressor in serial order (A1, A2 … A10) with caliber, length, status (queued, filed,
   approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. **Show another view**
-  filters by Approved / In progress / Queued / Built / Approved, not built, or shows your approved SBRs. From there you
-  can also open any approved Form 1 PDF and **export to Excel** (`out/inventory_<date>.xlsx`, with an SBRs sheet). The
-  home screen shows a one-line summary.
+  filters by Approved / In progress / Queued / Built / Approved, not built, or shows your other approved items (called
+  SBRs if that's all you have, Other NFA items if you have a mix). From there you can also open any approved Form 1 PDF
+  and **export to Excel** (`out/inventory_<date>.xlsx`, with a sheet for those items). The home screen shows a one-line
+  summary.
 
 ### Builds
 - **Record builds** (in Inventory): mark approved suppressors as built, with what each one is. Name them as a range
@@ -221,7 +223,7 @@ the helper shows a QR code, you scan it with your phone's camera (on the same Wi
 <img src="docs/screenshots/13-phone-list.png" alt="Inventory on a phone" width="260"> <img src="docs/screenshots/14-phone-detail.png" alt="One suppressor on a phone" width="260">
 
 - Search by typing a serial's digits on the number pad (`83` finds A083), or switch to letters (ABC) to search by
-  design; filter (All, Built, Not built, Waiting, Queued, SBRs); open one to see its details and its approval PDF.
+  design; filter (All, Built, Not built, Waiting, Queued, and SBRs or Other NFA); open one to see its details and its approval PDF.
 - Switch **Built** on or off with its design, for walking through your safes and bags. That switch is the only thing
   the page can change, and only for approved suppressors.
 - It works **only while you leave it open**: press Enter in the helper and the link stops working. Each time, the

@@ -139,6 +139,33 @@ def test_backups(filled, data_dir):
     assert copy.execute("SELECT count(*) FROM suppressors").fetchone()[0] == 38
 
 
+def test_migration_4_keeps_existing_rows_as_sbrs(data_dir):
+    """Before schema 4 the table held only SBRs: they stay SBRs, and every other detail stays. A backup comes first."""
+    data_dir.mkdir()
+    c = db.connect(data_dir / "inventory.db")
+    for v in (1, 2, 3):
+        c.execute("BEGIN")
+        for statement in db._statements(db.MIGRATIONS[v]):
+            c.execute(statement)
+        c.execute(f"PRAGMA user_version = {v}")
+        c.execute("COMMIT")
+    c.execute("INSERT INTO sbrs (serial, caliber, model, barrel_length, overall_length, approved_date, eform_id, control_number, conditions) "
+              "VALUES ('R1', '9', 'PCC', '8', '24', '2026-09-02', '2000001', '', 'Mark it')")
+    db.migrate(c, data_dir / "backups")
+    assert c.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert db.sbrs(c) == [{"serial_number": "R1", "type": db.NFA_DEFAULT_TYPE, "caliber": "9", "model": "PCC", "barrel_length": "8",
+                           "overall_length": "24", "approved_date": "09/02/2026", "eform_id": "2000001", "control_number": "", "conditions": "Mark it"}]
+    assert list((data_dir / "backups").glob("*.db"))
+    c.close()
+
+
+def test_import_keeps_types_and_a_blank_one_is_an_sbr(conn, data_dir):
+    base = {"caliber": "12", "model": "X", "barrel_length": "14", "overall_length": "26", "approved_date": "09/02/2026", "control_number": "", "conditions": ""}
+    db.import_inventory(conn, data_dir / "approved", [], [dict(base, serial_number="G1", type="SHORT BARRELED SHOTGUN", eform_id="2000001"),
+                                                          dict(base, serial_number="R1", eform_id="2000002")], [], device="test")
+    assert {s["serial_number"]: s["type"] for s in db.sbrs(conn)} == {"G1": "SHORT BARRELED SHOTGUN", "R1": "SHORT BARRELED RIFLE"}
+
+
 def test_migration_3_removes_earlier_build_records(data_dir):
     """Phase 3 servers recorded builds in the history and request rows; schema 3 removes them (and only them)."""
     data_dir.mkdir()

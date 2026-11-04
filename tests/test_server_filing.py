@@ -125,7 +125,7 @@ def test_approvals_go_to_the_server(server, configured):
            "control_number": "20261000001", "conditions": "", "overall_length": "12", "caliber": "9", "model": "X",
            "barrel_length": "", "pdf": str(pdf)}
     unknown = dict(rec, serial="S9", eform_id="1000009", pdf="")
-    sbr = dict(rec, type="RIFLE (SHORT BARREL)", serial="R1", eform_id="2000001", barrel_length="8", pdf="")
+    sbr = dict(rec, type="SHORT BARRELED RIFLE", serial="R1", eform_id="2000001", barrel_length="8", pdf="")
     assert atf.apply_approvals([rec, unknown, sbr], import_unknown=True) == (["S1"], ["S9"])
     assert atf.record_sbrs([rec, unknown, sbr]) == 1
     assert atf.send_approval_pdfs([rec, unknown, sbr]) == 1 and atf.send_approval_pdfs([rec]) == 0
@@ -134,3 +134,14 @@ def test_approvals_go_to_the_server(server, configured):
     assert rows["S9"]["status"] == "approved" and [s["serial_number"] for s in atf.load_sbrs()] == ["R1"]
     assert atf.approved_pdf_for(rows["S1"]).read_bytes() == b"%PDF-1.4 made-up approval S1"
     assert atf.apply_approvals([rec]) == ([], [])                                                # nothing new: nothing sent
+
+
+def test_the_server_keeps_each_type(server, configured):
+    queued_on_server(server, "S1")
+    sbs = {"type": "SHORT BARRELED SHOTGUN", "approved": True, "serial": "G1", "approval_date": "10/30/2026", "eform_id": "2000002",
+           "control_number": "", "conditions": "", "overall_length": "26", "caliber": "12", "model": "X", "barrel_length": "14", "pdf": ""}
+    assert atf.record_sbrs([sbs]) == 1
+    assert [(s["serial_number"], s["type"]) for s in atf.load_sbrs()] == [("G1", "SHORT BARRELED SHOTGUN")]
+    assert atf.record_sbrs([sbs]) == 0                                                           # nothing new
+    assert atf.record_sbrs([dict(sbs, type="ANY OTHER WEAPON")]) == 0                            # the same eForm: corrected
+    assert [s["type"] for s in atf.load_sbrs()] == ["ANY OTHER WEAPON"] and atf.nfa_counts(atf.load_sbrs()) == "1 AOW"

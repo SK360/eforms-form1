@@ -7,6 +7,28 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## 1.2.0 (2026-11-04)
+
+Your inventory now keeps every type of approved Form 1, not only suppressors and SBRs. The helper still only files
+suppressors.
+
+**Updating:** `git pull`, then run the installer again (`./install.sh`, Windows `.\install.cmd`). No new packages, and
+your settings, inventory and files carry over unchanged.
+
+- **Check approvals** records short-barreled shotguns, any other weapons, destructive devices and machineguns along
+  with SBRs, each with its type. Before, only SBRs were kept and the other types were just counted. A form whose type
+  can't be read gets a warning and isn't recorded.
+- The menu, the Excel export and the phone page show the type. The list is called SBRs if that's all you have, SBSs if
+  you only have shotguns, and Other NFA items if you have a mix.
+- Your existing rows carry over as SBRs. If one of them is really another type, run Check approvals to correct it.
+- **If you use the inventory server, update it too** (it upgrades its database by itself, after a backup). Until you
+  do, the helper records SBRs as before but won't record other types there: it says the server needs updating, and PDF
+  uploads from that run wait until you run Check approvals again. Pairing a new device needs both on the same version.
+
+Tested with made-up data for every type, and the server upgrade has been run on a real inventory holding SBRs. Types
+other than SBRs haven't been read from a real approval PDF yet, and Check approvals hasn't recorded one on a live
+server yet: if one comes out wrong, please say so.
+
 ## 1.1.0 (2026-10-28)
 
 Your inventory on your phone, a setup checker, and an **optional** inventory server for keeping your records on a

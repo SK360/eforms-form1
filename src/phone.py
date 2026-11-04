@@ -42,7 +42,7 @@ def inventory():
             "eform": _last4(r["eform_id"]), "conditions": r["conditions"], "built": atf.is_built(r), "design": r["design"],
             "pdf": r["status"] == "approved" and atf.approved_pdf_for(r) is not None}
            for r in sorted(atf.load_rows(), key=lambda r: atf.serial_key(r["serial_number"]))]
-    sbrs = [{"serial": r["serial_number"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
+    sbrs = [{"serial": r["serial_number"], "type": r["type"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
              "model": r["model"], "barrel": r["barrel_length"], "approved": r["approved_date"], "eform": _last4(r["eform_id"]),
              "conditions": r["conditions"], "pdf": atf.approved_pdf_for(r) is not None}
             for r in sorted(atf.load_sbrs(), key=lambda r: atf.serial_key(r["serial_number"]))]

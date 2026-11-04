@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import __version__, db, tls
 
-API_VERSION = 1
+API_VERSION = 2  # 2: table sbrs keeps each row's type (SBR, SBS, ...)
 COOKIE = "atf_device"
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; "
        "frame-ancestors 'none'")
@@ -155,7 +155,7 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
                 "conditions": r["conditions"], "built": r["built"] == "yes", "design": r["design"], "version": r["version"],
                 "pdf": r["status"] == "approved" and db.pdf_for(conn, r["serial_number"]) is not None}
                for r in db.rows(conn)]
-        sbrs = [{"serial": r["serial_number"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
+        sbrs = [{"serial": r["serial_number"], "type": r["type"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
                  "model": r["model"], "barrel": r["barrel_length"], "approved": r["approved_date"],
                  "eform": _last4(r["eform_id"]), "conditions": r["conditions"],
                  "pdf": db.pdf_for(conn, r["serial_number"]) is not None} for r in db.sbrs(conn)]

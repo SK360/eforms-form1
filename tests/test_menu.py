@@ -310,7 +310,54 @@ def test_open_sbr_pdf_and_export_sheet(configured, answers, screen, monkeypatch)
     assert opened == [folder / "R2.pdf"]
     wb = load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx"))
     rows = list(wb["SBRs"].iter_rows(values_only=True))
-    assert wb.sheetnames == ["Inventory", "SBRs"] and [r[0] for r in rows[1:]] == ["R2", "R10"] and rows[1][3] == 10.5
+    assert wb.sheetnames == ["Inventory", "SBRs"] and [r[0] for r in rows[1:]] == ["R2", "R10"] and rows[1][4] == 10.5
+    assert rows[0][1:3] == ("Type", "Caliber/gauge") and rows[1][1] == "SHORT BARRELED RIFLE"   # an older row, with no type: an SBR
+
+
+def _mixed_nfa():
+    """R2 from before types (an SBR), two shotguns (made up)."""
+    _sbrs()
+    atf.save_sbrs(atf.load_sbrs()[:1] + [
+        {"serial_number": f"G{n}", "type": "SHORT BARRELED SHOTGUN", "caliber": "12", "model": "Y9", "barrel_length": "14", "overall_length": "26",
+         "approved_date": "09/14/2026", "eform_id": f"100003{n}", "control_number": "", "conditions": ""} for n in (5, 6)])
+
+
+def test_a_mix_of_types_in_the_menu_and_export(configured, answers, screen, monkeypatch):
+    from openpyxl import load_workbook
+    _inventory_rows()
+    _mixed_nfa()
+    folder = atf.OUT / "approved"
+    folder.mkdir()
+    (folder / "G5.pdf").write_bytes(b"%PDF")
+    (folder / "index.csv").write_text("eform_id,file\n1000035,G5.pdf\n", encoding="utf-8")
+    opened = []
+    monkeypatch.setattr(ui, "open_file", lambda p: opened.append(p))
+
+    def other_nfa_view(kw):
+        assert "Other NFA items" in [str(c.title) for c in kw["choices"]]
+        return "sbrs"
+    answers(pick("Inventory"), "show", other_nfa_view, pick("Open an approved PDF"),
+            lambda kw: next(c.value for c in kw["choices"] if c.title.startswith("G5 ") and "(SBS, approved" in c.title), "back", QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    assert opened == [folder / "G5.pdf"]
+    view = out.split("Inventory · Other NFA items (3)")[1].split("eForms Form 1")[0]
+    assert "1 SBR, 2 SBSs · 3 approved" in view and "SBS" in view and "Type" in view
+    assert "· 1 SBR, 2 SBSs" in out                                                             # the home summary
+    wb = load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx"))
+    rows = list(wb["Other NFA items"].iter_rows(values_only=True))
+    assert wb.sheetnames == ["Inventory", "Other NFA items"] and [r[1] for r in rows[1:]] == ["SHORT BARRELED SHOTGUN"] * 2 + ["SHORT BARRELED RIFLE"]
+
+
+def test_only_shotguns_are_called_shotguns(configured, answers, screen):
+    from openpyxl import load_workbook
+    _inventory_rows()
+    _mixed_nfa()
+    atf.save_sbrs(atf.load_sbrs()[:1])                                                          # serial order: G5
+    answers(pick("Inventory"), "show", "sbrs", "back", QUIT)
+    ui.menu()
+    assert "Inventory · SBSs (1)" in screen.getvalue() and "1 SBS · 1 approved" in screen.getvalue()
+    assert load_workbook(atf.export_inventory(atf.OUT / "inv.xlsx")).sheetnames == ["Inventory", "SBSs"]
 
 
 def _approved_run():
