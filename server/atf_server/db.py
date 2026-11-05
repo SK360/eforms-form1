@@ -609,12 +609,13 @@ def _unmark_pending(conn, body, device, at, rid):
     return [row(conn, r["serial"])]
 
 
-APPROVAL_FIELDS = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+APPROVAL_FIELDS = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length", "filed_date")
 
 
 def _record_approvals(conn, body, device, at, rid):
     """Check approvals: updates [{serial, fields}] (approval fields only; status approved/disapproved; an overall
-    length only fills an empty one) and added [rows] (approved suppressors that weren't in the inventory)."""
+    length and a filed date (item 9 of the approval: e.g. filed by hand before the app) only fill an empty one) and
+    added [rows] (approved suppressors that weren't in the inventory)."""
     out = []
     for u in body.get("updates") or []:
         r = _current(conn, u.get("serial"))
@@ -623,11 +624,15 @@ def _record_approvals(conn, body, device, at, rid):
             raise Refused(f"{r['serial']}: only approval details can be recorded this way.")
         if fields.get("overall_length") and r["overall_length"]:
             fields.pop("overall_length")  # never overwrites a recorded length (a differing one is reported, not changed)
-        values = {k: (to_iso(v) if k == "approved_date" else str(v).strip()) for k, v in fields.items()}
+        if "filed_date" in fields and (r["filed_date"] or not fields["filed_date"]):
+            fields.pop("filed_date")  # nor a recorded filed date
+        values = {k: (to_iso(v) if k.endswith("_date") else str(v).strip()) for k, v in fields.items()}
         if "overall_length" in values:
             values["overall_length"] = _inches(values["overall_length"], r["serial"])
         if r["built"] and values.get("status") == "disapproved":
             raise Refused(f"{r['serial']} is marked built; it can't be disapproved here.")
+        if not values:  # nothing left to record (e.g. only a length or filed date it already has)
+            continue
         before = row(conn, r["serial"])
         conn.execute(f"UPDATE suppressors SET {', '.join(f'{k} = ?' for k in values)}, updated_at = ?, updated_by = ? WHERE id = ?",
                      (*values.values(), at, device, r["id"]))
@@ -637,10 +642,11 @@ def _record_approvals(conn, body, device, at, rid):
         serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
         if conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
             raise Refused(f"{serial} is already in the inventory.")
-        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, approved_date, eform_id, control_number, "
-                     "conditions, updated_at, updated_by) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)",
+        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, filed_date, approved_date, eform_id, "
+                     "control_number, conditions, updated_at, updated_by) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?)",
                      (serial, _text(n.get("caliber"), "caliber", serial, required=False, limit=40),
-                      str(n.get("overall_length") or "").strip(), to_iso(n.get("approved_date")), str(n.get("eform_id") or ""),
+                      str(n.get("overall_length") or "").strip(), to_iso(n.get("filed_date")), to_iso(n.get("approved_date")),
+                      str(n.get("eform_id") or ""),
                       str(n.get("control_number") or ""), str(n.get("conditions") or ""), at, device))
         _log(conn, at, device, "record_approvals", serial, None, row(conn, serial), rid)
         out.append(row(conn, serial))

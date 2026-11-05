@@ -139,3 +139,21 @@ def test_record_sbrs_keeps_each_type(filled):
     op(filled, "record_sbrs", rows=[{"serial_number": "G1", "type": "ANY OTHER WEAPON", "eform_id": "2000009"}])
     assert types()["G1"] == "ANY OTHER WEAPON"                              # the same eForm: corrected
     assert len(db.sbrs(filled)) == 3
+
+
+def test_record_approvals_fills_only_an_empty_filed_date(filled):
+    """Item 9 of an approval (the day it was signed and submitted) fills a filed date that's missing, e.g. a Form 1
+    filed by hand before the app; a recorded one is never changed (like lengths)."""
+    filled.execute("UPDATE suppressors SET filed_date = NULL WHERE serial = 'A101'")
+    op(filled, "record_approvals", updates=[{"serial": "A101", "fields": {"filed_date": "06/01/2026"}},
+                                            {"serial": "A102", "fields": {"filed_date": "06/02/2026"}}],
+       added=[{"serial_number": "A201", "caliber": "9", "overall_length": "12", "filed_date": "05/01/2026",
+               "approved_date": "10/30/2026", "eform_id": "1000201"}])
+    assert db.row(filled, "A101")["filed_date"] == "06/01/2026"
+    assert db.row(filled, "A102")["filed_date"] == "08/10/2026"                       # recorded: kept
+    assert db.row(filled, "A201")["filed_date"] == "05/01/2026"
+    assert [h["operation"] for h in db.history(filled, "A101")] == ["import", "record_approvals"]
+    assert [h["operation"] for h in db.history(filled, "A102")] == ["import"]          # nothing changed, nothing logged
+    filled.execute("UPDATE suppressors SET filed_date = NULL WHERE serial = 'A103'")
+    with pytest.raises(db.Refused, match="not a date"):
+        op(filled, "record_approvals", updates=[{"serial": "A103", "fields": {"filed_date": "someday"}}])

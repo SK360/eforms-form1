@@ -312,3 +312,20 @@ def test_menu_when_the_server_is_gone(fake, configured, answers, screen):
     answers(QUIT)
     ui.menu()
     assert "can't be reached" in screen.getvalue()
+
+
+def test_filed_dates_reach_only_a_server_that_takes_them(fake, configured):
+    """Item 9 of an approval fills an empty filed date; a server older than API 3 refuses that field, so it isn't sent
+    (the approval itself still is)."""
+    connect(fake)
+    rec = dict(SHOTGUN, type="SILENCER", serial="A136", eform_id="1000136", barrel_length="", filed_date="06/01/2026")
+    fake["api"] = 2
+    assert atf.apply_approvals([rec]) == (["A136"], [])
+    fields = _ops(fake)[-1][1]["updates"][0]["fields"]
+    assert fields["status"] == "approved" and "filed_date" not in fields
+    fake["api"] = remote.API
+    atf.apply_approvals([rec])
+    assert _ops(fake)[-1][1]["updates"][0]["fields"]["filed_date"] == "06/01/2026"
+    fake["calls"].clear()                                          # A101 has a filed date (and nothing else is new)
+    assert atf.apply_approvals([dict(rec, serial="A101", eform_id="1000101", approval_date="10/15/2026", caliber="22")]) == ([], [])
+    assert _ops(fake) == []

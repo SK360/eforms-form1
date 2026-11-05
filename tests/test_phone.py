@@ -1,6 +1,7 @@
 """The phone page (src/phone.py + phone.html) on made-up records: the API, and the page itself in a phone-sized
 headless browser. The server listens on 127.0.0.1 here (the real one on the home network)."""
 import json
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse, parse_qs
@@ -21,6 +22,7 @@ def served(configured):
             ("A083", "approved", "", "", ""), ("T6", "filed", "", "", ""), ("T7", "", "", "", "")]
     atf.save_rows([{"serial_number": s, "caliber": "22", "overall_length": "12", "status": st, "built": b, "design": d,
                     "conditions": c, "approved_date": "10/15/2026" if st == "approved" else "",
+                    "filed_date": {"T1": "08/10/2026", "T2": "07/01/2026", "T6": "10/26/2026"}.get(s, ""),  # A083: by hand
                     "application_number": f"90000{n:04d}", "eform_id": f"100{n:04d}"}
                    for n, (s, st, b, d, c) in enumerate(rows, 1)])
     atf.save_sbrs([{"serial_number": "R9", "caliber": "9", "model": "PCC", "barrel_length": "8", "overall_length": "24",
@@ -80,7 +82,7 @@ def test_the_page_names_each_type(served):
         page.set_default_timeout(5000)
         page.goto(link)
         page.wait_for_selector(".row")
-        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 1 SBR · 1 SBS"
+        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 1 SBR · 1 SBS · median wait 86 days"
         assert page.inner_text(".chip[data-f='sbr']") == "Other NFA"
         page.click(".chip[data-f='sbr']")
         assert page.locator(".row .serial").all_inner_texts() == ["G2", "R9"]
@@ -93,7 +95,7 @@ def test_the_page_names_each_type(served):
         page.goto(link)
         page.reload()
         page.wait_for_selector(".row")
-        assert page.inner_text("#sum").endswith("· 1 SBS") and page.inner_text(".chip[data-f='sbr']") == "SBSs"
+        assert page.inner_text("#sum").endswith("· 1 SBS · median wait 86 days") and page.inner_text(".chip[data-f='sbr']") == "SBSs"
 
 
 def test_build_and_clear(served):
@@ -125,7 +127,7 @@ def test_the_page_on_a_phone(served):
         page.set_default_timeout(5000)
         page.goto(link)
         page.wait_for_selector(".row")
-        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 1 SBR"
+        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 1 SBR · median wait 86 days"  # 66 and 106
         assert page.get_attribute("#q", "inputmode") == "numeric"
         page.fill("#q", "83")
         assert page.locator(".row .serial").all_inner_texts() == ["A083"]
@@ -147,9 +149,14 @@ def test_the_page_on_a_phone(served):
         page.click(".chip[data-f='all']")
         page.click(".row[data-s='T6']")
         assert page.is_disabled("#sw") and "Only approved suppressors" in page.inner_text("#detailView")
+        assert re.search(r"ATF wait\s+\d+ days? so far", page.inner_text("#detailView"))
+        page.go_back()
+        page.click(".row[data-s='A083']")
+        assert "ATF wait" not in page.inner_text("#detailView")                    # no filed date: no wait
         page.go_back()
         page.click(".row[data-s='T1']")
         assert "Approved with conditions" in page.inner_text("#detailView") and page.is_visible("text=Open")
+        assert re.search(r"ATF wait\s+66 days", page.inner_text("#detailView"))
         assert "900000" not in page.content()
 
 

@@ -7,6 +7,26 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## Unreleased
+
+How long ATF takes, and filed dates for suppressors you filed before using this helper.
+
+**Updating:** `git pull`, then run the installer again. With an inventory server, update it as well (both sides now
+speak server API 3, so a new pairing needs both updated). An already paired helper keeps working with an older server;
+filed dates from approvals then wait until the server is updated.
+
+- **Approval times:** Inventory shows a **Days** column (filed to approved; "N so far" while a Form 1 is waiting),
+  also in the Built and Approved, not built views, and a line under the table with the median and average wait of
+  the last 12 months' approvals (all of them if none is that recent). The Excel export has a **Days to approve**
+  column, and the phone page shows each suppressor's wait and the median wait. The home screen is unchanged. Nothing
+  new is stored: the days come from the filed and approved dates.
+- **Filed dates from approval PDFs:** a Form 1 filed outside this helper had no filed date. Check approvals now reads
+  item 9 of each approval (the date you signed it, the day eForms submitted it) and fills a missing filed date. A
+  filed date already recorded is never changed. The approvals already saved on your computer fill theirs when the
+  helper starts, without logging in to eForms. Checked on real approvals: item 9 matched the filing log for every
+  Form 1 this helper filed.
+- Not tried live yet: the server path with a real server (covered by the automated tests).
+
 ## 1.2.1 (2026-11-05)
 
 Easier setup on Linux. Nothing changes on Mac or Windows.

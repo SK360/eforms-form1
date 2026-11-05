@@ -36,7 +36,7 @@ import csv
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 import sys
 from pathlib import Path
 
@@ -221,6 +221,83 @@ def backfill_filed_dates(rows=None):
     if changed:
         save_rows(rows)
     return rows
+
+
+def _server_fills_filed_dates():
+    """Server API 3 on: record_approvals may fill an empty filed_date (older servers refuse the field)."""
+    return (_server().get("/api/hello").get("api") or 1) >= 3
+
+
+def backfill_from_approval_pdfs():
+    """Fill an empty filed_date of approved suppressors (e.g. filed by hand before this tool) from item 9 of their
+    approval PDF already saved in out/approved/ (no eForms login). A recorded filed date is never changed; the PDF's
+    serial must be the row's. Server mode: one record_approvals operation (needs server API 3). Returns the serials."""
+    rows = load_rows()
+    todo = [r for r in rows if r["status"] == "approved" and not r["filed_date"]]
+    if not todo:
+        return []
+    fills = {}
+    for r in todo:
+        path = _saved_approved_pdf(r)
+        if path is None:
+            continue
+        try:
+            rec = read_approved_pdf(path)
+        except Exception:  # an unreadable PDF: Check approvals reports those
+            continue
+        if rec["serial"].strip().upper() == r["serial_number"].strip().upper() and "SILENCER" in rec["type"].upper() and rec["filed_date"]:
+            fills[r["serial_number"]] = rec["filed_date"]
+    if not fills:
+        return []
+    if server_settings():
+        if not SERVER_STATE.get("online") or not _server_fills_filed_dates():  # offline copy / older server: next time
+            return []
+        _server_op("record_approvals", {"updates": [{"serial": s, "fields": {"filed_date": d}} for s, d in fills.items()], "added": []})
+        return list(fills)
+    for r in rows:
+        if r["serial_number"] in fills:
+            r["filed_date"] = fills[r["serial_number"]]
+    save_rows(rows)
+    return list(fills)
+
+
+def _date(text):
+    try:
+        return datetime.strptime((text or "").strip(), "%m/%d/%Y").date()
+    except ValueError:
+        return None
+
+
+def wait_days(row, today=None):
+    """How long ATF took, in days: filed -> approved for an approved row; filed -> today ("so far") while filed or
+    pending. None without the dates (or for queued/disapproved rows)."""
+    filed = _date(row.get("filed_date"))
+    if filed is None:
+        return None
+    if row.get("status") == "approved":
+        done = _date(row.get("approved_date"))
+        return (done - filed).days if done and done >= filed else None
+    if row.get("status") in ("filed", "pending"):
+        return max(((today or date.today()) - filed).days, 0)
+    return None
+
+
+def approval_waits(rows, today=None, days=365):
+    """Filed -> approved, for the approvals of the last `days` days (all approvals if none is that recent):
+    {"count", "median", "average", "shortest", "longest", "recent"} in days, or None without any."""
+    today = today or date.today()
+    done = [(r, wait_days(r)) for r in rows if r.get("status") == "approved"]
+    done = [(r, w) for r, w in done if w is not None]
+    recent = [(r, w) for r, w in done if (today - _date(r["approved_date"])).days <= days]
+    pick = recent or done
+    if not pick:
+        return None
+    waits = sorted(w for _, w in pick)
+    mid = len(waits) // 2
+    median = waits[mid] if len(waits) % 2 else (waits[mid - 1] + waits[mid]) / 2
+    half_up = lambda x: int(x + 0.5)  # noqa: E731 (like the phone page's Math.round; round() would give 98 for 98.5)
+    return {"count": len(waits), "median": half_up(median), "average": half_up(sum(waits) / len(waits)),
+            "shortest": waits[0], "longest": waits[-1], "recent": bool(recent)}
 
 
 def save_rows(rows):
@@ -735,6 +812,11 @@ def approved_pdf_for(row):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return path
+    return _saved_approved_pdf(row)
+
+
+def _saved_approved_pdf(row):
+    """The approval PDF Check approvals saved on THIS computer (out/approved/), whatever the mode, or None."""
     folder = OUT / "approved"
     name = _approved_index(folder).get(row.get("eform_id", "")) if folder.exists() else None
     for candidate in filter(None, [name, f"{row['serial_number']}.pdf"]):
@@ -745,7 +827,7 @@ def approved_pdf_for(row):
 
 EXPORT_COLS = [("Serial", "serial_number", 10), ("Caliber", "caliber", 9), ("Length (in)", "overall_length", 11),
                ("Status", "status", 11), ("Filed", "filed_date", 11), ("Approved", "approved_date", 11),
-               ("Conditions", "conditions", 60), ("Application #", "application_number", 14), ("eForm ID", "eform_id", 11),
+               ("Days to approve", "_wait", 15), ("Conditions", "conditions", 60), ("Application #", "application_number", 14), ("eForm ID", "eform_id", 11),
                ("Control #", "control_number", 14), ("Built", "built", 7), ("Design", "design", 30)]
 
 
@@ -760,7 +842,8 @@ def export_inventory(dest=None):
     ws.title = "Inventory"
     ws.append([c[0] for c in EXPORT_COLS])
     for row in sorted(load_rows(), key=lambda r: serial_key(r["serial_number"])):
-        vals = [row[c[1]] or ("queued" if c[1] == "status" else "") for c in EXPORT_COLS]
+        row = dict(row, _wait=wait_days(row) if row["status"] == "approved" else None)  # filed -> approved
+        vals = [row[c[1]] if c[1] == "_wait" else row[c[1]] or ("queued" if c[1] == "status" else "") for c in EXPORT_COLS]
         ws.append([float(v) if c[1] == "overall_length" and re.fullmatch(r"\d+(\.\d+)?", v) else v for c, v in zip(EXPORT_COLS, vals)])
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -1261,6 +1344,14 @@ def _mmddyyyy(text):
     return text
 
 
+def _us_date(text):
+    """A date as MM/DD/YYYY (zero-padded), from MM/DD/YYYY or "October 15, 2026"; "" if it isn't one."""
+    try:
+        return datetime.strptime(_mmddyyyy(text or ""), "%m/%d/%Y").strftime("%m/%d/%Y")
+    except ValueError:
+        return ""
+
+
 def read_approved_pdf(path):
     """Item 4 and ATF's decision block from an approved Form 1 PDF as eForms renders it ("View PDF").
     Values are located relative to the printed labels. The label font is learned from the labels themselves and
@@ -1291,6 +1382,10 @@ def read_approved_pdf(path):
         return bool(hits) and any("Zapf" in sp["font"] and 0 < hits[0].x0 - sp["bbox"][0] < 20 and abs(sp["bbox"][1] - hits[0].y0) < 8
                                   for sp in spans)
     below = (lambda h: h.y0 > line_y + 30) if line_y is not None else None
+    # Item 9: "9. Date" right of the applicant's signature = the day it was signed, which in eForms is the day it was
+    # submitted (checked on saved approvals 2026-11-05: the same day as the filing log for every one filed by this tool).
+    nines = page.search_for("9.")
+    item9 = lambda h: any(abs(n.y0 - h.y0) < 3 and 0 < h.x0 - n.x0 < 20 for n in nines)  # noqa: E731
     conditions = ""
     if page.search_for("APPROVED WITH CONDITIONS") and page.parent.page_count > 1:  # listed on the last page, above its heading
         last = [ln.strip() for ln in page.parent[-1].get_text().splitlines() if ln.strip()]
@@ -1301,6 +1396,7 @@ def read_approved_pdf(path):
             "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)), "overall_length": value("Overall length", (-15, 50), (5, 22)),
             "approved": ticked(approved) and not ticked(dis),
             "approval_date": _mmddyyyy(value("Date", (-5, 80), (2, 20), pick=below)), "conditions": conditions,
+            "filed_date": _us_date(value("Date", (-5, 80), (2, 20), pick=item9)),
             "pdf_control_number": next((m.group(1) for pg in page.parent for m in [re.search(r"Control\s*Number:\s*(\d{10,11})\b", pg.get_text())] if m), "")}
 
 
@@ -1628,24 +1724,30 @@ def apply_approvals(records, import_unknown=False):
         row = by.get(rec["serial"].strip().upper())
         if row is not None and not row["overall_length"] and rec["overall_length"]:
             info["overall_length"] = rec["overall_length"]  # only fills a gap; a differing length is reported, not overwritten
+        if row is not None and not row["filed_date"] and rec.get("filed_date"):
+            info["filed_date"] = rec["filed_date"]  # the same: e.g. filed by hand before this tool; never overwritten
         if row is not None:
             if any(row[k] != v for k, v in info.items() if v or k == "status"):
                 row.update({k: v for k, v in info.items() if v or k == "status"})
                 updated.append(row["serial_number"])
         elif import_unknown:
             row = {"caliber": rec["caliber"], "serial_number": rec["serial"].strip(), "overall_length": rec["overall_length"],
-                   "application_number": "", "filed_date": "", **info}
+                   "application_number": "", "filed_date": rec.get("filed_date", ""), **info}
             rows.append(row)
             by[row["serial_number"].upper()] = row
             added.append(row["serial_number"])
     if server_settings():  # the same changes, as one operation on the server
         if updated or added:
-            fields = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length")
+            fields = ("status", "approved_date", "eform_id", "control_number", "conditions", "overall_length", "filed_date")
+            if not _server_fills_filed_dates():  # an older server refuses filed_date: record the rest, fill dates later
+                fields = fields[:-1]
             before = {r["serial_number"].upper(): r for r in load_rows()}
-            _server_op("record_approvals", {
-                "updates": [{"serial": s, "fields": {k: by[s.upper()][k] for k in fields
-                                                     if by[s.upper()][k] != before[s.upper()][k]}} for s in updated],
-                "added": [by[s.upper()] for s in added]})
+            changes = [{"serial": s, "fields": {k: by[s.upper()][k] for k in fields if by[s.upper()][k] != before[s.upper()][k]}}
+                       for s in updated]
+            changes = [c for c in changes if c["fields"]]
+            updated = [c["serial"] for c in changes]
+            if changes or added:
+                _server_op("record_approvals", {"updates": changes, "added": [by[s.upper()] for s in added]})
         return updated, added
     if added:
         rows.sort(key=lambda r: serial_key(r["serial_number"]))

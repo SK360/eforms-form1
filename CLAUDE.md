@@ -64,10 +64,17 @@ plain CLI, kept for debugging/scripting:
   tracked (the user's call): build date, print file, marked/engraved (markings are printed with the part). The
   design is typed every time, separately for each serial (no pick-from-previous list; one batch is not one design),
   all shown together, saved only on the confirmation. `load_rows()` tolerates older files with fewer columns.
-  `apply_approvals(records, import_unknown)` records approvals (fills an empty length from the PDF, never overwrites
-  one), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
+  `apply_approvals(records, import_unknown)` records approvals (fills an empty length AND an empty filed_date from the
+  PDF, never overwrites either), optionally adds approved suppressors missing from the inventory, and then re-sorts by `serial_key` (natural
   order); sorting happens ONLY there (never during filing: file_rows holds row indices). out/submissions.csv stays a
-  write-only filing log. There is no approved.csv any more.
+  write-only filing log. There is no approved.csv any more. `backfill_from_approval_pdfs()` (menu start, every mode,
+  errors ignored): approved rows without a filed_date get item 9 from their PDF saved on THIS computer
+  (`_saved_approved_pdf`: out/approved via index.csv or `<serial>.pdf`; the PDF's serial must match; no login).
+  **Approval times** are computed, never stored: `wait_days(row)` (approved: filed -> approved; filed/pending: so
+  far; else None), `approval_waits(rows)` (median/average/shortest/longest of the last 365 days' approvals, else all;
+  rounded half up like the phone page). Shown as the Days column of `inventory_table` and `build_table`, `wait_line`
+  under the Inventory views (not on home), Excel "Days to approve" (approved only), phone page "ATF wait" + "median
+  wait" in `#sum` (computed in JS from `filed`/`approved`; /api/inventory unchanged).
 - **`data/sbrs.csv` = every approved non-suppressor** (`SBR_COLS`; the file, table and function names date from when
   it held only SBRs): `type` as the PDF and the portal's `#productType` print it (`NFA_TYPES`: SHORT BARRELED RIFLE,
   SHORT BARRELED SHOTGUN, ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN; live PDFs seen only for SILENCER and the
@@ -78,7 +85,8 @@ plain CLI, kept for debugging/scripting:
   Path via `_sbrs_path()` (resolved at call time so tests' sandbox redirects it). Inventory > Show another view, Excel
   sheet. Server: schema 4 adds `sbrs.type`, API 2. `remote.API` must equal the server's to pair; an already paired app
   on an API 1 server records SBRs but `record_sbrs` refuses any other type (`ServerReadOnly`), since that server would
-  drop the type and show it as an SBR.
+  drop the type and show it as an SBR. API 3: record_approvals may fill an empty filed_date (`_server_fills_filed_dates`
+  asks /api/hello; on an older server apply_approvals leaves filed_date out and the backfill sends nothing).
 - **Development and tests must never write the real records** (`data/`, `forms/`, `out/submissions.csv`,
   `out/approved/`: production data, the user's only copy). The `sandbox` fixture is autouse (every test runs in a temp
   folder) and asserts the real data/ folder is unchanged after each test (a module-level path once leaked fake rows
@@ -198,7 +206,8 @@ plain CLI, kept for debugging/scripting:
   Settings > Where your inventory lives offers Move (when the server is empty), and on switching back Copy first /
   Keep. **Phase 5 (filing + approvals):** server ops mark_pending (queued only; `force` = deliberate re-file),
   mark_filed (pending/filed; "UNKNOWN" = filed without a number), unmark_pending, record_approvals ({updates:
-  [{serial, fields}] approval fields only, a length only fills an empty one; added: [rows]}), record_sbrs (upsert
+  [{serial, fields}] approval fields only, a length or filed_date only fills an empty one, an update left with nothing
+  to change is skipped (no history row); added: [rows]}), record_sbrs (upsert
   by eForm ID, fills in); `POST /api/approval-pdfs` (uploaded first via /api/import/pdf). App: `_submit` calls
   `_set_pending` (server: `mark_pending` with the row's version; ANY failure = "NOT submitting", Sign & Submit not
   clicked); after the confirmation `log_submission` (out/submissions.csv) then `_set_filed`: server mode writes
@@ -238,7 +247,9 @@ plain CLI, kept for debugging/scripting:
   ATF's decision block (Approved checkbox = ZapfDingbats glyph left of the "Approved" label ON the "Disapproved" line:
   older approvals also carry a banner "APPROVED WITH CONDITIONS - SEE CONDITIONS ON THE LAST PAGE OF PDF" that a plain
   search finds first; conditions = last-page text above its "Approval Conditions" heading; approval date under the
-  "Date" label below the decision line)
+  "Date" label below the decision line; `filed_date` = item 9, the applicant's signature date under the "Date" label
+  that has a "9." just left of it (~10 pt below; checked on every saved real approval 2026-11-05: always found, and
+  equal to the filing log's date for every one this tool filed; page 2 repeats a signature date but isn't used))
   by position relative to labels, ignoring the label font. Report = SUPPRESSORS (type contains SILENCER) matched to
   suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (7-8 digits) and control numbers (11) do NOT
   equal the 9-digit application numbers recorded at filing, hence matching by serial. Report only; nothing imported.

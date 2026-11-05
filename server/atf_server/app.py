@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import __version__, db, tls
 
-API_VERSION = 2  # 2: table sbrs keeps each row's type (SBR, SBS, ...)
+API_VERSION = 3  # 2: table sbrs keeps each row's type (SBR, SBS, ...); 3: record_approvals fills an empty filed_date
 COOKIE = "atf_device"
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; "
        "frame-ancestors 'none'")

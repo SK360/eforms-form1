@@ -174,7 +174,7 @@ def test_inventory_screen(configured, answers, screen):
     out = screen.getvalue()
     full = out.split("Inventory · All (4)")[1].split("Inventory · Approved")[0]
     assert full.index("T9") < full.index("T10") < full.index("T11") < full.index("T12")        # serial order
-    assert "waiting" in full and "…0011" in full and "900000011" not in full and "⚠ conditions" in full
+    assert "so far" in full and "…0011" in full and "900000011" not in full and "⚠ conditions" in full
     assert "4 suppressors · 2 approved · 1 in progress · 1 queued" in out
     approved = out.split("Inventory · Approved (2)")[1].split("eForms Form 1")[0]                # just that view, not the home screen after
     assert "T9" in approved and "T11" not in approved and "T12" not in approved
@@ -236,7 +236,7 @@ def test_export_inventory(configured):
     assert rows[0][:4] == ("Serial", "Caliber", "Length (in)", "Status")
     assert [r[0] for r in rows[1:]] == ["T2", "T10", "T11", "T12"]                             # serial order
     assert rows[4][2] == 6.5 and rows[3][3] == "queued" and ws.freeze_panes == "A2"
-    assert rows[1][9] == "20260000002"                                                         # full numbers in the file
+    assert rows[1][10] == "20260000002"                                                        # full numbers in the file
 
 
 def test_add_a_run_of_serials(configured, answers, screen):

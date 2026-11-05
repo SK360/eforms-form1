@@ -12,7 +12,8 @@ QUIT = lambda kw: "quit"  # noqa: E731
 
 
 def approved_pdf(type_="SILENCER", serial="T201", caliber="22", length="12", barrel="", model="N/A",
-                 approved=True, disapproved=False, date="08/15/2026", conditions="", date_x=505, date_top=718):
+                 approved=True, disapproved=False, date="08/15/2026", conditions="", date_x=505, date_top=718,
+                 signed="01/01/2026", nine=True):
     """A one-page stand-in for an approved Form 1 PDF: labels and values at the positions eForms uses."""
     doc = pymupdf.open()
     p = doc.new_page(width=612, height=792)
@@ -24,7 +25,9 @@ def approved_pdf(type_="SILENCER", serial="T201", caliber="22", length="12", bar
     label(364, 377, "c. Caliber or gauge"), label(364, 387, "(specify one)")
     label(450, 378, "d. Model (as marked on firearm)"), label(450, 405, "e. Barrel length"), label(516, 405, "f.  Overall length")
     label(248, 435, "g. Serial number"), label(40, 463, "h. Additional description")
-    label(494, 604, "Date"), value(513, 615, "01/01/2026")                       # applicant's signature date (not ATF's)
+    if nine:                                                                    # item 9: "9." then "Date" (a separate label)
+        label(484, 604, "9.")
+    label(494, 604, "Date"), value(513, 615, signed)                            # applicant's signature date (not ATF's)
     label(43, 657, "Approved (with the following conditions, if any)"), label(262, 657, "Disapproved (for the following reasons)")
     label(486, 708, "Date")
     value(281, 408, type_), value(398, 407, caliber), value(452, 391, model), value(520, 419, length)
@@ -50,7 +53,7 @@ def test_read_approved_pdf(tmp_path):
     f.write_bytes(approved_pdf())
     assert atf.read_approved_pdf(f) == {"type": "SILENCER", "serial": "T201", "caliber": "22", "model": "N/A", "barrel_length": "",
                                         "overall_length": "12", "approved": True, "approval_date": "08/15/2026", "conditions": "",
-                                        "pdf_control_number": ""}
+                                        "filed_date": "01/01/2026", "pdf_control_number": ""}
     f.write_bytes(approved_pdf("SHORT BARRELED RIFLE", "R1", "5.56", "26", barrel="10.5", model="X15"))
     r = atf.read_approved_pdf(f)
     assert (r["type"], r["barrel_length"], r["overall_length"], r["caliber"]) == ("SHORT BARRELED RIFLE", "10.5", "26", "5.56")
@@ -444,3 +447,52 @@ def test_old_id_named_pdfs_are_renamed_by_serial(configured):
     assert sorted(r["eform_id"] for r in records) == ["1234567", "1234568"] and len(problems) == 1
     index = (folder / "index.csv").read_text(encoding="utf-8")
     assert "1234567,T301.pdf" in index and "1234568,T301_2.pdf" in index
+
+
+def test_item_9_is_the_filed_date(tmp_path):
+    """Item 9 = the applicant's signature date, which in eForms is the day the Form 1 was signed and submitted."""
+    f = tmp_path / "a.pdf"
+    for signed, want in (("6/1/2026", "06/01/2026"), ("June 2, 2026", "06/02/2026"), ("", ""), ("N/A", "")):
+        f.write_bytes(approved_pdf(signed=signed))
+        assert atf.read_approved_pdf(f)["filed_date"] == want, signed
+    f.write_bytes(approved_pdf(nine=False))                    # a "Date" that isn't item 9's: not taken
+    r = atf.read_approved_pdf(f)
+    assert (r["filed_date"], r["approval_date"]) == ("", "08/15/2026")
+
+
+def test_filed_dates_are_filled_from_approvals_never_overwritten(configured, tmp_path):
+    queue(("T1", "22", "filed"), ("T2", "22", "filed"))
+    rows = atf.load_rows()
+    rows[1]["filed_date"] = "05/20/2026"
+    atf.save_rows(rows)
+    found = []
+    for serial in ("T1", "T2", "T3"):
+        f = tmp_path / f"{serial}.pdf"
+        f.write_bytes(approved_pdf(serial=serial, signed="05/01/2026"))
+        found.append({"eform_id": f"100000{serial[-1]}", "control_number": "", "finalized": "", "pdf": str(f)})
+    records, _ = atf.read_approved(found)
+    assert atf.apply_approvals(records, import_unknown=True) == (["T1", "T2"], ["T3"])
+    assert {r["serial_number"]: r["filed_date"] for r in atf.load_rows()} == {"T1": "05/01/2026", "T2": "05/20/2026", "T3": "05/01/2026"}
+    assert atf.apply_approvals(records) == ([], [])             # nothing left to fill
+
+
+def _approved_rows(*rows):
+    atf.save_rows([{"serial_number": s, "caliber": "22", "overall_length": "12", "status": "approved", "filed_date": filed,
+                    "approved_date": "10/15/2026", "eform_id": f"100000{n}"} for n, (s, filed) in enumerate(rows, 1)])
+
+
+def test_saved_pdfs_fill_missing_filed_dates_without_logging_in(configured, answers, screen):
+    """Approved rows filed by hand (no filed date): the menu fills them from the PDFs already saved, at start."""
+    _approved_rows(("T1", ""), ("T2", "05/20/2026"), ("T3", ""), ("T4", ""), ("T5", ""))
+    folder = atf.OUT / "approved"
+    folder.mkdir()
+    (folder / "T1.pdf").write_bytes(approved_pdf(serial="T1", signed="05/01/2026"))
+    (folder / "T2.pdf").write_bytes(approved_pdf(serial="T2", signed="05/02/2026"))   # has one: kept
+    (folder / "T3.pdf").write_bytes(approved_pdf(serial="T9", signed="05/03/2026"))   # someone else's serial: not used
+    (folder / "eForm-1000005.pdf").write_bytes(approved_pdf(serial="T5", signed="05/05/2026"))
+    (folder / "index.csv").write_text("eform_id,file\n1000005,eForm-1000005.pdf\n", encoding="utf-8")
+    answers(QUIT)
+    ui.menu()
+    got = {r["serial_number"]: r["filed_date"] for r in atf.load_rows()}
+    assert got == {"T1": "05/01/2026", "T2": "05/20/2026", "T3": "", "T4": "", "T5": "05/05/2026"}
+    assert atf.backfill_from_approval_pdfs() == []

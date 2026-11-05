@@ -217,6 +217,7 @@ def shot_inventory():
     answered("What next?", "Inventory")
     ui.con.print(ui.inventory_table(rows, f"[bold]Inventory[/] · All ({len(rows)})"))
     ui.con.print(f"  {ui.summary(rows)}")
+    ui.con.print(f"  {ui.wait_line(rows)}")
     ui.con.print("  [yellow]⚠ approved with conditions: A101[/] [dim](conditions are in data/suppressors.csv)[/]")
     open_select("Inventory:", ["Show another view…", "Edit or remove a queued suppressor", "Record builds",
                                "Open an approved PDF", "Export to Excel", "Back"])

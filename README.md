@@ -199,11 +199,13 @@ of eForms first (eForms allows one session at a time).
   device, machinegun) goes into a separate list (`data/sbrs.csv`: type, caliber or gauge, model, barrel and overall
   length, approval date); a form whose type can't be read gets a warning instead of being recorded. Approvals are
   recorded in your inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed
-  before using this tool). The helper still only files suppressors.
+  before using this tool). A suppressor with no filed date (filed before this tool) gets the date you signed it,
+  item 9 of the approval; a recorded filed date is never changed. The helper still only files suppressors.
 
 ### Your inventory
 - **Inventory**: every suppressor in serial order (A1, A2 … A10) with caliber, length, status (queued, filed,
-  approved), filed date, days waiting or approval date, and a ⚠ for approvals with conditions. **Show another view**
+  approved), filed date, approval date, how many days ATF took (or has taken so far), and a ⚠ for approvals with
+  conditions. Below the table: the median and average wait of the last 12 months' approvals. **Show another view**
   filters by Approved / In progress / Queued / Built / Approved, not built, or shows your other approved items (called
   SBRs if that's all you have, Other NFA items if you have a mix). From there you can also open any approved Form 1 PDF
   and **export to Excel** (`out/inventory_<date>.xlsx`, with a sheet for those items). The home screen shows a one-line

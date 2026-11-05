@@ -187,37 +187,44 @@ def server_line():
                   + (f"\n    [dim]{escape(e['problem'])}[/]" if e.get("problem") else ""))
 
 
-def _days(date_str):
-    try:
-        return (date.today() - datetime.strptime(date_str, "%m/%d/%Y").date()).days
-    except ValueError:
-        return None
+def days_cell(r):
+    """How long ATF took (filed -> approved), or "N so far" while it's waiting."""
+    n = atf.wait_days(r)
+    if n is None:
+        return ""
+    return str(n) if r["status"] == "approved" else f"[dim]{n} so far[/]"
+
+
+def wait_line(rows):
+    """One line on how long approvals take, from the filed and approved dates; "" without any."""
+    w = atf.approval_waits(rows)
+    if not w:
+        return ""
+    spread = f" ({w['shortest']}–{w['longest']})" if w["shortest"] != w["longest"] else ""
+    which = "in the last 12 months" if w["recent"] else "in your records"
+    return (f"[dim]Filed → approved:[/] median [bold]{w['median']}[/] days, average {w['average']}{spread} "
+            f"[dim]· {w['count']} approval{'s' if w['count'] != 1 else ''} {which}[/]")
 
 
 def inventory_table(rows, title):
     t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
-    for col in ("Serial", "Caliber", "Length", "Status", "Filed", "Approved / waiting", "Built", "App # / eForm"):
-        t.add_column(col)
+    for col in ("Serial", "Caliber", "Length", "Status", "Filed", "Approved", "Days", "Built", "App # / eForm"):
+        t.add_column(col, justify="right" if col == "Days" else "left")
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
-        if r["status"] == "approved":
-            when = r["approved_date"] + (" [yellow]⚠ conditions[/]" if r["conditions"] else "")
-        elif r["status"] in IN_PROGRESS and _days(r["filed_date"]) is not None:
-            when = f"[dim]waiting {_days(r['filed_date'])} day(s)[/]"
-        else:
-            when = ""
+        when = r["approved_date"] + (" [yellow]⚠ conditions[/]" if r["conditions"] else "") if r["status"] == "approved" else ""
         ident = short(r["application_number"]) or (f"eForm {short(r['eform_id'])}" if r["eform_id"] else "")
         t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
-                  escape(r["filed_date"]), when, "[green]✔[/]" if atf.is_built(r) else "", escape(ident))
+                  escape(r["filed_date"]), when, days_cell(r), "[green]✔[/]" if atf.is_built(r) else "", escape(ident))
     return t
 
 
 def build_table(rows, title):
     """Approved suppressors, built or not, and what each one is (for the Built / Approved, not built views)."""
     t = Table(box=box.ROUNDED, header_style="bold", title=title, title_justify="left", border_style="blue")
-    for col in ("Serial", "Caliber", "Length", "Approved", "Built", "Design"):
-        t.add_column(col)
+    for col in ("Serial", "Caliber", "Length", "Approved", "Days", "Built", "Design"):
+        t.add_column(col, justify="right" if col == "Days" else "left")
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
-        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), escape(r["approved_date"]),
+        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), escape(r["approved_date"]), days_cell(r),
                   "[green]✔ built[/]" if atf.is_built(r) else "[dim]not built[/]", escape(r["design"]))
     return t
 
@@ -259,6 +266,8 @@ def inventory_flow():
             table = build_table if view in ("built", "unbuilt") else inventory_table
             con.print(table(shown, f"[bold]Inventory[/] · {name} ({len(shown)})"))
             con.print(f"  {summary(rows)}")
+            if wait_line(rows):
+                con.print(f"  {wait_line(rows)}")
             cond = [r["serial_number"] for r in shown if r["status"] == "approved" and r["conditions"]]
             where = "in data/suppressors.csv"
         if atf.server_settings():
@@ -1409,6 +1418,10 @@ def menu():
         if not atf.SUPP.exists():
             atf.save_rows([])
         atf.backfill_filed_dates()
+    try:  # approved suppressors without a filed date (filed by hand before this tool): item 9 of their saved PDF
+        atf.backfill_from_approval_pdfs()
+    except Exception:  # e.g. the server can't be reached: tried again next time
+        pass
     while True:
         server = atf.server_settings()
         try:

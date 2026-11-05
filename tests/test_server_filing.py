@@ -145,3 +145,18 @@ def test_the_server_keeps_each_type(server, configured):
     assert atf.record_sbrs([sbs]) == 0                                                           # nothing new
     assert atf.record_sbrs([dict(sbs, type="ANY OTHER WEAPON")]) == 0                            # the same eForm: corrected
     assert [s["type"] for s in atf.load_sbrs()] == ["ANY OTHER WEAPON"] and atf.nfa_counts(atf.load_sbrs()) == "1 AOW"
+
+
+def test_saved_approval_pdfs_fill_filed_dates_on_the_server(server, configured):
+    from test_approvals import approved_pdf
+    queued_on_server(server, "S1")
+    rec = {"type": "SILENCER", "approved": True, "serial": "S1", "approval_date": "10/30/2026", "eform_id": "1000001",
+           "control_number": "", "conditions": "", "overall_length": "12", "caliber": "9", "model": "X", "barrel_length": "",
+           "pdf": "", "filed_date": ""}
+    atf.apply_approvals([rec])                                     # approved, filed by hand: no filed date yet
+    assert {r["serial_number"]: r["filed_date"] for r in atf.load_rows()} == {"S1": ""}
+    (atf.OUT / "approved").mkdir()
+    (atf.OUT / "approved" / "S1.pdf").write_bytes(approved_pdf(serial="S1", signed="06/01/2026"))
+    assert atf.backfill_from_approval_pdfs() == ["S1"]
+    assert {r["serial_number"]: r["filed_date"] for r in atf.load_rows()} == {"S1": "06/01/2026"}
+    assert history("S1")[-1] == "record_approvals" and atf.backfill_from_approval_pdfs() == []
