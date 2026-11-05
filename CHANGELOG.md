@@ -7,7 +7,12 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
-## Unreleased
+## 1.2.1 (2026-11-05)
+
+Easier setup on Linux. Nothing changes on Mac or Windows.
+
+**Updating:** `git pull`, then run the installer again (`./install.sh`, Windows `.\install.cmd`). No new packages, and
+your settings, inventory and files carry over unchanged. The inventory server doesn't need updating.
 
 - **Linux:** `./install.sh` now checks that Chromium can start, and on Debian/Ubuntu installs the system libraries
   it needs (with apt; sudo asks for your password). If Python's venv module is missing, it says to install
