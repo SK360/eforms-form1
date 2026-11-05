@@ -143,7 +143,7 @@ plain CLI, kept for debugging/scripting:
   switches to letters. One screen at a time under 760 px (hash = selected serial, so back works), side by side above.
   Turning Built off asks on the page (Keep it / Clear), not with `confirm()`: on the user's iPhone (2026-10-28) the
   switch couldn't be turned off with the pop-up.
-- **Inventory server** (`server/`, branch `server`; design doc "Inventory server design" on claude.ai, 5 phases;
+- **Inventory server** (`server/`, on main since v1.1.0; design doc "Inventory server design" on claude.ai, 5 phases;
   phase 1 = read-only server with made-up data). Optional, never imported by the app; FastAPI + uvicorn + cryptography
   (`server/requirements.txt`; dev: `server/.venv`, `requirements-dev.txt`). `atf_server/db.py`: SQLite (WAL, schema =
   PRAGMA user_version, `MIGRATIONS`, backup before migrating, newer schema refused), tables suppressors (app CSV
