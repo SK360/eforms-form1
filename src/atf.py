@@ -1927,6 +1927,25 @@ def _chromium_path():
         return pw.chromium.executable_path
 
 
+LINUX_DEPS = "sudo .venv/bin/python -m playwright install-deps chromium"
+
+
+def _chromium_start_problem():
+    """Linux only (elsewhere Chromium brings what it needs): None if Chromium starts, else why not. A fresh Linux
+    machine can have Chromium installed but lack the system libraries it needs (install.sh installs them via apt)."""
+    if not sys.platform.startswith("linux"):
+        return None
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            pw.chromium.launch(headless=True).close()
+        return None
+    except Exception as e:
+        if "missing dependencies" in str(e) or "error while loading shared libraries" in str(e):
+            return f"installed, but system libraries are missing: run {LINUX_DEPS} (Debian/Ubuntu)"
+        return f"installed, but can't start ({str(e).splitlines()[0] if str(e) else type(e).__name__})"
+
+
 def check_setup():
     """Everything a filing needs, checked without opening eForms: [(level ok|warn|fail, label, detail, path)].
     Labels and details name no one and show no paths (the menu's screen gets shared); `path` is for the CLI."""
@@ -1936,7 +1955,9 @@ def check_setup():
                 + ("" if (3, 9) <= v[:2] <= (3, 14) else " (3.9-3.14 are supported; run the installer again)"), sys.executable))
     try:
         exe = _chromium_path()
-        out.append(("ok", "Browser (Chromium)", "installed", exe) if exe and Path(exe).exists() else
+        problem = _chromium_start_problem() if exe and Path(exe).exists() else None
+        out.append(("fail", "Browser (Chromium)", problem, exe) if problem else
+                   ("ok", "Browser (Chromium)", "installed", exe) if exe and Path(exe).exists() else
                    ("fail", "Browser (Chromium)", "not installed: run the installer again", exe or ""))
     except Exception as e:
         out.append(("fail", "Browser (Chromium)", f"can't start ({str(e).splitlines()[0] if str(e) else type(e).__name__}): "

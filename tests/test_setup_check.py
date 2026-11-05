@@ -6,6 +6,7 @@ from conftest import FIXTURE, add_other_rp, atf, make_individual, pick, queue, u
 
 QUIT = lambda kw: "quit"  # noqa: E731
 EFT, JPG, PDF = b"1.001:249\x1d1.002:0502", b"\xff\xd8\xff\xe0\x00\x10JFIF", b"%PDF-1.4\n"
+START_PROBLEM = atf._chromium_start_problem  # the real one (the `healthy` fixture replaces it)
 
 
 @pytest.fixture
@@ -15,6 +16,7 @@ def healthy(configured, monkeypatch):
     for name, head in (("prints.eft", EFT), ("me.jpg", JPG), ("trust.pdf", PDF), ("printer.jpg", JPG)):
         (f / name).write_bytes(head + b"rest")
     monkeypatch.setattr(atf, "_chromium_path", lambda: str(FIXTURE))
+    monkeypatch.setattr(atf, "_chromium_start_problem", lambda: None)
     monkeypatch.setattr(atf, "ROOT", configured)
     return configured
 
@@ -58,6 +60,33 @@ def test_problems_are_found(healthy, monkeypatch):
     assert res["Browser (Chromium)"][0] == "fail" and "run the installer again" in res["Browser (Chromium)"][1]
     assert res["Helper folder"][0] == "warn" and "inside OneDrive" in res["Helper folder"][1]
     assert res["Inventory"] == ("warn", "1 pending: resolve it from the menu before filing more")
+
+
+def test_linux_chromium_without_its_libraries(healthy, monkeypatch):
+    """Linux: Chromium downloaded but the machine lacks its system libraries: a fail that says how to fix it."""
+    class Missing:
+        def __init__(self):
+            self.chromium = self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def launch(self, **kw):
+            raise RuntimeError("BrowserType.launch: Host system is missing dependencies to run browsers.\n...")
+    import playwright.sync_api
+    with monkeypatch.context() as m:
+        m.setattr(atf, "_chromium_start_problem", START_PROBLEM)
+        m.setattr(atf.sys, "platform", "linux")
+        m.setattr(playwright.sync_api, "sync_playwright", Missing)
+        level, detail = by_label(atf.check_setup())["Browser (Chromium)"]
+    assert level == "fail" and "system libraries are missing" in detail and atf.LINUX_DEPS in detail
+    with monkeypatch.context() as m:
+        m.setattr(atf.sys, "platform", "darwin")
+        m.setattr(playwright.sync_api, "sync_playwright", Missing)
+        assert START_PROBLEM() is None                                     # not checked off Linux
 
 
 def test_other_responsible_persons_are_numbered(healthy):

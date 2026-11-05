@@ -7,6 +7,13 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## Unreleased
+
+- **Linux:** `./install.sh` now checks that Chromium can start, and on Debian/Ubuntu installs the system libraries
+  it needs (with apt; sudo asks for your password). If Python's venv module is missing, it says to install
+  `python3-venv`. **Check my setup** also reports missing libraries on Linux. Filing on Linux is covered by the
+  automated tests only so far, not by a live filing.
+
 ## 1.2.0 (2026-11-04)
 
 Your inventory now keeps every type of approved Form 1, not only suppressors and SBRs. The helper still only files

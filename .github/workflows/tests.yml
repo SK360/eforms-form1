@@ -61,8 +61,7 @@ jobs:
       - name: Install (Linux)
         if: runner.os != 'Windows'
         run: |
-          ./install.sh
-          .venv/bin/python -m playwright install-deps chromium
+          ./install.sh   # installs Chromium's system libraries itself if they're missing
           ./atf fill-form1 --help
       - name: Tests (Linux)
         if: runner.os != 'Windows'

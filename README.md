@@ -80,10 +80,15 @@ you have. To be told about new releases, choose **Watch > Custom > Releases** on
 It needs Python 3.9 to 3.14 (3.13 recommended). A brand-new Python such as 3.15 doesn't have ready-built copies
 of all the packages yet; the installer skips it and asks you to add 3.13 next to it.
 
-**Mac** (Terminal, in the folder; macOS offers to install Python the first time if needed):
+**Mac or Linux** (Terminal, in the folder; macOS offers to install Python the first time if needed):
 ```bash
 ./install.sh
 ```
+On **Linux**, use a desktop session: filing opens a browser window that you log in through. The installer also
+checks that Chromium can start. On Debian/Ubuntu it installs the system libraries Chromium needs with apt (sudo asks
+for your password), and you may first need `sudo apt install python3-venv`. On other distributions, if the installer
+says libraries are missing, install them with your package manager. Filing has been tested live on Mac and Windows;
+on Linux, so far only by the automated tests.
 **Windows:**
 1. Install **Python 3.13** (not the newest: 3.15 doesn't work with this yet, and it's what python.org's big Download
    button gives you now). Easiest way:

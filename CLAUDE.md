@@ -10,7 +10,8 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
 - **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd` (pick Python 3.9-3.14, preferring 3.13, or `ATF_PYTHON`; a
   brand-new Python like 3.15 is refused because PyYAML etc. had no Windows wheels yet and pip wanted a C++ compiler;
   a `.venv` from another Python is rebuilt; make `.venv`,
-  install requirements + Chromium); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
+  install requirements + Chromium; Linux: test-launches Chromium and, if it can't start, runs `playwright
+  install-deps chromium` via apt/sudo, and explains a missing `python3-venv`); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
   open the extensionless `atf` shell script as a document).
   First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files, other responsible
   persons) -> `data/trust.yaml`.
@@ -218,7 +219,8 @@ plain CLI, kept for debugging/scripting:
   `tests/test_server_mode.py` (fake HTTPS server, `tests/fixtures/test_server_*.pem` test-only cert) and
   `server/tests/test_app_client.py` (remote.py against the real server).
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
-  fail): Python version, Chromium (`_chromium_path`), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
+  fail): Python version, Chromium (`_chromium_path`; on Linux also `_chromium_start_problem`, a headless launch, for
+  missing system libraries), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing
   settings (settings_problems minus the file lines), each file via `_check_file` (exists, `_online_only`: Windows
   OFFLINE/RECALL attributes, macOS SF_DATALESS, not read then; not empty; readable; `FILE_KINDS` header: EFT starts
   `1.001:`, JPG/PNG, PDF = warn only), each 5320.23 template test-stamped (`template_problems`, also used by the
