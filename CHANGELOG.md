@@ -7,13 +7,15 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
-## Unreleased
+## 1.2.2 (2026-11-05)
 
 How long ATF takes, and filed dates for suppressors you filed before using this helper.
 
-**Updating:** `git pull`, then run the installer again. With an inventory server, update it as well (both sides now
-speak server API 3, so a new pairing needs both updated). An already paired helper keeps working with an older server;
-filed dates from approvals then wait until the server is updated.
+**Updating:** `git pull`, then run the installer again (`./install.sh`, Windows `.\install.cmd`). No new packages, and
+your settings, inventory and files carry over unchanged.
+- **If you use the inventory server, update it too.** Helper and server now speak server API 3, so pairing a new
+  device needs both updated. A helper that's already paired keeps working with an older server; filed dates from
+  approvals then wait until the server is updated (the next start after that fills them in).
 
 - **Approval times:** Inventory shows a **Days** column (filed to approved; "N so far" while a Form 1 is waiting),
   also in the Built and Approved, not built views, and a line under the table with the median and average wait of
@@ -25,7 +27,10 @@ filed dates from approvals then wait until the server is updated.
   filed date already recorded is never changed. The approvals already saved on your computer fill theirs when the
   helper starts, without logging in to eForms. Checked on real approvals: item 9 matched the filing log for every
   Form 1 this helper filed.
-- Not tried live yet: the server path with a real server (covered by the automated tests).
+
+Tested live on a real inventory server: after updating it, the next start filled the filed date of every approved
+suppressor that was missing one, from the approvals saved on the computer. Check approvals itself hasn't been run
+with this version yet (no new approvals since); it uses the same item-9 reading.
 
 ## 1.2.1 (2026-11-05)
 
