@@ -7,9 +7,13 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
-## Unreleased
+## 1.2.4 (2026-11-06)
 
 CLEO notification packets.
+
+**Updating:** `git pull`, then run the installer again (`./install.sh`, Windows `.\install.cmd`). No new packages, and
+your settings, inventory and files carry over unchanged. The inventory server doesn't need updating. For the 5320.23
+CLEO copies (trusts), download the generator's CLEO copy of your template and add it in Settings.
 
 - **One PDF to mail to your CLEO after each batch**: a cover page (your CLEO's address for a #10 window envelope, how
   many applications, the date filed), then each application's Form 1 copy and 5320.23 copy. Neither shows the serial:
