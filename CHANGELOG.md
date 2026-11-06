@@ -7,6 +7,21 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## 1.2.3 (2026-11-06)
+
+Faster filing.
+
+**Updating:** `git pull`, then run the installer again (`./install.sh`, Windows `.\install.cmd`). No new packages, and
+your settings, inventory and files carry over unchanged. The inventory server doesn't need updating.
+
+- **Checkboxes are ticked right away.** eForms hides its real checkboxes behind styled labels, and the helper used to
+  spend about 4 seconds on each one before clicking the label. It now clicks the label first. That's several boxes
+  per Form 1 (applicant type, tax paid, no FFL, manufacturer code, verify, certification).
+- **The Certify page goes on as soon as eForms says the application validated** (it waits up to 15 seconds) instead
+  of a fixed 1.5 seconds. If the message never shows, it still refuses to submit.
+
+Tested live: 10 real filings for a trust, noticeably faster.
+
 ## 1.2.2 (2026-11-05)
 
 How long ATF takes, and filed dates for suppressors you filed before using this helper.
