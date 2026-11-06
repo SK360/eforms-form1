@@ -659,6 +659,7 @@ def file_flow(indices=None, force=False):
                 return pause()
     if not individual:
         con.print(f"  [green]✔[/] 5320.23s generated, dated {today}" + (f" ({1 + len(others)} per form)" if others else ""))
+    cleo_made = _stamp_cleo(rows, [] if individual else indices, today)
     deflen = str((settings.get("firearm") or {}).get("overall_length") or "12")
     lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}, "
                       f"{escape(rows[i]['overall_length'] or deflen)}\" overall" for i in indices)
@@ -668,6 +669,7 @@ def file_flow(indices=None, force=False):
         + (f"Responsible persons: you + {len(others)} other{'s' if len(others) > 1 else ''} "
            f"({escape(', '.join(p.get('title', '') for p in others))}), each with their 5320.23 dated today\n" if others else "") +
         f"SSN: {'you type it on each form' if ssn else 'left blank'}\n"
+        + _cleo_line(individual, cleo_made)
         + (_answers_line(settings) if individual else "") + "\n"
         "By confirming, you affirm that each is a legitimate Form 1 application (the portal's \"I affirm\"),\n"
         + ("that your answers to questions 11.A-11.M above are true today,\n" if individual else "") +
@@ -676,7 +678,8 @@ def file_flow(indices=None, force=False):
         title="Confirm", border_style="cyan", expand=False))
     if not questionary.confirm("Confirm and open the browser?", default=False, auto_enter=False).ask():
         return
-    opts = SimpleNamespace(dry=False, submit=True, auto_affirm=True, skip_ssn=not ssn, capture=False, force=force)
+    opts = SimpleNamespace(dry=False, submit=True, auto_affirm=True, skip_ssn=not ssn, capture=False, force=force, cleo=True)
+    before = {rows[i]["serial_number"]: rows[i]["status"] for i in indices}
     try:
         atf.file_rows(rows, indices, opts)
     finally:
@@ -684,7 +687,64 @@ def file_flow(indices=None, force=False):
         after = atf.load_rows()
         con.print()
         con.print(queue_table(after, only=indices, title="[bold]Result[/]"))
+        filed = [r["serial_number"] for r in after if r["serial_number"] in before and r["status"] == "filed"
+                 and before[r["serial_number"]] != "filed"]
+        if filed and atf.cleo_packet_after_batch():
+            _show_packets(filed)
+        elif filed:
+            waiting = len(atf.cleo_unpacked(after))
+            con.print(f"  [green]✔[/] CLEO copies saved for later. {waiting} filed form{'s' if waiting != 1 else ''} "
+                      f"{'are' if waiting != 1 else 'is'} in no CLEO packet yet: Advanced > Make CLEO packets makes one for all of them.")
     pause()
+
+
+def _stamp_cleo(rows, indices, when):
+    """Stamp the CLEO copies for these rows (everyone who has a CLEO-copy template). Optional: a problem is shown,
+    never blocks filing. Returns how many people's CLEO copies are made per form (0 = none)."""
+    made = 0
+    for i in indices:
+        res = atf.stamp_cleo_all(rows[i], when)
+        made = max(made, sum(1 for _, dest, probs in res if dest and not probs))
+        for n, _, probs in res:
+            if probs:
+                who = f" (responsible person {n})" if n > 1 else ""
+                con.print(f"  [yellow]⚠ CLEO copy{who} for {escape(rows[i]['serial_number'])}: {escape('; '.join(probs))}[/]")
+    if made:
+        con.print(f"  [green]✔[/] 5320.23 CLEO copies generated" + (f" ({made} per form)" if made > 1 else ""))
+    return made
+
+
+def _cleo_line(individual, made):
+    if not atf.cleo_packet_after_batch():
+        return ("CLEO packet: later, for several batches at once (Advanced > Make CLEO packets); "
+                "the CLEO copies are still saved now\n")
+    if individual:
+        return "CLEO packet: made after filing (the Form 1 CLEO copies)\n"
+    if not made:
+        return "CLEO packet: the Form 1 CLEO copies only (no 5320.23 CLEO copy is set: Settings > CLEO copies)\n"
+    return (f"CLEO packet: made after filing (Form 1 and 5320.23 CLEO copies"
+            + (f"; {made - 1} other responsible person{'s' if made > 2 else ''} get their own" if made > 1 else "") + ")\n")
+
+
+def _show_packets(serials):
+    """After filing (or from Advanced): build the CLEO packets and say what's in them. No names, no paths."""
+    try:
+        packets = atf.cleo_packets(serials)
+    except Exception as e:
+        con.print(f"  [yellow]⚠ The CLEO packet couldn't be made ({escape(str(e).splitlines()[0])}): Advanced > Make CLEO packets.[/]")
+        return
+    for n, path, apps, missing in packets:
+        whose = "your CLEO" if n == 1 else f"responsible person {n}'s CLEO (they mail it)"
+        if path:
+            con.print(f"  [green]✔[/] CLEO packet for {whose}: {apps} application{'s' if apps != 1 else ''}, cover page first; "
+                      "print it and mail it")
+        if missing:
+            con.print(f"  [yellow]⚠ Not in the packet for {whose}: {escape(', '.join(missing))}[/]\n"
+                      "    [dim]Advanced > Make CLEO packets gets Form 1 copies while the forms are still in process.[/]")
+    made = [path for _, path, _, _ in packets if path]
+    if made and questionary.confirm("Open the CLEO packet" + ("s" if len(made) > 1 else "") + "?", default=True).ask():
+        for path in made:
+            open_file(path)
 
 
 def _answers_line(settings):
@@ -756,6 +816,8 @@ def redate_flow():
         return
     for dest, missing in atf.stamp_all(rows[i], when.strip()):
         con.print(f"  [red]✖ not found after stamping: {', '.join(missing)}[/]" if missing else f"  [green]✔[/] wrote {escape(str(dest))}")
+    for _, dest, probs in atf.stamp_cleo_all(rows[i], when.strip()):
+        con.print(f"  [yellow]⚠ CLEO copy: {escape('; '.join(probs))}[/]" if probs else f"  [green]✔[/] wrote {escape(str(dest))}")
     pause()
 
 
@@ -1116,8 +1178,11 @@ def settings_menu():
     what = questionary.select("Settings:", choices=[
         questionary.Choice("All settings (you, your 5320.23 template, CLEO, firearm, files)" if trust_filing else
                            "All settings (you, your answers, CLEO, firearm, files)", settings_flow)]
-        + ([questionary.Choice(f"Other responsible persons in the trust ({len(atf.other_rps(t))})", rps_flow)] if trust_filing else [])
-        + [questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
+        + ([questionary.Choice(f"Other responsible persons in the trust ({len(atf.other_rps(t))})", rps_flow),
+            questionary.Choice(f"CLEO copies of the 5320.23 ({_cleo_count(t)})", cleo_flow)] if trust_filing else [])
+        + [questionary.Choice(f"CLEO packet after each batch ({'on' if atf.cleo_packet_after_batch(t) else 'off: you make it later'})",
+                              cleo_packet_flow),
+           questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
            questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
            questionary.Choice("Back", "back")]).ask()
     if callable(what):
@@ -1320,6 +1385,135 @@ def check_setup_flow():
     pause()
 
 
+def cleo_packet_flow():
+    """Settings > CLEO packet after each batch: on (the default) or off (one packet later for several batches)."""
+    t = _settings()
+    con.print("  [dim]Either way the Form 1 CLEO copies are saved right after each batch (eForms only has them while the\n"
+              "  forms are in process). Off: make one packet for several batches with Advanced > Make CLEO packets;\n"
+              "  it offers every filed form that isn't in a packet yet.[/]")
+    on = questionary.select("Make the CLEO packet:", default="on" if atf.cleo_packet_after_batch(t) else "off", choices=[
+        questionary.Choice("Right after each batch", "on"),
+        questionary.Choice("Later, when I ask (for several batches at once)", "off")]).ask()
+    if on is None:
+        return
+    t["cleo_packet_after_batch"] = on == "on"
+    _save_settings(t)
+    con.print("  [green]✔ Saved.[/]")
+    pause()
+
+
+def _cleo_count(t):
+    people = [None] + atf.other_rps(t)
+    have = sum(1 for p in people if atf.cleo_template(p).is_file())
+    return "not set" if not have else f"{have} of {len(people)} set" if len(people) > 1 else "set"
+
+
+def cleo_flow():
+    """Settings > CLEO copies: the CLEO copy of each responsible person's 5320.23 template (optional). Copied into
+    forms/ right away (it's the only thing this screen changes); test-stamped."""
+    t = _settings()
+    people = [None] + atf.other_rps(t)
+    con.print(Panel(
+        "The CLEO gets copies of each application: the Form 1 (eForms makes its CLEO copy; the helper saves it after\n"
+        "filing) and each responsible person's 5320.23. The generator makes a CLEO copy along with the ATF copy: download\n"
+        "both. Like the ATF copy, it gets each suppressor's caliber and the filing date (it has no serial: ATF leaves it\n"
+        "off the CLEO's copy). After each batch you get one PDF to mail to your CLEO, cover page first; each other\n"
+        "responsible person gets one for the CLEO where THEY live. Optional: filing works without it.",
+        title="CLEO copies", border_style="cyan", expand=False))
+    while True:
+        choices = [questionary.Choice("Done", "done")]
+        for n, p in enumerate(people, 1):
+            who = "your 5320.23" if p is None else f"responsible person {n}'s 5320.23 ({p.get('title', '')})"
+            state = "set" if atf.cleo_template(p).is_file() else "not set"
+            choices.append(questionary.Choice(f"CLEO copy of {who}: {state}", n - 1))
+        i = questionary.select("CLEO copies:", choices=choices).ask()
+        if i in (None, "done"):
+            return
+        person, dest = people[i], atf.cleo_template(people[i])
+        if dest.is_file():
+            what = questionary.select("This CLEO copy:", choices=[questionary.Choice("Replace it", "replace"),
+                                      questionary.Choice("Remove it (no CLEO copy is made)", "remove"), questionary.Choice("Back", "back")]).ask()
+            if what == "remove":
+                dest.unlink()
+                con.print("  [green]✔[/] Removed.")
+            if what != "replace":
+                continue
+        src = questionary.path("The CLEO copy of the same signed 5320.23 (drag it here):", validate=_file(suffixes=(".pdf",))).ask()
+        if not src:
+            continue
+        src = Path(_clean_path(src))
+        try:
+            kind = atf.copy_kind(src)
+        except Exception:
+            kind = None
+        if kind != "CLEO":
+            con.print("  [red]✖ That's the ATF copy: choose the CLEO copy (its footer says \"CLEO Copy\").[/]" if kind == "ATF" else
+                      "  [red]✖ That doesn't look like a 5320.23 CLEO copy from the generator.[/]")
+            continue
+        old = dest.read_bytes() if dest.is_file() else None
+        atf.FORMS.mkdir(exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        probs = atf.template_problems(person, cleo=True)
+        if probs:  # keep what worked before
+            dest.write_bytes(old) if old is not None else dest.unlink()
+            con.print(f"  [red]✖ It doesn't stamp: {escape('; '.join(probs))}. Not saved.[/]")
+            continue
+        warn = _cleo_differs(person, dest)
+        con.print("  [green]✔ Saved; it stamps correctly.[/]" + (f"\n  [yellow]⚠ {escape(warn)}[/]" if warn else ""))
+
+
+def _cleo_differs(person, cleo):
+    """Does the CLEO copy carry the same answers as the ATF template it goes with? A warning, or ''."""
+    tpl = atf.FORMS / (person["template"] if person else "5320.23.pdf")
+    try:
+        a, c = atf.read_template(tpl), atf.read_template(cleo)
+    except Exception:
+        return ""
+    keys = ("trust.name", "responsible_persons.0.dob", "cleo.department", "cleo.official")
+    differ = [k.split(".")[-1].replace("_", " ") for k in keys if a.get(k, "").upper() != c.get(k, "").upper()]
+    return f"It differs from the ATF copy ({', '.join(differ)}): were both made from the same answers?" if differ else ""
+
+
+def cleo_packets_flow():
+    """Advanced > Make CLEO packets: for filed rows (e.g. when the Form 1 copies couldn't be saved after filing).
+    5320.23 CLEO copies are re-stamped with each row's filed date; Form 1 copies need eForms (forms still in process)."""
+    rows = atf.load_rows()
+    filed = [i for i, r in enumerate(rows) if r["status"] in ("filed", "pending")]
+    if not filed:
+        con.print("  Nothing is filed and waiting at ATF. (An approved form's PDF no longer has the CLEO copy.)")
+        return pause()
+    waiting = {r["serial_number"] for r in atf.cleo_unpacked(rows)}
+    last = max((rows[i]["filed_date"] for i in filed if rows[i]["filed_date"]), default="",
+               key=lambda d: datetime.strptime(d, "%m/%d/%Y"))
+    choices = [_row_choice(rows, i, f"  filed {rows[i]['filed_date'] or '?'}"
+                           + ("" if rows[i]["serial_number"] in waiting else "  (in a packet)")) for i in filed]
+    for c, i in zip(choices, filed):  # every form in no packet yet (all your batches), else the last batch again
+        c.checked = rows[i]["serial_number"] in waiting if waiting else rows[i]["filed_date"] == last
+    picked = questionary.checkbox("Make a CLEO packet for these (space to tick, Enter to continue):", choices=choices,
+                                  validate=lambda a: bool(a) or "Pick at least one").ask()
+    if not picked:
+        return
+    for i in picked:
+        if rows[i]["filed_date"]:
+            for n, _, probs in atf.stamp_cleo_all(rows[i], rows[i]["filed_date"]):
+                if probs:
+                    con.print(f"  [yellow]⚠ CLEO copy ({'you' if n == 1 else f'responsible person {n}'}) for "
+                              f"{escape(rows[i]['serial_number'])}: {escape('; '.join(probs))}[/]")
+    need = {rows[i]["serial_number"]: rows[i]["filed_date"] for i in picked
+            if not atf._form1_cleo_path(rows[i]["serial_number"]).is_file()}
+    if need:
+        con.print(f"  The Form 1 CLEO copy of {len(need)} isn't saved yet: it comes from eForms (read-only; the form must still be in process).")
+        if questionary.confirm("Open the browser to get them?", default=True, auto_enter=False).ask():
+            try:
+                got, probs = atf.fetch_cleo_form1s(need)
+            finally:
+                P.finish()
+            for p in probs:
+                con.print(f"  [yellow]⚠ {escape(p)}[/]")
+    _show_packets([rows[i]["serial_number"] for i in picked])
+    pause()
+
+
 def rps_flow():
     """Add, change or remove the trust's other responsible persons, and save just that."""
     t = _settings()
@@ -1403,6 +1597,7 @@ def advanced_flow():
         questionary.Choice("Preview the steps for a row (no browser)", preview_flow),
         questionary.Choice("Practice run: fill a form without submitting", practice_flow)] + ([
         questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow)] if trust_filing else []) + [
+        questionary.Choice("Make CLEO packets for filed forms", cleo_packets_flow),
         questionary.Choice("Re-file a row that's already filed", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),
         questionary.Choice("Back", "back")]).ask()

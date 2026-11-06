@@ -1,8 +1,10 @@
 """Check my setup (atf.check_setup, Settings > Check my setup, CLI check-setup) on fake files; no eForms."""
+import shutil
+
 import pytest
 import yaml
 
-from conftest import FIXTURE, add_other_rp, atf, make_individual, pick, queue, ui
+from conftest import CLEO_FIXTURE, FIXTURE, add_other_rp, atf, make_individual, pick, queue, ui
 
 QUIT = lambda kw: "quit"  # noqa: E731
 EFT, JPG, PDF = b"1.001:249\x1d1.002:0502", b"\xff\xd8\xff\xe0\x00\x10JFIF", b"%PDF-1.4\n"
@@ -27,9 +29,10 @@ def by_label(res):
 
 def test_all_good(healthy):
     queue(("S1", "9"))
+    shutil.copy(CLEO_FIXTURE, atf.cleo_template())
     res = by_label(atf.check_setup())
     assert list(res) == ["Python", "Browser (Chromium)", "Helper folder", "Settings", "Your fingerprint file", "Your photo",
-                         "Trust document", "Supporting document 1", "Your 5320.23 template", "Inventory"]
+                         "Trust document", "Supporting document 1", "Your 5320.23 template", "Your 5320.23 CLEO copy", "Inventory"]
     assert {level for level, _ in res.values()} == {"ok"}
     assert res["Settings"][1] == "complete (a trust)" and res["Your 5320.23 template"][1].startswith("stamps correctly")
     assert res["Your fingerprint file"][1] == "found, 1 KB" and res["Inventory"][1] == "1 suppressor"
@@ -109,7 +112,7 @@ def test_menu_screen_shows_no_paths_or_names(healthy, answers, screen):
     answers(pick("Settings"), pick("Check my setup"), QUIT)
     ui.menu()
     out = screen.getvalue()
-    assert "Check my setup" in out and "Responsible person 2: fingerprint file" in out and "2 to look at" in out
+    assert "Check my setup" in out and "Responsible person 2: fingerprint file" in out and "4 to look at" in out  # + 2 CLEO copies not set
     assert str(healthy) not in out and "Jane" not in out and "DOE FAMILY TRUST" not in out.upper()
 
 

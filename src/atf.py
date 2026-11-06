@@ -6,7 +6,8 @@ Normally run through the menu: ./atf (src/ui.py). These commands are the plain C
         Stamp caliber (4d), serial (4e), signature date and CLEO line onto the user's completed
         forms/5320.23.pdf -> out/5320.23_<serial>.pdf. No row: all unfiled rows. Other responsible persons in the
         trust: their own template (forms/5320.23_<name>.pdf) -> out/5320.23_<serial>.<name>.pdf (their CLEO line is kept).
-  fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]
+        CLEO copies (forms/5320.23.cleo.pdf etc., if set) -> out/cleo/5320.23_<serial>[.<name>].cleo.pdf (no serial on them).
+  fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N] [--cleo]
         Open eForms, wait for the user to log in, open a new Form 1, then run the steps in
         data/mapping.yaml. No row: the first row in data/suppressors.csv not marked filed.
         --submit        also verify + certify + Sign & Submit (only if every read-back matched);
@@ -15,6 +16,7 @@ Normally run through the menu: ./atf (src/ui.py). These commands are the plain C
         --skip-ssn      skip the pause for typing your SSN (it's optional; leaving it blank may delay processing).
         --dry           print the steps with their values; no browser.
         --capture       after the steps, record each screen the user clicks through to out/capture_*.jsonl.
+        --cleo          after the batch, save each filed Form 1's CLEO copy (read-only) to out/cleo/.
   check-approved
         Read-only: download approved Form 1 PDFs (new ones only) and compare suppressors with your records.
   check-setup
@@ -892,12 +894,18 @@ def _find_5320(serial, warn=False, person=None):
     return hits[-1]
 
 
-def _check_5320(path, item, today):
-    """Problems with a generated 5320.23: serial not on page 1, or signature date not today."""
+def _check_5320(path, item, today, cleo=False):
+    """Problems with a generated 5320.23: serial not on page 1, or signature date not today.
+    cleo (a CLEO copy): the caliber must be on page 1 and the serial on NEITHER page (ATF leaves it off the CLEO's copy)."""
     import pymupdf
     doc = pymupdf.open(path)
     probs = []
-    if not _token_match(item["serial_number"], doc[0].get_text()):
+    if cleo:
+        if not _token_match(item["caliber"], doc[0].get_text()):
+            probs.append(f"caliber {item['caliber']} not found in {path.name}")
+        if any(_token_match(item["serial_number"], pg.get_text()) for pg in doc):
+            probs.append(f"{path.name} shows the serial (the CLEO copy must not)")
+    elif not _token_match(item["serial_number"], doc[0].get_text()):
         probs.append(f"serial {item['serial_number']} not found in {path.name}")
     if today not in doc[1].get_text():
         probs.append(f"{path.name} is not dated today ({today}); regenerate it if filing today")
@@ -909,21 +917,22 @@ def cmd_fields(args):
         print(f"{name}\t{f.get('/FT')}\t{f.get('/_States_', '')}")
 
 
-def stamp_5320(row, when, out_dir=None, person=None):
+def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
     """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23.
     Old values are redacted (text removed), photo/signature untouched. Returns (path, keys not found after).
     person: another responsible person's settings entry: their template, and their CLEO line is left as they made it
-    (item 5 is the CLEO where THEY live; the CLEO in your settings is yours)."""
+    (item 5 is the CLEO where THEY live; the CLEO in your settings is yours).
+    cleo: the CLEO copy instead (cleo_template(); it has no item 4e, so no serial) -> out/cleo/...cleo.pdf."""
     import pymupdf
-    out_dir = Path(out_dir or OUT)
-    out_dir.mkdir(exist_ok=True)
+    out_dir = Path(out_dir or (_cleo_dir() if cleo else OUT))
+    out_dir.mkdir(parents=True, exist_ok=True)
     # (page, key) -- located by searching the template, so layout changes are caught
-    targets = [(0, "4d"), (0, "4e"), (1, "date")] + ([] if person else [(0, "cleo")])
+    targets = [(0, "4d")] + ([] if cleo else [(0, "4e")]) + [(1, "date")] + ([] if person else [(0, "cleo")])
     new = {"4d": row["caliber"], "4e": row["serial_number"], "date": when}
     if not person:
         cl = load_trust()["cleo"]
         new["cleo"] = f"{cl['official']}, {cl['title']}"
-    doc = pymupdf.open(FORMS / (person["template"] if person else "5320.23.pdf"))
+    doc = pymupdf.open(cleo_template(person) if cleo else FORMS / (person["template"] if person else "5320.23.pdf"))
     boxes = {}
     for pg, k in targets:
         boxes[k] = _find_value_box(doc[pg], k)
@@ -933,7 +942,7 @@ def stamp_5320(row, when, out_dir=None, person=None):
     for pg, k in targets:
         x0, _, _, y1 = boxes[k]
         doc[pg].insert_text((x0, y1 - 2.5), str(new[k]), fontname="helv", fontsize=8)
-    dest = out_dir / (f"5320.23_{row['serial_number']}.{_rp_tag(person)}.pdf" if person else f"5320.23_{row['serial_number']}.pdf")
+    dest = out_dir / (f"5320.23_{row['serial_number']}" + (f".{_rp_tag(person)}" if person else "") + (".cleo" if cleo else "") + ".pdf")
     doc.save(dest)
     chk = pymupdf.open(dest)  # re-read: each new value must be in the text layer where it was stamped
     missing = [k for pg, k in targets if not chk[pg].search_for(str(new[k]), clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
@@ -943,6 +952,45 @@ def stamp_5320(row, when, out_dir=None, person=None):
 def stamp_all(row, when, out_dir=None):
     """Stamp the 5320.23 of every responsible person (you first) for one row: [(path, keys not found after)]."""
     return [stamp_5320(row, when, out_dir)] + [stamp_5320(row, when, out_dir, p) for p in other_rps(load_trust())]
+
+
+# ---------- CLEO notification copies ----------
+# The CLEO gets copies too: of the Form 1 (eForms builds it: the last pages of a SUBMITTED form's "View PDF", marked
+# "CLEO Copy") and of each responsible person's 5320.23 (the generator's "CLEO copy": ATF's CLEO-copy pages, with no
+# SSN/UPIN, no photo box and no item 4e). Neither shows the serial: ATF keeps it from the CLEO, so nothing made here for
+# the CLEO may show it either. Everything is optional: filing works without it. Files: out/cleo/.
+def _cleo_dir():
+    return OUT / "cleo"
+
+
+def cleo_template(person=None):
+    """The CLEO copy of a 5320.23 template: forms/5320.23.cleo.pdf (yours), forms/5320.23_<tag>.cleo.pdf (theirs)."""
+    return FORMS / (f"{Path(person['template']).stem}.cleo.pdf" if person else "5320.23.cleo.pdf")
+
+
+def copy_kind(path):
+    """'ATF' or 'CLEO' from a 5320.23's page-1 footer ("ATF Copy" / "CLEO Copy"); None if it has neither."""
+    import pymupdf
+    lines = {" ".join(ln.split()) for ln in pymupdf.open(path)[0].get_text().splitlines()}
+    return "CLEO" if "CLEO Copy" in lines else "ATF" if "ATF Copy" in lines else None
+
+
+def stamp_cleo_all(row, when):
+    """Stamp the CLEO copy of every responsible person who has one (you first) for one row, dated `when`.
+    Returns [(n, path or None, problems)]: n = 1 for you, 2.. for the others. Never raises: CLEO copies are optional."""
+    out = []
+    for n, person in enumerate([None] + other_rps(load_trust()), 1):
+        if not cleo_template(person).is_file():
+            continue
+        try:
+            if copy_kind(cleo_template(person)) != "CLEO":  # e.g. the ATF copy: it would show the CLEO an SSN and serial
+                out.append((n, None, ["its CLEO-copy template isn't a CLEO copy (Settings > CLEO copies)"]))
+                continue
+            dest, missing = stamp_5320(row, when, person=person, cleo=True)
+            out.append((n, dest, [f"could not place: {', '.join(missing)}"] if missing else _check_5320(dest, row, when, cleo=True)))
+        except (Exception, SystemExit) as e:
+            out.append((n, None, [str(getattr(e, "code", None) or e).splitlines()[0]]))
+    return out
 
 
 def cmd_fill_5320(args):
@@ -958,6 +1006,8 @@ def cmd_fill_5320(args):
             continue
         for dest, missing in stamp_all(row, when):
             print("wrote", dest, f"  !! NOT FOUND after stamping: {', '.join(missing)}" if missing else "")
+        for _, dest, probs in stamp_cleo_all(row, when):
+            print("wrote", dest, f"  !! {'; '.join(probs)}" if probs else "") if dest else print("  !! CLEO copy:", "; ".join(probs))
     print("Verify each PDF visually before use.")
 
 
@@ -1449,12 +1499,13 @@ def _parse_result_row(text):
     if not eid:
         return None
     control = re.search(r"(?<!\d)\d{10,11}(?!\d)", text)
-    dates = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", text)
-    return {"eform_id": eid.group(), "control_number": control.group() if control else "", "finalized": dates[-1] if dates else ""}
+    dates = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", text)  # created, submitted, finalized (none yet while in process)
+    return {"eform_id": eid.group(), "control_number": control.group() if control else "", "finalized": dates[-1] if dates else "",
+            "submitted": dates[1] if len(dates) > 1 else ""}
 
 
-def _approved_results(page, page_no=1, search=True):
-    """Search Form 1 + APPROVED (search=False: stay on the results page shown), go to results page `page_no`;
+def _approved_results(page, page_no=1, search=True, status="APPROVED"):
+    """Search Form 1 + APPROVED (or `status`; search=False: stay on the results page shown), go to results page `page_no`;
     returns (total rows, [{eform_id, control_number, finalized}]). Search only from a home page WITHOUT results: a
     table still showing is read as the new results, and the search coming back then resets it to page 1."""
     def rows():
@@ -1462,7 +1513,7 @@ def _approved_results(page, page_no=1, search=True):
     current = rows()
     if search:
         page.locator("#form-type-search").select_option(label="ATF Form 1 (5320.1)")
-        page.locator("#form-status-search").select_option(label="APPROVED")
+        page.locator("#form-status-search").select_option(label=status)
         _safe_click(page.locator("#queryBtn"), "Search")
         # The home page already shows an empty table ("Total Rows: 0") before any search, and results arrive a moment
         # after Search: wait for result rows rather than for the text (up to 30 s; then there really are none).
@@ -1474,7 +1525,7 @@ def _approved_results(page, page_no=1, search=True):
             current = rows()
     total = int((re.search(r"Total Rows:\s*(\d+)", page.inner_text("body")) or [0, 0])[1])
     if total and not current:
-        raise RuntimeError(f"eForms says {total} approved form(s) but no result rows could be read; the page layout "
+        raise RuntimeError(f"eForms says {total} {status.lower()} form(s) but no result rows could be read; the page layout "
                            "may have changed (use Advanced > Capture portal pages)")
     def click(loc, expected):
         nonlocal current
@@ -1582,6 +1633,231 @@ def _go_home(page, reload=False):
         page.locator("#form-type-search").wait_for(timeout=30000)
 
 
+# The Form 1's CLEO copy: eForms puts it in every SUBMITTED form's "View PDF" (pages marked "CLEO Copy" after the ATF
+# copy and the instructions; live capture 2026-11-06). An approved form's PDF is the 3-page registrant copy only, so it
+# has to be fetched while the form is in process. The CLEO pages don't show the serial: it's read from the ATF copy.
+SUBMITTED = "SUBMITTED/IN PROCESS"
+
+
+def _form1_cleo_path(serial):
+    return _cleo_dir() / f"Form1_{re.sub(r'[^A-Za-z0-9._-]', '_', serial)}.cleo.pdf"
+
+
+def _form1_index():
+    """out/cleo/form1_index.csv: eForm ID -> serial of every submitted form already opened (so it isn't opened again)."""
+    idx = _cleo_dir() / "form1_index.csv"
+    if not idx.exists():
+        return {}
+    with idx.open(newline="", encoding="utf-8-sig") as f:
+        return {r["eform_id"]: r["serial"] for r in csv.DictReader(f)}
+
+
+def _save_form1_index(index):
+    with (_cleo_dir() / "form1_index.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["eform_id", "serial"])
+        w.writerows(sorted(index.items()))
+
+
+def _cleo_pages(doc):
+    return [i for i, pg in enumerate(doc) if "CLEO Copy" in {" ".join(ln.split()) for ln in pg.get_text().splitlines()}]
+
+
+def save_form1_cleo(pdf, eform_id, index):
+    """Keep the CLEO-copy pages of a submitted form's PDF as out/cleo/Form1_<serial>.cleo.pdf. Returns the serial."""
+    import pymupdf
+    serial = (read_approved_pdf(pdf)["serial"] or "").strip()  # item 4g of the ATF copy (page 1; same layout)
+    doc = pymupdf.open(pdf)
+    pages = _cleo_pages(doc)
+    if not pages:
+        raise RuntimeError("its PDF has no CLEO copy pages")
+    if not serial:
+        raise RuntimeError("its serial couldn't be read")
+    out = pymupdf.open()
+    for i in pages:
+        out.insert_pdf(doc, from_page=i, to_page=i)
+    _cleo_dir().mkdir(parents=True, exist_ok=True)
+    out.save(_form1_cleo_path(serial), garbage=3, deflate=True)
+    index[eform_id] = serial
+    _save_form1_index(index)
+    return serial
+
+
+def _fetch_form1_cleo(page, ctx, wanted):
+    """In a logged-in session, READ-ONLY: save the Form 1 CLEO copy of each serial in `wanted` ({serial: filed date})
+    that isn't saved yet. Opens only submitted forms not opened before, and when the filed dates are known only
+    those submitted on one of them. Returns ({serial: path}, problems)."""
+    folder = _cleo_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    got = {s: _form1_cleo_path(s) for s in wanted if _form1_cleo_path(s).is_file()}
+    need = {s.upper(): s for s in wanted if s not in got}
+    if not need:
+        return got, []
+    index, problems = _form1_index(), []
+    dates = {_us_date(d) for s, d in wanted.items() if s.upper() in need}
+    _go_home(page, reload=True)  # a home page without results: Search only from there
+    total, rows = _approved_results(page, status=SUBMITTED)
+    pages = -(-total // max(len(rows), 1))
+    for n in range(1, pages + 1):
+        if not need:
+            break
+        if n > 1:
+            _, rows = _results_page(page, n, search=False, status=SUBMITTED)  # on from page n-1, which is showing
+        todo = [r for r in rows if r["eform_id"] not in index and ("" in dates or _us_date(r["submitted"]) in dates)]
+        for r in todo:
+            if not need:
+                break
+            emit("step", f"getting the CLEO copy of eForm …{r['eform_id'][-4:]}")
+            tmp = folder / f".{r['eform_id']}.part.pdf"
+            try:
+                _fetch_form_pdf(page, ctx, r, tmp)
+                serial = save_form1_cleo(tmp, r["eform_id"], index)
+                if serial.upper() in need:
+                    got[need.pop(serial.upper())] = _form1_cleo_path(serial)
+            except Exception as e:
+                problems.append(f"eForm …{r['eform_id'][-4:]}: {str(e).splitlines()[0]}")
+                emit("warn", f"could not get the CLEO copy of eForm …{r['eform_id'][-4:]}: {str(e).splitlines()[0]}")
+            finally:
+                if tmp.exists():  # the whole form (ATF copy included): only the CLEO pages are kept
+                    tmp.unlink()
+            _go_home(page)
+            _results_page(page, n, status=SUBMITTED)  # back to the same results page for the next row
+    if need:
+        problems.append(f"no submitted form found for {', '.join(sorted(need.values(), key=serial_key))}")
+    return got, problems
+
+
+def fetch_cleo_form1s(wanted):
+    """Log in and fetch the Form 1 CLEO copies of `wanted` ({serial: filed date}); logs out whatever happens."""
+    pw, ctx, page = _browser()
+    try:
+        page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter. From here the script only reads... ")
+        emit("section", "--- CLEO copies of the Form 1s ---", name="CLEO copies of the Form 1s")
+        return _fetch_form1_cleo(page, ctx, wanted)
+    finally:
+        _shutdown(page, ctx, pw)
+
+
+_STATE_ABBR = {v: k for k, v in US_STATES.items()}
+
+
+def _cleo_address(person=None):
+    """The CLEO's mailing address lines: yours from Settings, another responsible person's from their CLEO copy."""
+    if person is None:
+        cl = load_trust().get("cleo") or {}
+        a = cl.get("address") or {}
+        vals = {"official": cl.get("official", ""), "title": cl.get("title", ""), "department": cl.get("department", ""),
+                "street": a.get("street", ""), "city": a.get("city", ""), "state": a.get("state", ""), "zip": str(a.get("zip", ""))}
+    else:
+        try:
+            pre = read_template(cleo_template(person))
+        except Exception:
+            pre = {}
+        vals = {k: pre.get(f"cleo.{k}", "") for k in ("official", "title", "department")}
+        vals.update({k: pre.get(f"cleo.address.{k}", "") for k in ("street", "city", "state", "zip")})
+    city = " ".join(filter(None, [f"{vals['city']}," if vals["city"] else "", _STATE_ABBR.get(vals["state"], vals["state"]), vals["zip"]]))
+    return [x for x in (", ".join(filter(None, [vals["official"], vals["title"]])), vals["department"], vals["street"], city) if x.strip()]
+
+
+def _cleo_cover(doc, address, count, filed, what, theirs):
+    """Page 1 of a packet: the address where a #10 window envelope shows it, then a plain notification. No serials."""
+    p = doc.new_page(width=612, height=792)
+    p.insert_text((72, 96), datetime.now().strftime("%B %d, %Y").replace(" 0", " "), fontname="helv", fontsize=11)
+    for i, line in enumerate(address or ["(the CLEO's address: see item 5 of the enclosed copies)"]):
+        p.insert_text((72, 158 + 14 * i), line.upper(), fontname="helv", fontsize=11)
+    p.insert_text((72, 266), f"Re: notification of ATF Form 1 application{'s' if count > 1 else ''}", fontname="hebo", fontsize=11)
+    apps = f"{count} application{'s' if count > 1 else ''}"
+    body = (f"This is notification that {apps} to make and register an NFA firearm (ATF Form 1) "
+            f"{'were' if count > 1 else 'was'} filed with ATF on {filed}"
+            + (", on which I am a responsible person" if theirs else "") + f". Enclosed for each application: {what}.")
+    p.insert_textbox((72, 284, 540, 420), body, fontname="helv", fontsize=11)
+
+
+def cleo_packets(serials):
+    """One PDF to mail per CLEO for these filed serials: yours (Form 1 CLEO copies + your 5320.23 CLEO copies) and one
+    per other responsible person with a CLEO copy (theirs, for THEIR CLEO). Each: a cover page, then for each serial
+    in serial order its Form 1 copy and its 5320.23 copy. Returns [(n, path, applications, missing)] (n 1 = yours)."""
+    import pymupdf
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    trust = load_trust()
+    rows = {r["serial_number"].upper(): r for r in load_rows()}
+    serials = sorted(serials, key=serial_key)
+    individual = applicant_type(trust) == "individual"
+    filed = sorted({rows[s.upper()]["filed_date"] for s in serials if rows.get(s.upper(), {}).get("filed_date")},
+                   key=lambda d: datetime.strptime(d, "%m/%d/%Y"))
+    when, out, included = datetime.now().strftime("%Y-%m-%d %H%M"), [], set()
+    for n, person in enumerate([None] + ([] if individual else other_rps(trust)), 1):
+        tag = f".{_rp_tag(person)}" if person else ""
+        want_5320 = not individual and cleo_template(person).is_file()
+        if person is not None and not want_5320:
+            continue
+        apps, missing, kinds = [], [], set()
+        for s in serials:
+            pieces = []
+            if person is None:
+                f1 = _form1_cleo_path(s)
+                pieces.append(f1) if f1.is_file() else missing.append(f"{s}: Form 1 copy")
+            if want_5320:
+                c = _cleo_dir() / f"5320.23_{s}{tag}.cleo.pdf"
+                pieces.append(c) if c.is_file() else missing.append(f"{s}: 5320.23 copy")
+            kinds.update("Form 1" if pc.name.startswith("Form1_") else "5320.23" for pc in pieces)
+            if pieces:
+                apps.append(pieces)
+                included.add(s)
+        if not apps:
+            out.append((n, None, 0, missing))
+            continue
+        whose = "my" if person else "the responsible person's"  # plain ASCII: the cover's built-in font has no curly quotes
+        what = " and ".join(filter(None, [
+            "the CLEO copy of ATF Form 1" if "Form 1" in kinds else "",
+            f"the CLEO copy of {whose} Form 5320.23 (responsible person questionnaire)" if "5320.23" in kinds else ""]))
+        dates = ", ".join(filed[:-1]) + " and " + filed[-1] if len(filed) > 1 else "".join(filed)
+        doc = pymupdf.open()
+        _cleo_cover(doc, _cleo_address(person), len(apps), dates or "the date shown on the enclosed copies",
+                    what, theirs=person is not None)
+        for pieces in apps:
+            for pc in pieces:
+                doc.insert_pdf(pymupdf.open(pc))
+        dest = _cleo_dir() / f"CLEO packet {when}{tag}.pdf"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(dest, garbage=3, deflate=True)
+        out.append((n, dest, len(apps), missing))
+    if included:
+        _log_packet(sorted(included), next(path for _, path, _, _ in out if path))
+    return out
+
+
+def cleo_packet_after_batch(trust=None):
+    """Make the CLEO packet right after each batch (the default), or only when asked (Advanced > Make CLEO packets),
+    e.g. one packet for several batches. Either way the Form 1 CLEO copies are saved after each batch: eForms only has
+    them while the forms are in process."""
+    return (trust if trust is not None else load_trust()).get("cleo_packet_after_batch", True) is not False
+
+
+# out/cleo/packets.csv: which serials went into which packet, so "Make CLEO packets" can offer the ones in none yet.
+def _packets_log():
+    log = _cleo_dir() / "packets.csv"
+    if not log.exists():
+        return {}
+    with log.open(newline="", encoding="utf-8-sig") as f:
+        return {r["serial"]: r["packet"] for r in csv.DictReader(f)}
+
+
+def _log_packet(serials, path):
+    log = {**_packets_log(), **{s: Path(path).name for s in serials}}
+    with (_cleo_dir() / "packets.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["serial", "packet"])
+        w.writerows(sorted(log.items(), key=lambda kv: serial_key(kv[0])))
+
+
+def cleo_unpacked(rows=None):
+    """Filed forms (still at ATF) that aren't in any CLEO packet yet, in serial order."""
+    done = _packets_log()
+    return [r for r in sorted(rows if rows is not None else load_rows(), key=lambda r: serial_key(r["serial_number"]))
+            if r["status"] in ("filed", "pending") and r["serial_number"] not in done]
+
+
 # out/approved/: PDFs named by serial (A101.pdf); index.csv maps eForm ID -> file, because the results list only shows
 # eForm IDs and that is how a later run knows which forms it already has.
 def _approved_index(folder):
@@ -1664,15 +1940,15 @@ def fetch_approved():
     return found, problems
 
 
-def _results_page(page, n, search=True):
+def _results_page(page, n, search=True, status="APPROVED"):
     """Results page n (search=False: page on from the results shown), starting over from a freshly loaded home page
     once if it fails."""
     try:
-        return _approved_results(page, n, search)
+        return _approved_results(page, n, search, status)
     except Exception as e:
         emit("step", f"results page {n} didn't load ({str(e).splitlines()[0]}); trying once more")
         _go_home(page, reload=True)
-        return _approved_results(page, n)
+        return _approved_results(page, n, status=status)
 
 
 def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
@@ -1986,17 +2262,26 @@ FILE_KINDS = {"eft": ((b"1.001:",), "an EBTS fingerprint file (they start with 1
 CLOUD_FOLDERS = ("OneDrive", "iCloud", "Mobile Documents", "CloudStorage", "Dropbox", "Google Drive")
 
 
-def template_problems(person=None):
-    """Test-stamp your 5320.23 template (or another responsible person's) with a dummy serial in a temporary folder:
-    a list of problems (empty = it stamps correctly)."""
+def template_problems(person=None, cleo=False):
+    """Test-stamp your 5320.23 template (or another responsible person's; cleo: its CLEO copy) with a dummy serial in a
+    temporary folder: a list of problems (empty = it stamps correctly)."""
     import tempfile
     from datetime import date
     today = date.today().strftime("%m/%d/%Y")
+    path = cleo_template(person) if cleo else FORMS / (person["template"] if person else "5320.23.pdf")
+    try:
+        kind = copy_kind(path)
+    except Exception:
+        kind = None  # unreadable: stamping below says why
+    if cleo and kind == "ATF":
+        return ["this is the ATF copy; choose the CLEO copy the generator made with it"]
+    if not cleo and kind == "CLEO":
+        return ["this is the CLEO copy; choose the ATF copy (the CLEO copy goes in Settings > CLEO copies)"]
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            dest, missing = stamp_5320({"serial_number": "TEST123", "caliber": "22"}, today, out_dir=tmp, person=person)
-            return ([f"could not place: {', '.join(missing)}"] if missing
-                    else _check_5320(dest, {"serial_number": "TEST123"}, today))
+            item = {"serial_number": "TEST123", "caliber": "22"}
+            dest, missing = stamp_5320(item, today, out_dir=tmp, person=person, cleo=cleo)
+            return ([f"could not place: {', '.join(missing)}"] if missing else _check_5320(dest, item, today, cleo=cleo))
     except SystemExit as e:
         return [str(e.code)]
 
@@ -2103,6 +2388,19 @@ def check_setup():
             c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
                  ("ok", c[1], "stamps correctly (test serial, today's date)", c[3]))
         out += [c] if c else []
+        cl = cleo_template(person) if person is None or person.get("template") else None
+        if cl is not None and not cl.is_file():  # optional: filing works without it
+            out.append(("warn", f"{who} 5320.23 CLEO copy", "not set: no CLEO copy is made (Settings > CLEO copies)", str(cl)))
+        elif cl is not None:
+            c = _check_file(f"{who} 5320.23 CLEO copy", str(cl), "pdf")
+            if c[0] == "ok":
+                try:
+                    probs = template_problems(person, cleo=True)
+                except Exception as e:
+                    probs = [str(e).splitlines()[0] if str(e) else type(e).__name__]
+                c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
+                     ("ok", c[1], "stamps correctly (caliber and date; no serial, as ATF prints it)", c[3]))
+            out.append(c)
     if server_settings():
         import remote
         s = server_settings()
@@ -2497,15 +2795,29 @@ def file_rows(rows, todo, args):
             page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter (the script opens the Form 1)... ")
         else:
             page = _wait_for_login(page, "Log in (MFA included), open a NEW Form 1 and stop on the applicant-type page (Trust/Individual choice). Without --auto-affirm, click the \"I affirm\" popup yourself. Then press Enter... ")
+        filed_now = {}
         for n, idx in enumerate(todo):
             if not _start_form(page, portal, args, rows[idx]["serial_number"], first=not n):
                 break
-            if not _file_one(page, args, trust, steps, rows, idx) and args.submit:
+            if _file_one(page, args, trust, steps, rows, idx):
+                filed_now[rows[idx]["serial_number"]] = rows[idx].get("filed_date") or today
+            elif args.submit:
                 emit("warn", f"Row {idx + 1} was not filed; stopping the batch.")
                 break
             if args.submit and outbox():
                 emit("warn", "A filing result hasn't reached your server yet; stopping the batch before the next row.")
                 break
+        if args.submit and getattr(args, "cleo", False) and filed_now:
+            # Same session (eForms allows one), read-only. Never changes a filing result: a failure is a warning.
+            emit("section", "--- CLEO copies of the Form 1s ---", name="CLEO copies of the Form 1s")
+            try:
+                got, probs = _fetch_form1_cleo(page, ctx, filed_now)
+                emit("info", f"Form 1 CLEO copies saved: {len(got)} of {len(filed_now)}")
+                for p in probs:
+                    emit("warn", f"CLEO copy: {p} (Advanced > Make CLEO packets tries again while the forms are in process)")
+            except Exception as e:
+                emit("warn", f"Couldn't get the Form 1 CLEO copies ({str(e).splitlines()[0]}); "
+                             "Advanced > Make CLEO packets tries again while the forms are in process.")
         if args.capture:
             OUT.mkdir(exist_ok=True)
             dest = OUT / f"capture_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
@@ -2563,7 +2875,7 @@ def main():
     p = sub.add_parser("check-setup", help="check settings, files, templates and the browser (no eForms)"); p.set_defaults(fn=cmd_check_setup)
     p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
     p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
-    p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.set_defaults(fn=cmd_fill_form1)
+    p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.add_argument("--cleo", action="store_true", help="after the batch, save each filed Form 1's CLEO copy to out/cleo/ (read-only)"); p.set_defaults(fn=cmd_fill_form1)
     a = ap.parse_args(); a.fn(a)
 
 

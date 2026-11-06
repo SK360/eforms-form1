@@ -193,13 +193,14 @@ def test_settings_goes_straight_to_other_responsible_persons(configured, answers
 
 
 def test_individual_settings_menu(configured, answers, screen):
-    """An individual has no other responsible persons: All settings, where the inventory lives, Check my setup."""
+    """An individual has no other responsible persons (nor 5320.23 CLEO copies): All settings, when the CLEO packet is
+    made, where the inventory lives, Check my setup."""
     from conftest import make_individual
     make_individual()
     seen = {}
     answers(lambda kw: ui.settings_menu, lambda kw: (seen.setdefault("menu", [str(c.title) for c in kw["choices"]]), ui.settings_flow)[1],
             lambda kw: None, QUIT)
     ui.menu()
-    assert seen["menu"] == ["All settings (you, your answers, CLEO, firearm, files)",
+    assert seen["menu"] == ["All settings (you, your answers, CLEO, firearm, files)", "CLEO packet after each batch (on)",
                             "Where your inventory lives (this computer)", "Check my setup (files, templates, browser; no eForms)", "Back"]
     assert answers.asked[2][1] == "Who files the Form 1s?"

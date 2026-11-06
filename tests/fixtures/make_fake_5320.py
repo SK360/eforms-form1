@@ -4,6 +4,7 @@ ATF's blank 5320.23 (public form) with made-up answers written the way the 5320.
 in an embedded NimbusSans font, at the generator's positions. Includes a fake SSN so tests can prove it is never read.
 
     python tests/fixtures/make_fake_5320.py path/to/blank_f5320.23.pdf
+    python tests/fixtures/make_fake_5320.py --cleo     # fake_5320_cleo.pdf, from fake_5320.pdf (no blank form needed)
 
 The blank form: https://www.atf.gov/firearms/docs/form/form-5320-23-national-firearms-act-nfa-responsible-person-questionnaire
 (a copy also ships inside the generator's repo: static/f_5320.23_national_firearms_act_nfa_responsible_person_questionnaire.pdf).
@@ -45,5 +46,28 @@ def main(blank, dest=Path(__file__).with_name("fake_5320.pdf")):
     print("wrote", dest)
 
 
+# The generator's CLEO copy is ATF's CLEO-copy pages: the same labels and values at the same places, without the SSN/UPIN,
+# the photo box, item 4e (serial: label and value) and page 2's instructions, and with a "CLEO Copy" footer (compared
+# with a real ATF/CLEO pair 2026-11-06). Removing exactly those from the fake ATF copy gives a stand-in for it.
+CLEO_REMOVED = [
+    (0, (20, 292, 310, 318)),     # 3d/3f: SSN / UPIN label and value (the DOB right of it stays)
+    (0, (440, 290, 592, 386)),    # 3e: photo box
+    (0, (240, 440, 420, 472)),    # 4e: serial number label and value
+    (1, (20, 486, 592, 746)),     # page 2: instructions
+    (0, (280, 750, 340, 766)), (1, (280, 750, 340, 766)),   # "ATF Copy" footer
+]
+
+
+def cleo(src=Path(__file__).with_name("fake_5320.pdf"), dest=Path(__file__).with_name("fake_5320_cleo.pdf")):
+    doc = pymupdf.open(src)
+    for pno, rect in CLEO_REMOVED:
+        doc[pno].add_redact_annot(pymupdf.Rect(rect), fill=(1, 1, 1))
+    for page in doc:
+        page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
+        page.insert_text((286, 762), "CLEO Copy", fontname="tiro", fontsize=9)
+    doc.save(dest, garbage=4, deflate=True)
+    print("wrote", dest)
+
+
 if __name__ == "__main__":
-    main(sys.argv[1])
+    cleo() if sys.argv[1:] == ["--cleo"] else main(sys.argv[1])

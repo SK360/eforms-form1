@@ -7,6 +7,28 @@ To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows:
 requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
 the new copy.
 
+## Unreleased
+
+CLEO notification packets.
+
+- **One PDF to mail to your CLEO after each batch**: a cover page (your CLEO's address for a #10 window envelope, how
+  many applications, the date filed), then each application's Form 1 copy and 5320.23 copy. Neither shows the serial:
+  ATF leaves it off the CLEO's copies.
+- **The Form 1 copy comes from eForms**: every submitted form's PDF ends with "CLEO Copy" pages. After a batch the
+  helper opens the forms it just filed (read-only) and keeps those pages.
+- **The 5320.23 copy is optional** (trusts): add the generator's CLEO copy in **Settings > CLEO copies of the
+  5320.23**; it's stamped like the ATF copy (caliber, date, current CLEO official). Each other responsible person can
+  add theirs and gets their own packet for their CLEO.
+- **Advanced > Make CLEO packets** for forms filed earlier, while they're still in process. It ticks every filed form
+  that isn't in a packet yet, so several batches can go out as one: turn off **Settings > CLEO packet after each
+  batch** (the copies are still saved after each batch).
+- Check my setup says whether each 5320.23 CLEO copy is set and stamps correctly. A CLEO copy picked as the ATF
+  template (or the other way round) is now refused.
+
+Tested live: Advanced > Make CLEO packets for 15 forms in process (a trust; Form 1 copies fetched from eForms,
+5320.23 CLEO copies stamped, one packet). Not yet tried live: the automatic fetch at the end of a real batch, and an
+individual's submitted form.
+
 ## 1.2.3 (2026-11-06)
 
 Faster filing.

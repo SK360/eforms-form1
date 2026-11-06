@@ -18,7 +18,8 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
 - **Normal use:** `./atf` -> Add suppressors -> File N queued. The menu stamps the 5320.23s (dated today), asks once
   per batch whether to pause for the SSN, shows one confirmation (= "I affirm" + authorization to Sign & Submit),
   opens the browser, the user logs in, then per row: open a new Form 1 (home page `#FORM53201LinkId`), fill, read back,
-  certify, sign, wait for the user's emailed code + PIN, record the application number. Pending rows are resolved
+  certify, sign, wait for the user's emailed code + PIN, record the application number; after the batch, save each
+  form's Form 1 CLEO copy and make the CLEO packet to mail. Pending rows are resolved
   from the menu. Settings (a trust: All settings | Other responsible persons) and Advanced (preview steps, re-date a
   5320.23, re-file, practice run, capture portal pages) are in the menu.
 - **5320.23 template:** the user makes ONE signed 5320.23 with https://jakepro716.github.io/atf-5320-generator/
@@ -37,8 +38,8 @@ plain CLI, kept for debugging/scripting:
 
 | Command | What it does |
 |---|---|
-| `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`, and each other responsible person's template -> `out/5320.23_<serial>.<first-last>.pdf` (no CLEO line). No row = all unfiled rows. |
-| `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. The menu's "File" = `--auto-affirm --submit` (+ `--skip-ssn` unless the user chose to type the SSN). |
+| `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`, and each other responsible person's template -> `out/5320.23_<serial>.<first-last>.pdf` (no CLEO line). Plus each CLEO copy that's set -> `out/cleo/5320.23_<serial>[.<first-last>].cleo.pdf` (no serial). No row = all unfiled rows. |
+| `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N] [--cleo]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. `--cleo` saves each filed form's Form 1 CLEO copy after the batch. The menu's "File" = `--auto-affirm --submit --cleo` (+ `--skip-ssn` unless the user chose to type the SSN). |
 | `check-setup` | Checks settings, files, templates, Chromium and the inventory without eForms (menu: Settings > Check my setup); exit 1 if something must be fixed. |
 | `serve` | The phone page (src/phone.py) on the home network until Ctrl-C (menu: Inventory > Open on my phone). |
 | `inspect` | Dumps controls + visible text + dialog text of the page you're on, to map new/changed steps. |
@@ -269,6 +270,32 @@ plain CLI, kept for debugging/scripting:
   table reads as the new results, then the search resets to page 1): page n is reached from page n-1
   (`search=False`), Search only after Go Home; a failed page is retried once from a reloaded home page; if it still
   fails, paging stops with a problem line (✖) and the report covers every PDF already saved (index.csv).
+- **CLEO notification copies** (added 2026-11-06; optional; files in `out/cleo/`, path via `_cleo_dir()`). The CLEO
+  gets the Form 1 and each RP's 5320.23, and **neither shows the serial** (ATF leaves it off the CLEO's copies; so must
+  everything made for the CLEO, the packet's cover included). 5320.23: the generator's CLEO copy = ATF's CLEO-copy
+  pages (same labels/values at the same places, minus SSN/UPIN, photo box, item 4e label+value, page-2
+  instructions; footer "CLEO Copy"; compared with a real pair). `cleo_template(person)` = `forms/5320.23.cleo.pdf` /
+  `forms/5320.23_<tag>.cleo.pdf` (file present = on; no settings key), `copy_kind(path)` (footer), `stamp_5320(...,
+  cleo=True)` (4d, date, your CLEO line; no 4e), `_check_5320(cleo=True)` (caliber there, serial absent),
+  `stamp_cleo_all(row, when)` (never raises; refuses a non-CLEO copy), `template_problems(person, cleo)` (also refuses
+  a CLEO copy as the ATF template). Menu Settings > CLEO copies of the 5320.23 (`cleo_flow`, trusts; outside the
+  wizard so its positional test scripts stay valid). Form 1: a SUBMITTED form's View PDF (live capture 2026-11-06) is
+  ATF copy (pp 1-3) + instructions (4-7) + "CLEO Copy" (8-10, no serial); an approved form's PDF is only the 3-page
+  registrant copy, so it's fetched while in process. `_fetch_form1_cleo(page, ctx, {serial: filed date})` (search
+  `SUBMITTED` = "SUBMITTED/IN PROCESS" via `_approved_results(status=)`; rows have View Form + **Withdraw Form**;
+  opens only unopened rows submitted on a wanted date; serial from the ATF copy via `read_approved_pdf`;
+  `save_form1_cleo` keeps the CLEO pages as `Form1_<serial>.cleo.pdf`, the full PDF is deleted;
+  `out/cleo/form1_index.csv` eForm ID -> serial) runs at the end of `file_rows` with `args.cleo` (menu: always), same
+  session, a failure is a warning; `fetch_cleo_form1s` logs in for it (Advanced > Make CLEO packets,
+  `cleo_packets_flow`, which re-stamps 5320.23 CLEO copies with each row's filed_date). `cleo_packets(serials)` ->
+  `CLEO packet <date> <time>[.<tag>].pdf`: cover (`_cleo_cover`: address at a #10 window, count, filed date, no
+  serials; others' CLEO address read from their CLEO copy) + per serial Form 1 copy (yours only) + 5320.23 copy;
+  missing pieces listed; `out/cleo/packets.csv` (serial -> packet) records what each packet included, `cleo_unpacked()`
+  = filed/pending rows in none (Make CLEO packets pre-ticks them). Menu `_show_packets` after filing, unless
+  `cleo_packet_after_batch: false` in trust.yaml (`cleo_packet_after_batch()`, Settings > CLEO packet after each
+  batch, `cleo_packet_flow`; trusts and individuals): then only a reminder; the Form 1 copies are fetched either way. Tests: `tests/test_cleo.py`,
+  `tests/fixtures/fake_5320_cleo.pdf` (`make_fake_5320.py --cleo` derives it from the fake ATF copy); the `portal`
+  fixture stubs `_fetch_form1_cleo` (no search page there; `state["cleo_fetches"]`).
 - questionary gotcha: `Choice(title, None)` returns the TITLE as the value; menu items use explicit string values.
 - Keep code Python 3.9-compatible (stock macOS python3): no `X | Y` types, no backslashes inside f-string expressions.
 - **Screenshot-safe menu (users share screenshots):** no trust name anywhere in `ui.py`; application numbers shown as
@@ -285,7 +312,8 @@ plain CLI, kept for debugging/scripting:
 ## What is automated vs. manual
 Automated: applicant pages, responsible-person popup (uploads of 5320.23/photo/EFT, DOB, birth/residence,
 sex, race), the trust's other responsible persons (Add Responsible Person: name, address, email, the same uploads/fields), CLEO page, firearm (manufacturer code FMI, silencer, model, caliber, serial, overall length, description),
-supporting documents, trust document, read-back verification, verify-and-Next, certification, Sign & Submit, logging.
+supporting documents, trust document, read-back verification, verify-and-Next, certification, Sign & Submit, logging,
+CLEO copies (Form 1 CLEO pages saved after the batch, 5320.23 CLEO copies stamped) and the mail packet. Mailing it is manual.
 
 **Always manual (by design, do not automate):** logging in/MFA; typing the **SSN** (optional; the user chooses per
 batch whether to pause for it); the **6-digit emailed verification code**; the **eForms PIN**. Credentials, SSN, codes
@@ -424,6 +452,9 @@ prints steps without a browser. `--capture` records screens after the automated 
 - Other responsible persons (added 2026-10-21 on request): practice run passed 2026-10-22 with the user as RP 2 (own
   EFT); a real second person (their own EFT/name) not yet. Verify page RP read-back not mapped. U.S. citizens only.
 - Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
+- CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms). Not yet live: the
+  fetch at the end of a real batch (`file_rows` with `cleo`), and an individual's submitted PDF (assumed to carry the
+  same "CLEO Copy" pages).
 - Files suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields. They are only
   inventoried, from Check approvals.
 - Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on

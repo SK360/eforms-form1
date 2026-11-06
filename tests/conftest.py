@@ -26,6 +26,7 @@ import ui  # noqa: E402
 import remote  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320.pdf"
+CLEO_FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320_cleo.pdf"  # its CLEO copy (make_fake_5320.py --cleo)
 TODAY = date.today().strftime("%m/%d/%Y")
 # What read_template() must get from the fake template (it also carries a fake SSN that must never come back)
 FIXTURE_ANSWERS = {
@@ -257,6 +258,9 @@ def portal(monkeypatch):
     monkeypatch.setattr(Locator, "wait_for", lambda self, timeout=None, state=None: wait_for(self, timeout=min(timeout or 5000, 5000), state=state))
     real_mapping = yaml.safe_load(atf.MAPPING.read_text(encoding="utf-8"))["portal"]
     monkeypatch.setattr(atf, "load_mapping", lambda: {"portal": {"steps": PORTAL_STEPS, "new_form_steps": real_mapping["new_form_steps"]}})
+    # this fake portal has no search page; the Form 1 CLEO copy fetch is tested on the fake dashboard (test_cleo.py)
+    state["cleo_fetches"] = []
+    monkeypatch.setattr(atf, "_fetch_form1_cleo", lambda page, ctx, wanted: (state["cleo_fetches"].append(dict(wanted)), ({}, []))[1])
     logout = atf._logout
 
     def tracked_logout(page):

@@ -83,7 +83,9 @@ def test_approved_with_conditions(tmp_path):
 def test_parse_result_row():
     # the shape of a real results row (made-up numbers): eForm ID, control #, ICN (empty), name, 3 dates, actions
     row = atf._parse_result_row("1234567\t20261234567\t\tJOHN DOE\t8/3/2026\t8/3/2026\t8/15/2026\t View Form Submit Void")
-    assert row == {"eform_id": "1234567", "control_number": "20261234567", "finalized": "8/15/2026"}
+    assert row == {"eform_id": "1234567", "control_number": "20261234567", "finalized": "8/15/2026", "submitted": "8/3/2026"}
+    # a submitted form (in process): created and submitted dates only, "Withdraw Form" instead of "Submit Void"
+    assert atf._parse_result_row("1234568	20261234568		JOHN DOE	11/5/2026	11/6/2026		 View Form Withdraw Form")["submitted"] == "11/6/2026"
     assert atf._parse_result_row("ID 12345678 Permit / Control Number 20269999999 1/1/2026 1/2/2026 4/23/2026")["eform_id"] == "12345678"
     assert atf._parse_result_row("1234567\t2026123456\t\tJOHN DOE\t2/1/2026\t2/1/2026\t2/14/2026")["control_number"] == "2026123456"
     assert atf._parse_result_row("No data to display") is None
@@ -110,16 +112,16 @@ def test_safe_click_refuses_anything_unexpected():
 
 
 DASHBOARD = """<a href='#' onclick="document.title='LOGGEDOUT'">Log Out</a><div id=app></div><script>
-const FORMS = %s, PER = %d, LINKS = %d, MODE = %s;  // LINKS page numbers shown at a time, in blocks or sliding
+const FORMS = %s, PER = %d, LINKS = %d, MODE = %s, STATUS = %s;  // LINKS page numbers shown at a time, in blocks or sliding
 const app = () => document.getElementById('app');
 function home() {
   app().innerHTML = `<select id="form-type-search"><option>Select...</option><option>ATF Form 1 (5320.1)</option><option>ATF Form 4 (5320.4)</option></select>
-   <select id="form-status-search"><option>Select...</option><option>APPROVED</option><option>DISAPPROVED</option></select>
+   <select id="form-status-search"><option>Select...</option><option>APPROVED</option><option>DISAPPROVED</option><option>SUBMITTED/IN PROCESS</option></select>
    <button id="queryBtn" onclick="search()">Search</button>
    <div id=results>No data to display 1 10 | Total Rows: 0</div>`;   // like eForms: an empty table before searching
 }
 function search() {
-  const ok = document.getElementById('form-type-search').value.startsWith('ATF Form 1') && document.getElementById('form-status-search').value === 'APPROVED';
+  const ok = document.getElementById('form-type-search').value.startsWith('ATF Form 1') && document.getElementById('form-status-search').value === STATUS;
   window.hits = ok ? FORMS : []; setTimeout(() => showPage(1), 1500);   // results arrive after a delay, like the real portal
 }
 function showPage(n) {
@@ -127,8 +129,9 @@ function showPage(n) {
   const T = t => `<span class="col-title">${t} </span>`;
   const rows = window.hits.slice((n - 1) * PER, n * PER).map(f => `<tr><td></td><td>${T('ID')}<span class="ng-star-inserted"><a id="eformId-link"> ${f.id} </a></span></td>
      <td>${T('Permit / Control Number')}2026${f.id}0</td><td></td><td>${T('Created By')}JOHN DOE</td>
-     <td>1/1/2026</td><td>1/2/2026</td><td>${f.fin}</td><td><button style="display:none" onclick="fetch('/clicked/hidden')">View Form</button>
-     <button onclick="viewForm('${f.id}')">View Form</button> <button onclick="fetch('/clicked/void')">Submit Void</button></td></tr>`).join('');
+     <td>1/1/2026</td><td>${f.sub}</td><td>${f.fin}</td><td><button style="display:none" onclick="fetch('/clicked/hidden')">View Form</button>
+     <button onclick="viewForm('${f.id}')">View Form</button> ${STATUS === 'APPROVED' ? `<button onclick="fetch('/clicked/void')">Submit Void</button>`
+     : `<button onclick="fetch('/clicked/withdraw')">Withdraw Form</button>`}</td></tr>`).join('');
   const pages = Math.ceil(window.hits.length / PER);
   let lo = MODE.startsWith('block') ? Math.floor((n - 1) / LINKS) * LINKS + 1 : Math.max(1, Math.min(n - Math.floor(LINKS / 2), pages - LINKS + 1));
   const nums = Array.from({length: Math.min(LINKS, pages - lo + 1)}, (_, i) => lo + i);
@@ -153,7 +156,8 @@ home();
 
 @pytest.fixture
 def dashboard(monkeypatch):
-    """dashboard(forms) -> state; forms = [(eform_id, finalized, pdf_bytes)]. state['pdf_hits'], state['bad_clicks']."""
+    """dashboard(forms) -> state; forms = [(eform_id, finalized, pdf_bytes[, submitted])]. state['pdf_hits'], state['bad_clicks'].
+    status: what the search finds them under (APPROVED; SUBMITTED/IN PROCESS rows have Withdraw Form, not Submit Void)."""
     from playwright.sync_api import sync_playwright
     state = {"pdf_hits": 0, "bad_clicks": []}
     logout = atf._logout
@@ -163,9 +167,10 @@ def dashboard(monkeypatch):
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(forms, start="/home", per=10, links=5, mode="slide"):
+    def configure(forms, start="/home", per=10, links=5, mode="slide", status="APPROVED"):
         pdfs = {f[0]: f[2] for f in forms}
-        html = DASHBOARD % (json.dumps([{"id": f[0], "fin": f[1]} for f in forms]), per, links, json.dumps(mode))
+        html = DASHBOARD % (json.dumps([{"id": f[0], "fin": f[1], "sub": f[3] if len(f) > 3 else "1/2/2026"} for f in forms]),
+                            per, links, json.dumps(mode), json.dumps(status))
 
         def route(r):
             path = r.request.url.split("fake.test", 1)[1]
@@ -247,11 +252,11 @@ def test_results_page_that_wont_load(configured, dashboard, monkeypatch):
     state, fails = dashboard(FORMS), {"left": 0}
     real = atf._approved_results
 
-    def flaky(page, page_no=1, search=True):
+    def flaky(page, page_no=1, search=True, status="APPROVED"):
         if page_no == 2 and fails["left"]:
             fails["left"] -= 1
             raise RuntimeError("Locator.inner_text: Timeout 15000ms exceeded.\nCall log: ...")
-        return real(page, page_no, search)
+        return real(page, page_no, search, status)
     monkeypatch.setattr(atf, "_approved_results", flaky)
 
     fails["left"] = 99                                            # page 2 never loads: page 1 is still saved and reported

@@ -1,8 +1,10 @@
 # eForms Form 1 helper (suppressors, filed by a trust or by you as an individual)
 
 Fills and submits ATF Form 1s in eForms for suppressors you make, either through your trust (it prepares the 5320.23
-Responsible Person Questionnaire for each one) or as an individual. You stay in the loop: you log in, optionally type
-your SSN, and enter the emailed code and your PIN for every submission.
+Responsible Person Questionnaire for each one) or as an individual. After a batch it makes the CLEO notification
+packet to print and mail. It also keeps your inventory: approvals read back from eForms, builds, and a page for your
+phone. You stay in the loop: you log in, optionally type your SSN, and enter the emailed code and your PIN for every
+submission.
 
 > **Disclaimer.** Unofficial, provided as-is with no warranty, not affiliated with or endorsed by ATF. You are solely
 > responsible for every application it files for you: each submission is your certification under penalty of perjury.
@@ -15,9 +17,11 @@ Currently supports: a trust with one or more responsible persons (U.S. citizens)
 **Contents:** [What it looks like](#what-it-looks-like) ·
 Getting set up: [Before you start](#before-you-start), [Get it](#get-it), [Install](#install-once),
 [Your 5320.23 template](#making-your-532023-template-once-trusts-only),
-[Other responsible persons](#other-responsible-persons-trusts), [First run](#first-run-check-my-setup-and-a-practice-run) ·
+[Other responsible persons](#other-responsible-persons-trusts), [CLEO copies](#cleo-copies-optional),
+[First run](#first-run-check-my-setup-and-a-practice-run) ·
 [Using it](#using-it): [Adding](#adding-and-editing-suppressors), [Filing](#filing), [Approvals](#checking-approvals),
-[Inventory](#your-inventory), [Builds](#builds), [On your phone](#on-your-phone), [Advanced](#advanced) ·
+[Inventory](#your-inventory), [Builds](#builds), [On your phone](#on-your-phone), [Settings](#settings),
+[Advanced](#advanced) ·
 [Your records](#your-records-and-where-they-live) ·
 [Optional: an inventory server](#optional-an-inventory-server) · [Troubleshooting](#troubleshooting) · [License](#license)
 
@@ -37,6 +41,9 @@ You enter the emailed code and your PIN.
 
 ![Confirming a batch](docs/screenshots/03-file.png)
 ![Filing a form](docs/screenshots/04-filing.png)
+
+After the batch: one PDF to mail to your CLEO, cover page first, then each application's CLEO copies (see
+[CLEO copies](#cleo-copies-optional)).
 
 **Filing as an individual:** the same, without the 5320.23 and trust document. Your answers to questions 11.A-11.M
 are shown in the confirmation, then read back on the verify page, with your citizenship, before it signs.
@@ -65,7 +72,8 @@ compares them with your records) and **Check my setup**. Your inventory on your 
   batch. The helper only files when every answer is No (otherwise file that application yourself in eForms).
 - **A trust with other responsible persons** (e.g. a co-trustee): each of them goes on every Form 1 with their own
   signed 5320.23 template, photo and `.eft` (see [Other responsible persons](#other-responsible-persons-trusts)).
-- Optional: supporting documents for the firearm (e.g. photos of the tools/materials you'll use).
+- Optional: supporting documents for the firearm (e.g. photos of the tools/materials you'll use), and (trusts) the
+  generator's CLEO copy of your 5320.23 template, for the [CLEO packets](#cleo-copies-optional).
 
 ### Get it
 - **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):
@@ -89,6 +97,7 @@ checks that Chromium can start. On Debian/Ubuntu it installs the system librarie
 for your password), and you may first need `sudo apt install python3-venv`. On other distributions, if the installer
 says libraries are missing, install them with your package manager. Filing has been tested live on Mac and Windows;
 on Linux, so far only by the automated tests.
+
 **Windows:**
 1. Install **Python 3.13** (not the newest: 3.15 doesn't work with this yet, and it's what python.org's big Download
    button gives you now). Easiest way:
@@ -119,7 +128,8 @@ At https://jakepro716.github.io/atf-5320-generator/ fill in a **single form** (n
    **caliber `00`** and **serial `TEMPLATE`**. Fill these in; don't leave them blank, the helper looks for them.
 6. **CLEO:** agency, official's name and title, and the agency's full mailing address.
 7. **Questions, citizenship, place of birth:** answer them truthfully; they carry into every filing unchanged.
-8. **Sign, date it, download** the **ATF copy** (the 2-page questionnaire, not the CLEO copy).
+8. **Sign, date it, download** the **ATF copy** (the 2-page questionnaire) and, if you want the helper to make your
+   CLEO notification packets, the **CLEO copy** too (see [CLEO copies](#cleo-copies-optional)).
 
 On the first run of `./atf`, the helper asks for this PDF first (drag it into the window) and reads your answers
 from it: trust name, date of birth, states, CLEO details and model come pre-filled, so you mostly press Enter (it
@@ -150,6 +160,26 @@ how many go on each form. If you choose to type SSNs, it pauses for each person'
 Practice run on the live portal, but not a real filing yet: do a Practice run (Advanced) first with your trust's
 people and check their rows on the responsible-persons page.
 
+### CLEO copies (optional)
+Your CLEO gets a copy of each application: the Form 1 and each responsible person's 5320.23. The helper can make one
+PDF per batch to print and mail, cover page first (your CLEO's address placed for a #10 window envelope), then for
+each application its Form 1 copy and its 5320.23 copy.
+
+- **The Form 1 copy:** eForms makes its own "CLEO Copy" pages of every submitted form. After a batch, in the same
+  session, the helper opens each form it just filed (read-only, the same way Check approvals does) and keeps those
+  pages. Nothing to set up; as an individual, that's your whole packet. An approved form's PDF no longer has them, so
+  Advanced > Make CLEO packets gets missed ones only while the forms are still in process.
+- **The 5320.23 copy (trusts):** download the generator's **CLEO copy** of your signed template along with the ATF copy,
+  and add it in **Settings > CLEO copies of the 5320.23**. Like the ATF copy, it gets each suppressor's caliber and
+  the filing date (and the current CLEO official's name). Each other responsible person can add theirs: they get a
+  packet of their own for the CLEO where **they** live, to mail themselves.
+- **Neither copy shows the serial number**: ATF leaves it off the CLEO's copies, and so does the packet (the cover
+  page gives the number of applications and the date filed).
+- **Several batches, one packet:** Settings > **CLEO packet after each batch** > "Later, when I ask". The copies are
+  still saved after each batch; Advanced > Make CLEO packets then ticks every filed form that isn't in a packet yet.
+- Without a CLEO copy set, filing works as before; the packet then has the Form 1 copies only, and Check my setup
+  says no CLEO copy is made. Mailing it is up to you.
+
 ### First run, Check my setup and a practice run
 Start it with `./atf` on a Mac, `.\atf.cmd` on Windows (always with the `.cmd`).
 
@@ -158,8 +188,8 @@ The first run asks whether you file through a trust or as an individual, then fo
 
 Then run **Settings > Check my setup**: without opening eForms, it checks that your settings are complete, every
 file (fingerprints, photo, trust document, supporting documents, each person's) is there, readable, the right kind and
-not an online-only OneDrive/iCloud copy, that each 5320.23 template stamps correctly, and that the browser is
-installed. Run it again whenever something changes. (`./atf check-setup` shows the same with the file paths.)
+not an online-only OneDrive/iCloud copy, that each 5320.23 template (and CLEO copy, if you use one) stamps correctly,
+and that the browser is installed. Run it again whenever something changes. (`./atf check-setup` shows the same with the file paths.)
 
 **Before your first real batch, do a practice run:** add a suppressor (a test serial like `TEST1` is fine), then
 Advanced > **Practice run**. It fills a whole Form 1 in eForms and shows the read-back table, then stops: it never
@@ -187,7 +217,8 @@ of eForms first (eForms allows one session at a time).
   form, shows each page ticked off, waits for eForms to confirm your fingerprints ("Valid EBTS Package"), and shows a
   read-back table comparing what eForms will certify with what you meant (serial, model, type, caliber, length, and
   the trust name or your answers and citizenship). Only if everything matches does it sign; then a yellow **"Your
-  turn in the browser"** box: enter the emailed code, Verify, enter your PIN, Submit.
+  turn in the browser"** box: enter the emailed code, Verify, enter your PIN, Submit. After the batch it saves each
+  form's CLEO copy and makes the [CLEO packet](#cleo-copies-optional) to mail.
 - **⚠ Resolve a pending row**: only if a confirmation was missed. Check the eForms dashboard, then say whether it was
   filed.
 
@@ -243,17 +274,28 @@ the helper shows a QR code, you scan it with your phone's camera (on the same Wi
 (If you'd like this page always available, on every phone, without the helper running: that's one of the things the
 optional [inventory server](#optional-an-inventory-server) does.)
 
+### Settings
+- **All settings**: the setup questions again (trust or individual, your 5320.23 template, your details, CLEO,
+  firearm, files). Everything is pre-filled; press Enter to keep each answer.
+- **Other responsible persons in the trust** (trusts): add, change or remove them.
+- **CLEO copies of the 5320.23** (trusts): add, replace or remove the CLEO copy of each person's template.
+- **CLEO packet after each batch**: on (the default), or later, for one packet covering several batches.
+- **Where your inventory lives**: this computer, or your own [inventory server](#optional-an-inventory-server).
+- **Check my setup**: see [above](#first-run-check-my-setup-and-a-practice-run).
+
 ### Advanced
 - **Advanced**: **practice run** (fills a form in eForms and stops before signing; nothing is submitted, the row
-  stays queued); preview the steps without a browser; regenerate a 5320.23 with another date (trusts); re-file;
-  capture portal pages if ATF changes the site.
+  stays queued); preview the steps without a browser; regenerate a 5320.23 with another date (trusts); **make CLEO
+  packets** for forms already filed (while they're still in process); re-file; capture portal pages if ATF changes
+  the site.
 - The plain command line is still underneath: `./atf fill-form1 --help` (Windows: `.\atf.cmd fill-form1 --help`).
 
 ## Your records and where they live
 `data/suppressors.csv` is your inventory, one row per suppressor: caliber, serial, overall length, status, application
 number, filed date, approval date, eForm ID, control number, any approval conditions, and whether it's built (with its
 design). The app keeps it up to date; you can also open it in Excel (close it again before filing).
-`out/submissions.csv` is a log of every filing.
+`out/submissions.csv` is a log of every filing. `out/approved/` holds your approved Form 1 PDFs, and `out/cleo/` the
+CLEO copies and the packets (`CLEO packet <date> <time>.pdf`).
 
 Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (your logged-in session), which are
 never committed. **Never zip or copy this folder to share it**; share the git repository instead. (With the optional
@@ -317,6 +359,8 @@ phone:
   field in the browser.
 - A step fails: the browser stays open on that page; press Enter to log out. Check the eForms dashboard before filing
   that serial again. If ATF changed the site, the selectors in `config/mapping.yaml` need updating (see CLAUDE.md).
+- The CLEO packet says a Form 1 copy is missing: eForms didn't show that form under "Submitted/In process" right
+  after filing. Advanced > Make CLEO packets tries again; it works only while the form is still in process.
 - Windows: if a step says a file is in use, close `suppressors.csv` in Excel and try again.
 - Phone page from the helper doesn't load: same Wi-Fi? Allow Python through the computer's firewall.
 - With an inventory server: [server/README.md](server/README.md) covers what happens when it can't be reached.

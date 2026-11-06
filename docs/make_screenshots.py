@@ -66,6 +66,7 @@ def sandbox():
         "docs": [{"path": str(f / "printer.jpg"), "description": "3D PRINTER"}]}
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
     shutil.copy(ROOT / "tests" / "fixtures" / "fake_5320.pdf", atf.FORMS / "5320.23.pdf")
+    shutil.copy(ROOT / "tests" / "fixtures" / "fake_5320_cleo.pdf", atf.FORMS / "5320.23.cleo.pdf")  # its CLEO copy
     return tmp
 
 
