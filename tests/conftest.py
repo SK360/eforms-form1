@@ -229,8 +229,8 @@ FORM = """<div class="modal" id="aff"><button id="closeModalBtn" onclick="this.p
 <input type="checkbox" id="Trust">
 <div class="modal" id="ebts">Fingerprint status: EBTS <button onclick="this.parentNode.remove()">Ok</button></div>
 <input id="serialNumberMessage" value="SERIAL"><input id="11.A" value="ANSWER11A"><input id="caliber" value="CAL"><input id="businessName" value="DOE FAMILY TRUST">
-<input type="checkbox" id="binary"><button id="nextBtn" onclick="document.getElementById('cert').style.display='block'">Next</button>
-<div id="cert" style="display:none">The application has validated successfully <input type="checkbox" id="signed">
+<input type="checkbox" id="binary"><button id="nextBtn" onclick="document.getElementById('cert').style.display='block';setTimeout(()=>document.getElementById('val').textContent=VALTEXT,VALDELAY)">Next</button>
+<div id="cert" style="display:none"><span id="val"></span> <input type="checkbox" id="signed">
 <button id="signAndSubmit" onclick="CONFIRM">Sign</button></div>
 <div class="modal" id="done" style="display:none">Your form has been successfully submitted. Your application number is: APPNO
 <button id="OkBtn" onclick="home()">Ok</button></div>"""
@@ -266,11 +266,19 @@ def portal(monkeypatch):
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
     def configure(serials, ebts="Valid EBTS Package", shown_caliber=None, confirm=True, link=True, start_home=True,
-                  ebts_delay=0, rp_form=False, shown_11a="No"):
+                  ebts_delay=0, rp_form=False, shown_11a="No", hidden_boxes=False, validated=True, validate_delay=0):
         """ebts=None: no fingerprint message at all; ebts_delay: ms before it shows; rp_form: the responsible-person
-        form (Save & Close / Cancel) is open as a dialog too, like the real portal."""
+        form (Save & Close / Cancel) is open as a dialog too, like the real portal. hidden_boxes: each checkbox is
+        hidden behind a label, like the real portal; validated=False: the Certify page never says 'validated
+        successfully'; validate_delay: ms after Next before it does."""
         confirm_js = "setTimeout(()=>document.getElementById('done').style.display='block',200)" if confirm else ""
-        form = FORM.replace("CONFIRM", confirm_js).replace("ANSWER11A", shown_11a)
+        form = (FORM.replace("CONFIRM", confirm_js).replace("ANSWER11A", shown_11a)
+                .replace("VALTEXT", "'The application has validated successfully'" if validated else "'Please correct the errors'")
+                .replace("VALDELAY", str(validate_delay)))
+        if hidden_boxes:
+            form = re.sub(r'<input type="checkbox" id="(\w+)">',
+                          r'<input type="checkbox" id="\1" style="position:absolute;width:1px;height:1px;overflow:hidden;'
+                          r'clip:rect(0 0 0 0);opacity:0"><label for="\1">\1</label>', form)  # PrimeNG's hidden input
         if ebts is None:
             form = re.sub(r'<div class="modal" id="ebts">.*?</div>\n', "", form)
         else:

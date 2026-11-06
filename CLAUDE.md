@@ -350,8 +350,10 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   clears the form. A fixed 1 s wait once let the next file go in first (2026-10-22: only the 2nd doc listed, under the
   2nd description; form wiped; Add disabled -> timeout). Each add now waits for `td:has-text(<file name>)` (names
   JSON-quoted in `doc_file` / `trust_doc_file`). The failure record also has `last_steps`.
-- **Hidden checkboxes:** the portal hides real inputs behind styled labels; `_tick()` falls back to the label/DOM click.
-  The `check` action uses it. Playwright's plain `.check()` times out here.
+- **Hidden checkboxes:** the portal hides real inputs behind styled labels; `_tick()` clicks a visible label first
+  (else `.check()`, else a DOM click). The `check` action uses it. Playwright's plain `.check()` times out here: trying
+  it first cost 4 s per box (fixed 2026-11-06; the Certify page also waits for "validated successfully" instead of a
+  fixed 1.5 s; 10 real filings faster).
 - **Locked/prefilled fields** hang `select`/`fill` for 30s: use `skip_if_disabled: true` (done for the firearm popup
   country); the CLEO country is locked so its step was removed. Applicant address/phone/email are prefilled.
 - **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay). Only the

@@ -1221,19 +1221,26 @@ def _wait_for_login(page, prompt):
 
 
 def _tick(page, selector):
-    """Check a checkbox/radio even when the real input is hidden behind a styled label."""
+    """Check a checkbox/radio even when the real input is hidden behind a styled label.
+    The portal hides its real inputs, so a visible label is clicked straight away, like a person would. Trying
+    Playwright's check() first cost 4 s on every tick (it waits for the hidden input to become clickable)."""
     loc = page.locator(selector)
-    try:
-        loc.check(timeout=4000)
-    except Exception:
-        el_id = loc.get_attribute("id")
-        lab = page.locator(f"label[for='{el_id}']") if el_id else None
-        if lab is not None and lab.count() and lab.first.is_visible():
-            lab.first.click()
-        else:
+    if loc.is_checked():  # waits for the element; a radio or box already ticked is left alone (a click would untick)
+        return
+    el_id = loc.get_attribute("id")
+    lab = page.locator(f"label[for='{el_id}']") if el_id else None
+    if lab is not None and lab.count() and lab.first.is_visible():
+        lab.first.click()
+    else:
+        try:
+            loc.check(timeout=4000)
+        except Exception:
             loc.evaluate("e => e.click()")
-    if not loc.is_checked():
-        raise RuntimeError(f"could not tick {selector}")
+    for _ in range(20):  # the page may take a moment to show the tick
+        if loc.is_checked():
+            return
+        page.wait_for_timeout(100)
+    raise RuntimeError(f"could not tick {selector}")
 
 
 def _set_pending(rows, idx, length, force=False):
@@ -1293,10 +1300,12 @@ def _submit(page, item, bad, rows, idx, length="", force=False):
     page.locator("#nextBtn").click()
     try:
         page.locator("#signed").wait_for(timeout=20000)
-        page.wait_for_timeout(1500)
     except Exception:
         emit("error", "*** NOT submitting: never reached the Certify page. ***"); return
-    if not page.get_by_text("The application has validated successfully").count():
+    # Go on as soon as the portal says so (it used to be a fixed 1.5 s, which a slow validation would also have missed).
+    try:
+        page.get_by_text("The application has validated successfully").first.wait_for(state="attached", timeout=15000)
+    except Exception:
         emit("error", "*** NOT submitting: Certify page does not say 'validated successfully'. ***"); return
     _tick(page, "#signed")
     # From here on the application may get filed: mark the row pending first, so a crash, timeout or Ctrl-C

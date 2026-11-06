@@ -37,6 +37,32 @@ def test_check_failure_blocks_submit(configured, portal, kind, kw):
     assert rows[0]["status"] == "" and state["logged_out"], kind
 
 
+def test_hidden_checkboxes_are_ticked_by_their_label(configured, portal, monkeypatch):
+    """The real portal hides its checkboxes behind labels: those are clicked straight away, never through
+    Playwright's check(), which waited 4 s on each one before giving up."""
+    from playwright.sync_api._generated import Locator
+    checks = []
+    real_check = Locator.check
+    monkeypatch.setattr(Locator, "check", lambda self, *a, **kw: checks.append(1) or real_check(self, *a, **kw))
+    queue(("S1", "9"))
+    state = portal([("S1", "9")], hidden_boxes=True)
+    rows = file_all()
+    assert rows[0]["status"] == "filed" and state["logged_out"]
+    assert not checks
+
+
+def test_a_slow_validation_is_waited_for(configured, portal):
+    queue(("S1", "9"))
+    state = portal([("S1", "9")], validate_delay=2500)       # longer than the fixed 1.5 s it used to wait
+    assert file_all()[0]["status"] == "filed" and state["logged_out"]
+
+
+def test_no_validation_message_blocks_submit(configured, portal):
+    queue(("S1", "9"))
+    state = portal([("S1", "9")], validated=False)
+    assert file_all()[0]["status"] == "" and state["logged_out"]
+
+
 def test_waits_for_a_slow_fingerprint_check(configured, portal, monkeypatch):
     """The 'Valid EBTS Package' message can take seconds to show (it once missed a fixed 1.5 s wait). The
     responsible-person form, open as a dialog too, is not that message: nothing in it is clicked, nothing is asked."""
