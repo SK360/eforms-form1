@@ -1220,7 +1220,9 @@ def server_flow():
     server_empty = on_server is not None and not (on_server[0] or on_server[1])
     what = questionary.select("Server:", choices=(
         [questionary.Choice("Move this computer's inventory to the server", "move")] if server_empty and (here[0] or here[1]) else []) + [
-        questionary.Choice("Test the connection", "test"), questionary.Choice("Use this computer's inventory again", "local"),
+        questionary.Choice("Test the connection", "test"),
+        questionary.Choice("Save a backup of the server on this computer", "backup"),
+        questionary.Choice("Use this computer's inventory again", "local"),
         questionary.Choice("Back", "back")]).ask()
     if what == "move":
         return move_flow()
@@ -1230,6 +1232,16 @@ def server_flow():
                 server = atf._server(s)
                 sup, sbrs = server.rows()
                 con.print(f"  [green]✔[/] Your server answers at {escape(server.address)}: {len(sup)} suppressors, {escape(atf.nfa_counts(sbrs))}.")
+            except remote.ServerError as e:
+                con.print(f"  [red]✖ {escape(str(e))}[/]")
+        pause()
+    elif what == "backup":
+        with con.status("Fetching everything from your server…"):
+            try:
+                dest = atf.save_server_backup()
+                con.print(f"  [green]✔[/] Saved {escape(dest.name)} in out/server-backups ({dest.stat().st_size // (1024 * 1024) or 1} MB): "
+                          "the database and every approval PDF.\n  [dim]To put it back, on the server: atf-server restore <that file>. "
+                          "The newest 5 are kept.[/]")
             except remote.ServerError as e:
                 con.print(f"  [red]✖ {escape(str(e))}[/]")
         pause()

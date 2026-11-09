@@ -3,6 +3,11 @@
 #   /opt/atf-inventory/server/atf-server pair-code        (demo, devices, revoke <id>, fingerprint, backup, ...)
 cd "$(dirname "$0")" || exit 1
 ATF_DATA="${ATF_DATA:-/var/lib/atf-inventory}"
+# update changes the program's own folder and restarts the service, so it runs as whoever owns the folder (root on
+# an LXC.md install); it makes its database backup as the atf user itself.
+if [ "$1" = update ]; then
+  ATF_DATA="$ATF_DATA" exec .venv/bin/python -m atf_server "$@"
+fi
 if [ "$(id -u)" = 0 ]; then
   exec runuser -u atf -- env ATF_DATA="$ATF_DATA" .venv/bin/python -m atf_server "$@"
 fi

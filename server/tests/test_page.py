@@ -82,6 +82,17 @@ def test_pair_and_browse(running, filled, engine, ca_fp):
         page.go_back()
         page.wait_for_selector("#listView", state="visible")
 
+        page.click("#srvlink")                                          # Server: how it's doing, one backup file
+        page.wait_for_selector("#dl")
+        text = page.inner_text("#detailView")
+        assert "No backup has been made yet" in page.inner_text("#problems") and "This server" in text
+        assert "27 ·" in text and page.get_attribute("#dl", "href") == "/api/backup" and page.locator("#upd").count() == 0
+        with page.expect_download() as got:
+            page.click("#dl")
+        assert got.value.suggested_filename.startswith("atf-inventory-backup-")
+        page.go_back()
+        page.wait_for_selector("#listView", state="visible")
+
         mine = next(d for d in db.devices(filled) if d["name"] == "Test phone")
         db.revoke(filled, mine["id"], "test")                           # removed elsewhere: back to pairing
         page.reload()

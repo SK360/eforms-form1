@@ -100,8 +100,13 @@ and address): keep it on the machine at home.
   docker run --rm -v server_inventory-data:/data -v "$PWD":/out alpine tar czf /out/inventory-data.tgz -C /data .
   ```
   (`docker volume ls` shows the volume's exact name.) Your NAS's own backup of the volume works as well.
+- **One file with everything:** the page's **Server** screen has *Download a backup* (the database and every
+  approval PDF in one ZIP), and the helper can keep one on your computer (Settings > Where your inventory lives >
+  Save a backup of the server on this computer). To put one back:
+  `docker compose cp backup.zip inventory:/tmp/b.zip && docker compose exec inventory python -m atf_server restore /tmp/b.zip`.
 - **Update:** `git pull`, then `docker compose up -d --build`. The server backs up its database before any change to
-  how it's stored.
+  how it's stored. The page's **Server** screen says when a newer version is out (the server asks GitHub once a
+  day; `ATF_UPDATE_CHECK: "0"` under `environment:` turns that off).
 - **Stop it:** `docker compose down` (the volume and your data stay). `docker compose down -v` deletes the volume:
   only after you've moved your inventory back to your computer.
 

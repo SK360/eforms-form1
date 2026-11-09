@@ -19,9 +19,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Request
+from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
-from . import __version__, db, tls
+from . import __version__, db, status, tls
 
 API_VERSION = 3  # 2: table sbrs keeps each row's type (SBR, SBS, ...); 3: record_approvals fills an empty filed_date
 COOKIE = "atf_device"
@@ -308,6 +309,29 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
                         quiet = 0
                         yield ": still here\n\n"
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+    @app.get("/api/status")
+    def server_status(me=Depends(device), conn=Depends(get_db)):
+        """How the server itself is doing: version, a newer release, backups, certificate, storage (status.py)."""
+        return status.status(data_dir, conn, __version__, API_VERSION)
+
+    outgoing = data_dir / "outgoing"  # a backup file being downloaded; removed once sent (and at every start)
+    shutil.rmtree(outgoing, ignore_errors=True)
+
+    @app.get("/api/backup")
+    def backup_file(me=Depends(device), conn=Depends(get_db)):
+        """Everything in one file, to keep somewhere else: the database and every approval PDF (status.write_backup).
+        `restore` on the server's console takes it back."""
+        outgoing.mkdir(parents=True, exist_ok=True)
+        path = outgoing / f"backup-{secrets.token_hex(8)}.zip"
+        try:
+            status.write_backup(conn, pdf_dir, path, __version__)
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+        return FileResponse(path, media_type="application/zip", background=BackgroundTask(path.unlink, missing_ok=True),
+                            headers={"Content-Disposition":
+                                     f'attachment; filename="atf-inventory-backup-{datetime.now():%Y-%m-%d}.zip"'})
 
     @app.get("/api/devices")
     def devices(me=Depends(device), conn=Depends(get_db)):

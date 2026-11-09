@@ -229,6 +229,26 @@ plain CLI, kept for debugging/scripting:
   inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:
   `tests/test_server_mode.py` (fake HTTPS server, `tests/fixtures/test_server_*.pem` test-only cert) and
   `server/tests/test_app_client.py` (remote.py against the real server).
+  **Server status, backup file, update (added 2026-11-09):** the server's `__version__` (server/atf_server/
+  __init__.py) = the helper's, bumped together (a test in tests/test_move.py fails otherwise; it said 0.1.0 until
+  then). `status.py`: `GET /api/status` (version, `update` = newer release from `<data>/update_check.json`, counts,
+  backups, certificate expiry, storage, `missing_pdfs`, and `problems`: lines worded once for the page and the app;
+  nothing about builds or when anything was done) and `GET /api/backup` = one ZIP (inventory.db via online backup +
+  approved/<sha>.pdf + README; built in `<data>/outgoing`, deleted once sent; no certificates/keys);
+  `restore <file>` takes that ZIP too (`restore_backup`: every PDF checked against its checksum before anything is
+  written). Page: `#:server` (`STATUS`, `renderServer`, footer "Server"). App: `remote.Server.status()` (None on
+  404 = older server) / `.backup()`, `atf.server_status()`, `atf.save_server_backup()` -> `out/server-backups/`
+  (newest 5; menu: Where your inventory lives > Save a backup of the server on this computer), Check my setup adds
+  the server's problems + an "Inventory server version" line. `server/atf_server/update.py`: the running server asks
+  GitHub's latest release at most daily (`_housekeeping`, off with ATF_UPDATE_CHECK=0); `atf-server update
+  [--check] [--yes]` (plain install = git checkout; the launcher runs it as the folder's owner, root, NOT via
+  runuser): refuses local changes/other branch/not a fast-forward, backs up the database AS THE DATA FOLDER'S OWNER
+  (`_backup`: a database opened by root could leave files the atf user can't open), pip install of the tag's
+  server/requirements.txt BEFORE the merge, `git merge --ff-only <tag>`, `systemctl restart atf-inventory` if that
+  unit is active. Docker (no .git in the image) = told how to rebuild. **No update button on the page** (decided
+  2026-11-09: the service can't write its own code, ProtectSystem=strict; a paired phone mustn't either).
+  Tests: `server/tests/test_status.py`. Not yet live: `atf-server update` on the real container (it needs one
+  release newer than the commit that added it).
 - **Updates** (`src/update.py`, stdlib; added 2026-11-08): `check()` = GitHub `releases/latest` of SK360/eforms-form1
   (drafts/pre-releases never count), at most every 20 h, answer in `out/update_check.json`; `menu()` starts it in a
   thread (`check_in_background`, only when due; joined up to 2 s before the first home screen), so `home()` only reads the file (`available()`: newer than `__version__`) and shows
@@ -453,8 +473,9 @@ scans each screen's text (`svg_text`, pieces placed by column) and refuses to sa
 check it, then `git commit --no-verify`. Generic file-name words (`GENERIC_FILE_WORDS`) keep "photo.jpg" etc. quiet.
 
 ## Releases
-`__version__` in `src/atf.py` (shown in the home title, `./atf --version`) and `CHANGELOG.md` (user-facing: what's
-new, fixed, and what is or isn't tested live; never real serials or names). To release: bump both, regenerate the
+`__version__` in `src/atf.py` (shown in the home title, `./atf --version`), the same number in
+`server/atf_server/__init__.py`, and `CHANGELOG.md` (user-facing: what's
+new, fixed, and what is or isn't tested live; never real serials or names). To release: bump all three, regenerate the
 screenshots (the home title shows the version), commit, wait for CI to pass on main, then
 `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z` and `gh release create vX.Y.Z --title vX.Y.Z --notes-file
 <that version's CHANGELOG section>`. Public (people Watch releases): run the personal-data scan first, and only with

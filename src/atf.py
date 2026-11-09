@@ -422,6 +422,40 @@ def _server(settings=None):
     return remote.Server(s["server_id"], s["addresses"], s["fingerprint"], s["key"], ca=s.get("ca"))
 
 
+def server_status():
+    """The server's own report (version, newer release, backups, problems), or None: unreachable, or too old."""
+    import remote
+    try:
+        return _server().status()
+    except remote.ServerError:
+        return None
+
+
+def save_server_backup(keep=5):
+    """Fetch one file with everything on the server (database + every approval PDF) into out/server-backups/, so a
+    copy exists off the server (its own daily backups sit on its own disk, without the PDFs). Keeps the newest
+    `keep`. Returns the file; remote.ServerError if the server can't be reached or is too old."""
+    import zipfile
+    data = _server().backup()
+    folder = OUT / "server-backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / f"atf-inventory-backup-{datetime.now():%Y-%m-%d-%H%M%S}.zip"
+    tmp = dest.with_suffix(".zip.tmp")
+    tmp.write_bytes(data)
+    try:
+        with zipfile.ZipFile(tmp) as z:  # a whole, readable file with a database in it, or it isn't kept
+            if "inventory.db" not in z.namelist() or z.testzip():
+                raise zipfile.BadZipFile("incomplete")
+    except zipfile.BadZipFile:
+        tmp.unlink()
+        import remote
+        raise remote.ServerError("The backup from your server arrived damaged; nothing was saved. Try again.")
+    tmp.replace(dest)
+    for old in sorted(folder.glob("atf-inventory-backup-*.zip"))[:-keep]:
+        old.unlink()
+    return dest
+
+
 def _server_op(name, body):
     """One named change on the server (server/atf_server/db.py OPERATIONS), with a fresh request id. Filing results
     still waiting in the retry file go first."""
@@ -2412,6 +2446,14 @@ def check_setup():
             sup, sbrs = server.rows()
             out.append(("ok", "Inventory server", f"reachable at {server.address} · {len(sup)} suppressors, {nfa_counts(sbrs)}",
                         server.address))
+            st = server.status()  # None from a server older than the status report
+            if st:
+                behind = st.get("update") or {}
+                for problem in st.get("problems") or []:
+                    out.append(("warn", "Inventory server", problem, None))
+                out.append(("warn" if behind else "ok", "Inventory server version",
+                            f"{st['version']}" + (f": version {behind['version']} is out (on the server: atf-server update)"
+                                                  if behind else ""), None))
         except remote.ServerError as e:
             out.append(("fail", "Inventory server", str(e), ", ".join(s["addresses"])))
     elif SUPP.exists():

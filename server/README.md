@@ -125,7 +125,20 @@ until it has been.
 
 - Daily: the server copies its database into its `backups/` folder (30 kept). `atf-server backup` makes one now.
 - `atf-server restore <file>` puts one back (the current database is saved first). Try it once as a drill.
+- Those daily copies sit on the server's own disk and hold the database only. **One file with everything** (the
+  database and every approval PDF) to keep somewhere else: the page's **Server** screen > *Download a backup*, or
+  from the helper, Settings > Where your inventory lives > *Save a backup of the server on this computer* (kept in
+  `out/server-backups`, newest 5). `atf-server restore <that file>` puts it back, PDFs included. The server's
+  certificates aren't in it: a server rebuilt on new hardware makes its own, and each device pairs with it again.
 - Proxmox (or your NAS's) backups of the whole machine cover the approval PDFs and certificates too. Do that as well.
+
+## How it's doing, and updating
+
+The page's **Server** screen (bottom of the list, next to Devices) shows the server's version, whether a newer one
+is out, its backups, free space, when its certificate runs out, and anything that needs attention (no backup for
+two days, a nearly full disk, an approval PDF missing from the disk). The helper's Check my setup shows the same
+warnings. To update a plain install: `atf-server update` on the server (LXC.md); Docker: DOCKER.md. There is no
+update button on the page on purpose: the server can't change its own program, so a phone can't either.
 
 ## Going back
 

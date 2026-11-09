@@ -89,6 +89,7 @@ let items = [], filter = "all", sel = null, asking = null;
 // history and Devices, and builds stay read-only until the server records them (can_build). The PC's page has none of that.
 let SERVER = null, CAN_BUILD = true, pairCode = null;
 const DEVICES = ":devices";  // the Devices screen's #hash (a serial never starts with ":")
+const STATUS = ":server";    // the Server screen: version, backups, certificate, storage
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const FILTERS = {all: ["All", () => true], built: ["Built", r => r.built], notbuilt: ["Not built", r => r.status === "approved" && !r.built],
@@ -127,8 +128,9 @@ async function load() {
   if (!res.ok) { $("sum").textContent = (await res.json().catch(() => ({}))).error || "Can't reach the helper."; return; }
   const data = await res.json();
   SERVER = data.server || null; CAN_BUILD = data.can_build !== false;
-  $("foot").innerHTML = SERVER ? `<button type="button" id="devlink">Devices</button> · <a href="/export.csv">Export CSV</a> · ${esc(SERVER.name)}` : "";
+  $("foot").innerHTML = SERVER ? `<button type="button" id="devlink">Devices</button> · <button type="button" id="srvlink">Server</button> · <a href="/export.csv">Export CSV</a> · ${esc(SERVER.name)}` : "";
   if ($("devlink")) $("devlink").onclick = () => open(DEVICES);
+  if ($("srvlink")) $("srvlink").onclick = () => open(STATUS);
   items = [...data.suppressors, ...data.sbrs];
   const s = data.suppressors;
   const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
@@ -181,6 +183,7 @@ function renderDetail() {
   const r = items.find(x => x.serial === sel);
   const v = $("detailView");
   if (sel === DEVICES && SERVER) return renderDevices();
+  if (sel === STATUS && SERVER) return renderServer();
   if (!r) { v.innerHTML = `<div class="empty">Tap a serial to see it here.</div>`; return; }
   const kv = (k, val) => val ? `<div class="kv"><span>${k}</span><span>${val}</span></div>` : "";
   const canBuild = r.status === "approved" && CAN_BUILD;
@@ -288,6 +291,34 @@ async function renderDevices() {
     if (Number(b.dataset.rm) === d.you) return location.reload();
     toast("Removed"); renderDevices();
   });
+}
+
+// The Server screen: how the server itself is doing (/api/status; an older server has none) and one file with
+// everything to keep somewhere else. Updating is a command on the server, never a button here.
+const size = b => b >= 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : Math.max(1, Math.round(b / 1048576)) + " MB";
+async function renderServer() {
+  const v = $("detailView");
+  const head = `<button class="back" id="back" type="button">‹ Inventory</button><div class="big" style="font-size:26px">Server</div>`;
+  const res = await fetch("/api/status");
+  if (res.status === 401) return location.reload();
+  if (sel !== STATUS) return;
+  if (!res.ok) { v.innerHTML = head + `<p class="hint">This server is too old to say how it's doing. Update it.</p>`; $("back").onclick = showList; return; }
+  const d = await res.json(), kv = (k, val) => `<div class="kv"><span>${k}</span><span>${val}</span></div>`;
+  const b = d.backups, c = d.certificate, how = d.install === "git" ? "On the server, run <code>atf-server update</code>."
+    : "On the machine running Docker: <code>git pull</code>, then <code>docker compose up -d --build</code>.";
+  v.innerHTML = head
+    + (d.problems.length ? `<div class="build" id="problems">${d.problems.map(p => `<div class="sub" style="margin:4px 0">⚠ ${esc(p)}</div>`).join("")}</div>`
+       : `<p class="hint" id="allgood">Everything looks fine.</p>`)
+    + `<div class="hist"><h2>Version</h2>${kv("This server", esc(d.version))}
+      ${d.update ? kv("Newest release", esc(d.update.version)) + `<div class="sub" id="upd">Version ${esc(d.update.version)} is out. ${how}</div>` : ""}</div>
+    <div class="hist"><h2>Backups</h2>${kv("Newest on the server", b.newest_at ? esc(day(b.newest_at)) : "none yet")}${kv("Kept", b.count)}
+      <div class="sub">One a day, kept on the server's own disk (database only). To keep everything somewhere else:</div>
+      <p><a class="save" id="dl" href="/api/backup" style="display:inline-block;text-decoration:none;line-height:44px">Download a backup</a></p>
+      <div class="sub">One file with the database and every approval PDF (${size(d.storage.pdf_bytes + d.storage.database_bytes)}).</div></div>
+    <div class="hist"><h2>Storage</h2>${kv("Suppressors", d.counts.suppressors)}${kv("Other NFA items", d.counts.other)}
+      ${kv("Approval PDFs", `${d.counts.pdfs} · ${size(d.storage.pdf_bytes)}`)}${kv("Free on the server", size(d.storage.free_bytes))}
+      ${c ? kv("Certificate good until", esc(c.expires)) : ""}</div>`;
+  $("back").onclick = showList;
 }
 
 const requestId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);

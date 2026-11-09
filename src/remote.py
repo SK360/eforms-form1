@@ -215,6 +215,22 @@ class Server:
         out = self.get("/api/rows")
         return out["suppressors"], out["sbrs"]
 
+    def status(self):
+        """How the server itself is doing (version, backups, problems), or None from a server too old to say."""
+        status, kind, data = self._request("GET", "/api/status")
+        if status == 404:
+            return None
+        return _json(status, kind, data)
+
+    def backup(self):
+        """One file with everything on the server (its database and every approval PDF): a ZIP's bytes."""
+        status, kind, data = self._request("GET", "/api/backup", timeout=300)
+        if status == 404:
+            raise ServerError("Your server is too old to hand over a backup: update it first (on the server: git pull, "
+                              "then restart it).")
+        _json(status, kind, data)
+        return data
+
     def pdf_file(self, sha256):
         """A stored approval PDF by its checksum (from GET /api/pdfs)."""
         status, kind, data = self._request("GET", f"/api/pdfs/{sha256}")

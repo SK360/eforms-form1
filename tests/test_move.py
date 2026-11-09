@@ -131,3 +131,39 @@ def test_monkeypatch_undo_cant_leave_the_sandbox(monkeypatch, sandbox):
     """A test's monkeypatch.undo() must not point the app back at the real folders."""
     monkeypatch.undo()
     assert atf.DATA == sandbox / "data" and atf.SUPP == sandbox / "data" / "suppressors.csv"
+
+
+def test_server_backup_saved_here_and_status_in_check_setup(server, configured, answers, screen):
+    """A copy of everything on the server kept on this computer (the server's own backups sit on its own disk), and
+    Check my setup passing on what the server says about itself."""
+    import zipfile
+    inventory()
+    connect(server)
+    assert atf.move_to_server()["moved"]
+    st = atf.server_status()
+    assert st["version"] == atf.__version__ and st["counts"]["suppressors"] == 7 and st["update"] is None
+    answers(pick("Settings"), pick("Where your inventory lives"), "backup", QUIT)
+    ui.menu()
+    saved = list((atf.OUT / "server-backups").glob("atf-inventory-backup-*.zip"))
+    assert len(saved) == 1 and f"Saved {saved[0].name} in out/server-backups" in screen.getvalue()
+    names = zipfile.ZipFile(saved[0]).namelist()
+    assert "inventory.db" in names and len([n for n in names if n.startswith("approved/")]) == 4
+    for n in range(6):                                                 # the newest 5 are kept
+        (atf.OUT / "server-backups" / f"atf-inventory-backup-2020-01-0{n + 1}-000000.zip").write_bytes(b"old")
+    atf.save_server_backup()
+    left = sorted(p.name for p in (atf.OUT / "server-backups").glob("*.zip"))
+    assert len(left) == 5 and saved[0].name in left and not any("2020-01-01" in n or "2020-01-02" in n for n in left)
+    lines = {label: (level, detail) for level, label, detail, _ in atf.check_setup()}
+    assert lines["Inventory server version"] == ("ok", atf.__version__)
+    (server["data"] / "update_check.json").write_text('{"checked": "2026-11-09T10:00:00", "latest": '
+                                                      '{"version": "99.0.0", "tag": "v99.0.0", "url": "https://example.com"}}')
+    lines = {label: (level, detail) for level, label, detail, _ in atf.check_setup()}
+    assert lines["Inventory server version"] == ("warn", f"{atf.__version__}: version 99.0.0 is out (on the server: atf-server update)")
+
+
+def test_the_server_is_released_under_the_helpers_version():
+    """Bumped together (CLAUDE.md > Releases): `atf-server update` and the Server screen compare it with releases."""
+    import re
+    from conftest import ROOT
+    text = (ROOT / "server" / "atf_server" / "__init__.py").read_text(encoding="utf-8")
+    assert re.search(r'^__version__ = "([^"]+)"', text, re.M).group(1) == atf.__version__

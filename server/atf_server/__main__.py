@@ -7,7 +7,9 @@
   import <folder>  load an app folder's inventory (data/*.csv, out/approved/) into an EMPTY server; reads only
   demo             fill an empty server with a made-up inventory (A101...) to try it
   backup           a backup now into <data>/backups (the server also makes one each day, keeping 30)
-  restore <file>   replace the database with a backup (the current one is backed up first)
+  restore <file>   replace the database with a backup (the current one is backed up first): a .db from
+                   <data>/backups, or the one file with everything from the page (Server > Download a backup)
+  update           update a plain install to the newest release (backup, packages, code, restart); --check only says
   reset            remove the whole inventory (after a backup); devices and certificates stay. Asks you to type RESET
 """
 import argparse
@@ -18,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import db, demo, tls
+from . import __version__, db, demo, status, tls, update
 
 
 def _data(args):
@@ -33,8 +35,12 @@ def _open(args):
     return folder, conn
 
 
-def _daily_backups(folder):
+def _housekeeping(folder):
+    """Every hour: today's backup if there is none yet, and (at most daily, unless ATF_UPDATE_CHECK=0) whether a
+    newer release is out, for the Server screen."""
     while True:
+        if update.enabled():
+            update.check(folder, __version__)  # never raises
         try:
             conn = db.connect(folder / "inventory.db")
             try:
@@ -66,7 +72,7 @@ def serve(args):
         cert, key = tls.ensure_certificate(folder / "tls", names=(os.environ.get("ATF_NAMES") or "").split(","))
         ssl, ca = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, tls.ca_path(folder / "tls")
         print(f"Server CA fingerprint: {tls.fingerprint(ca)}\nHTTPS for: {', '.join(tls.covered(cert))}", flush=True)
-    threading.Thread(target=_daily_backups, args=(folder,), daemon=True).start()
+    threading.Thread(target=_housekeeping, args=(folder,), daemon=True).start()
     app = create_app(folder, name=os.environ.get("ATF_SERVER_NAME") or "ATF inventory", ca=ca)
     uvicorn.run(app, host=args.host, port=args.port, access_log=False, proxy_headers=False, timeout_graceful_shutdown=3, **ssl)
 
@@ -87,7 +93,11 @@ def main(argv=None):
     i = sub.add_parser("import")
     i.add_argument("folder", help="the app's folder (with data/suppressors.csv)")
     sub.add_parser("demo")
-    sub.add_parser("backup")
+    b = sub.add_parser("backup")
+    b.add_argument("--label", help=argparse.SUPPRESS)
+    u = sub.add_parser("update")
+    u.add_argument("--check", action="store_true", help="only say whether a newer version exists (exit code 2 if so)")
+    u.add_argument("--yes", action="store_true", help="don't ask (scripts)")
     rs = sub.add_parser("restore")
     rs.add_argument("file")
     rz = sub.add_parser("reset")
@@ -97,6 +107,8 @@ def main(argv=None):
     try:
         if args.cmd in (None, "serve"):
             return serve(args)
+        if args.cmd == "update":  # before the database is opened: it may run as root (see update._backup)
+            return update.cmd(args, _data(args), __version__)
         folder, conn = _open(args)
         if args.cmd == "pair-code":
             code, expires = db.new_pair_code(conn)
@@ -116,9 +128,13 @@ def main(argv=None):
             counts = db.import_inventory(conn, folder / "approved", sup, sbrs, pdfs, device=f"server console ({args.cmd})")
             print(f"Imported {counts['suppressors']} suppressors, {counts['sbrs']} other NFA items, {counts['pdfs']} approval PDFs.")
         elif args.cmd == "restore":
-            saved = db.restore(conn, args.file, folder / "backups")
-            print(f"Restored {Path(args.file).name}: {len(db.rows(conn))} suppressors, {len(db.sbrs(conn))} other NFA items. "
-                  f"The database before it: {saved}")
+            import zipfile
+            if zipfile.is_zipfile(args.file):
+                saved, added = status.restore_backup(conn, args.file, folder)
+            else:
+                saved, added = db.restore(conn, args.file, folder / "backups"), 0
+            print(f"Restored {Path(args.file).name}: {len(db.rows(conn))} suppressors, {len(db.sbrs(conn))} other NFA items"
+                  + (f", {added} approval PDFs put back" if added else "") + f". The database before it: {saved}")
         elif args.cmd == "reset":
             n = len(db.rows(conn))
             if not args.yes and input(f"Remove the whole inventory on this server ({n} suppressors, its other NFA items, approval "
@@ -127,7 +143,7 @@ def main(argv=None):
                 return 1
             print(f"Removed. Backup of what was there: {db.reset(conn, folder / 'approved', folder / 'backups')}")
         elif args.cmd == "backup":
-            print(db.backup(conn, folder / "backups", label=time.strftime("%Y-%m-%d-%H%M%S")))
+            print(db.backup(conn, folder / "backups", label=args.label or time.strftime("%Y-%m-%d-%H%M%S")))
         conn.close()
     except db.Refused as e:
         print(f"Refused: {e}", file=sys.stderr)

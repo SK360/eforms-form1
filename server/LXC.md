@@ -45,8 +45,19 @@ Made-up inventory to try it with (only into an empty server):
 /opt/atf-inventory/server/atf-server demo
 ```
 
-Updating later: `cd /opt/atf-inventory && git pull && systemctl restart atf-inventory` (the server backs up the
-database before any schema change).
+Updating later, one command (as root):
+
+```bash
+/opt/atf-inventory/server/atf-server update
+```
+
+It asks GitHub for the newest release, shows it and asks; then backs up the database, installs new Python packages
+if the release needs any (before the code changes, so a failed install leaves the old version running), moves the
+folder to that release and restarts the service. `update --check` only says whether one is out; `--yes` doesn't
+ask. The page's **Server** screen (and the helper's Check my setup) say when a newer version is out: the server asks
+GitHub once a day for that (one anonymous request; `Environment=ATF_UPDATE_CHECK=0` in the service file turns it
+off). It refuses when files in the folder were changed by hand; then: `cd /opt/atf-inventory && git pull &&
+systemctl restart atf-inventory`.
 
 ### Or with Docker
 
