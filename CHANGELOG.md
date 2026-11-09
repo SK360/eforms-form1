@@ -7,7 +7,7 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
-## Unreleased
+## 1.3.0 (2026-11-08)
 
 Updates from the menu.
 
