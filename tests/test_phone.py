@@ -141,8 +141,10 @@ def test_the_page_on_a_phone(served):
         page.click("#sw")
         page.wait_for_selector("#design")
         page.fill("#design", "Rimfire 12in")
-        page.click("#save")
-        page.wait_for_function("document.getElementById('toast').textContent.includes('saved as built')")
+        # Wait for the save itself: the switch already put up the same "saved as built" message, so waiting for that
+        # text went on before the design had been saved (seen on a slow Windows run).
+        with page.expect_response(lambda r: "/api/build" in r.url and r.request.method == "POST"):
+            page.click("#save")
         assert {r["serial_number"]: r["design"] for r in atf.load_rows()}["T2"] == "Rimfire 12in"
         page.click("#back")
         page.wait_for_selector("#listView", state="visible")
