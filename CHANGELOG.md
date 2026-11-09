@@ -3,9 +3,28 @@
 What changed in each release. The version is shown on the home screen (and by `./atf --version`). To hear about new
 releases, choose **Watch > Custom > Releases** on the GitHub repository page.
 
-To update: with Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the
-requirements changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into
-the new copy.
+To update: from the next version on, the menu offers **⬆ Update to version …** when one is out. Before that: with
+Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
+changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
+
+## Unreleased
+
+Updates from the menu.
+
+**Updating:** this once still by hand (`git pull`, or the new ZIP with your `data`, `forms` and `out` folders copied
+in). No new packages. The inventory server doesn't need updating.
+
+- **The helper tells you when a new version is out**: once a day it asks GitHub for the newest release (nothing
+  personal is sent; offline, nothing happens) and the home screen says so.
+- **⬆ Update to version …** in the menu shows what's new and, on your yes, updates the folder: with Git it moves to
+  the released version (never unreleased changes); without Git it downloads the release and replaces the program
+  files, keeping the old ones in `.update-backup`. Your `data`, `forms` and `out` folders are never touched. New
+  Python packages and Chromium are installed when the new version needs them, then the menu starts again (Windows:
+  start `.\atf.cmd` again). Not offered while a row is pending or a filing result waits for your inventory server.
+- **Settings > New versions** turns the daily check off; **Advanced > Check for a new version now** and
+  `./atf update` (`--check` only says) work either way.
+- Tested on fake releases (a ZIP install, a git checkout, failures that put every file back); not yet tried on a real
+  release, since the first one it can update to is the one after this.
 
 ## 1.2.4 (2026-11-06)
 

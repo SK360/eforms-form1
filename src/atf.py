@@ -22,6 +22,9 @@ Normally run through the menu: ./atf (src/ui.py). These commands are the plain C
   check-setup
         Check settings, files (found, readable, not online-only, the right kind), 5320.23 templates (test-stamped)
         and the browser, without opening eForms. Exit 1 if something must be fixed.
+  update [--check] [--yes]
+        Update this folder to the newest release on GitHub (src/update.py): git checkouts with git, ZIP installs by
+        downloading it. Your data/, forms/ and out/ are never touched. --check only says whether one is out.
   serve
         Your inventory on your phone, on the same Wi-Fi, until Ctrl-C (src/phone.py): a QR code and a link with a key
         made for this run. The page can mark approved suppressors built (with their design) or clear that.
@@ -2873,6 +2876,7 @@ def main():
     p = sub.add_parser("inspect"); p.set_defaults(fn=cmd_inspect)
     p = sub.add_parser("serve", help="your inventory on your phone (same Wi-Fi) until Ctrl-C"); p.set_defaults(fn=lambda a: __import__("phone").cmd_serve(a))
     p = sub.add_parser("check-setup", help="check settings, files, templates and the browser (no eForms)"); p.set_defaults(fn=cmd_check_setup)
+    p = sub.add_parser("update", help="update this folder to the newest release (asks first)"); p.add_argument("--check", action="store_true", help="only say whether a newer version is out (exit 2 if so)"); p.add_argument("--yes", action="store_true", help="don't ask before updating"); p.set_defaults(fn=lambda a: __import__("update").cmd_update(a))
     p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
     p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
     p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.add_argument("--cleo", action="store_true", help="after the batch, save each filed Form 1's CLEO copy to out/cleo/ (read-only)"); p.set_defaults(fn=cmd_fill_form1)

@@ -22,6 +22,7 @@ from rich.table import Table
 
 import atf
 import remote
+import update
 
 con = Console(highlight=False)
 STATUS = {"approved": "[green]✔ approved[/]", "filed": "[blue]● filed[/]", "pending": "[bold yellow]⚠ pending[/]",
@@ -169,6 +170,10 @@ def home(rows):
     con.print(queue_table(rows, title=f"[bold]eForms Form 1[/] [dim]v{atf.__version__}[/]"))  # no trust name: the screen gets shared
     con.print(f"  {summary(rows)}")
     server_line()
+    new = update.available()
+    if new:
+        con.print(f"  [cyan]⬆ Version {escape(new['version'])} is out (you have {atf.__version__}): "
+                  "choose Update in the menu below.[/]")
 
 
 def server_line():
@@ -1183,6 +1188,7 @@ def settings_menu():
         + [questionary.Choice(f"CLEO packet after each batch ({'on' if atf.cleo_packet_after_batch(t) else 'off: you make it later'})",
                               cleo_packet_flow),
            questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
+           questionary.Choice(f"New versions ({'tell me when one is out' if update.enabled(t) else 'off'})", update_setting_flow),
            questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
            questionary.Choice("Back", "back")]).ask()
     if callable(what):
@@ -1600,15 +1606,77 @@ def advanced_flow():
         questionary.Choice("Make CLEO packets for filed forms", cleo_packets_flow),
         questionary.Choice("Re-file a row that's already filed", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),
+        questionary.Choice("Check for a new version now", lambda: update_flow(force=True)),
         questionary.Choice("Back", "back")]).ask()
     if callable(what):
-        what()
+        return what()
+
+
+def update_setting_flow():
+    """Settings > New versions: ask GitHub once a day at start (the default), or never by itself."""
+    t = _settings()
+    on = questionary.select("New versions:", default="on" if update.enabled(t) else "off", choices=[
+        questionary.Choice("Tell me when one is out (asks GitHub once a day, nothing personal is sent)", "on"),
+        questionary.Choice("Don't check by itself (Advanced > Check for a new version now still works)", "off")]).ask()
+    if on is None:
+        return
+    t["update_check"] = on == "on"
+    _save_settings(t)
+    con.print("  [green]✔ Saved.[/]")
+    pause()
+
+
+def update_flow(force=False):
+    """Show what's new in the newest release and, on the user's yes, update this folder to it. Returns "quit" when
+    the menu must stop (Windows: the user starts it again); on Mac/Linux the updated menu starts in its place."""
+    if force:
+        with con.status("Asking GitHub for the newest version…"):
+            rel = update.check(force=True)
+    else:
+        rel = update.available()
+    if not rel:
+        con.print("  [yellow]⚠ Couldn't ask GitHub for the newest version (offline?). Try again later.[/]")
+        return pause()
+    if not update.newer(rel["version"]):
+        con.print(f"  [green]✔ You have the newest version ({atf.__version__}).[/]")
+        return pause()
+    from rich.markdown import Markdown
+    notes = "\n".join(rel.get("notes", "").strip().splitlines()[:40]) or "(no release notes)"
+    con.print(Panel(Markdown(notes), title=f"What's new in {escape(rel['version'])} (you have {atf.__version__})",
+                    border_style="cyan", padding=(1, 2)))
+    problems = update.blockers()
+    if problems:
+        con.print("  [yellow]⚠ Not now: " + escape("; ".join(problems)) + ".[/]")
+        return pause()
+    con.print("  [dim]Your settings, inventory, templates and filing records (data, forms, out) aren't touched."
+              + (" This folder was set up with Git: git moves it to the released version." if update.kind() == "git"
+                 else " The new version is downloaded from GitHub; replaced files are kept in .update-backup.") + "[/]")
+    if not questionary.confirm(f"Update to {rel['version']} now?", default=True, auto_enter=False).ask():
+        return None
+    try:
+        with con.status("Updating…") as st:
+            res = update.apply(rel, say=lambda text: st.update(escape(text)))
+    except update.UpdateError as e:
+        con.print(f"  [bold red]✖ Not updated: {escape(str(e))}[/]")
+        return pause()
+    con.print(f"  [bold green]✔ Updated to {escape(res['version'])}.[/]"
+              + (" [dim]Python packages and Chromium were updated too.[/]" if res["packages"] else ""))
+    if res["server_api"]:
+        con.print("  [yellow]⚠ Your inventory server needs this update too (see server/README.md); until it has it, "
+                  "this helper can't use it.[/]")
+    if os.name == "nt":
+        con.input("\n[dim]Press Enter to close it, then start it again with .\\atf.cmd…[/] ")
+    else:
+        con.input("\n[dim]Press Enter to start the new version…[/] ")
+        update.restart()
+    return "quit"
 
 
 def menu():
     atf.emit, atf.ask = P.emit, P.ask
     if not (atf.DATA / "trust.yaml").exists():
         settings_flow(first=True)
+    checking = update.check_in_background()  # GitHub, at most once a day; the home screen shows the answer once it's in
     if not atf.server_settings():
         if not atf.SUPP.exists():
             atf.save_rows([])
@@ -1617,6 +1685,8 @@ def menu():
         atf.backfill_from_approval_pdfs()
     except Exception:  # e.g. the server can't be reached: tried again next time
         pass
+    if checking:  # a check is due (once a day): give GitHub up to 2 s, so the first home screen can say what it found
+        checking.join(2)
     while True:
         server = atf.server_settings()
         try:
@@ -1649,13 +1719,17 @@ def menu():
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if any(r["status"] == "" for r in rows):
             choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
+        new = update.available()
+        if new:
+            choices.append(questionary.Choice(f"⬆ Update to version {new['version']}", update_flow))
         choices += [questionary.Choice("Check approvals on eForms", approvals_flow), questionary.Choice("Settings", settings_menu),
                     questionary.Choice("Advanced…", advanced_flow), questionary.Choice("Quit", "quit")]
         what = questionary.select("What next?", choices=choices).ask()
         if what in (None, "quit"):
             return
         try:
-            what()
+            if what() == "quit":  # updated, and the new version has to be started again (Windows)
+                return
         except SystemExit as e:  # the engine exits with a message (or 1 after a failure it already reported)
             P.finish()
             if isinstance(e.code, str):

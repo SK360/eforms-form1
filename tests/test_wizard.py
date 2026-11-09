@@ -202,5 +202,6 @@ def test_individual_settings_menu(configured, answers, screen):
             lambda kw: None, QUIT)
     ui.menu()
     assert seen["menu"] == ["All settings (you, your answers, CLEO, firearm, files)", "CLEO packet after each batch (on)",
-                            "Where your inventory lives (this computer)", "Check my setup (files, templates, browser; no eForms)", "Back"]
+                            "Where your inventory lives (this computer)", "New versions (tell me when one is out)",
+                            "Check my setup (files, templates, browser; no eForms)", "Back"]
     assert answers.asked[2][1] == "Who files the Form 1s?"

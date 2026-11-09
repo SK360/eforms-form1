@@ -40,6 +40,7 @@ plain CLI, kept for debugging/scripting:
 |---|---|
 | `fill-5320 [row] [--date MM/DD/YYYY]` | Stamps caliber (4d), serial (4e), signature date and the CLEO official line onto `forms/5320.23.pdf` -> `out/5320.23_<serial>.pdf`, and each other responsible person's template -> `out/5320.23_<serial>.<first-last>.pdf` (no CLEO line). Plus each CLEO copy that's set -> `out/cleo/5320.23_<serial>[.<first-last>].cleo.pdf` (no serial). No row = all unfiled rows. |
 | `fill-form1 [row] [--dry] [--auto-affirm] [--skip-ssn] [--submit] [--capture] [--force] [--all] [--count N] [--cleo]` | Runs the portal steps. No row = first unfiled row. `--all`/`--count N` loop over unfiled rows in one browser session. `--force` re-files a filed/pending row. `--dry` prints the steps, no browser. `--cleo` saves each filed form's Form 1 CLEO copy after the batch. The menu's "File" = `--auto-affirm --submit --cleo` (+ `--skip-ssn` unless the user chose to type the SSN). |
+| `update [--check] [--yes]` | Updates this folder to the newest GitHub release (`src/update.py`); `--check` only says (exit 2 = newer exists). Menu: home "⬆ Update to version …", Advanced > Check for a new version now. |
 | `check-setup` | Checks settings, files, templates, Chromium and the inventory without eForms (menu: Settings > Check my setup); exit 1 if something must be fixed. |
 | `serve` | The phone page (src/phone.py) on the home network until Ctrl-C (menu: Inventory > Open on my phone). |
 | `inspect` | Dumps controls + visible text + dialog text of the page you're on, to map new/changed steps. |
@@ -228,6 +229,22 @@ plain CLI, kept for debugging/scripting:
   inventory again (revokes this device, `forget_server`). The local CSVs are never touched. Tests:
   `tests/test_server_mode.py` (fake HTTPS server, `tests/fixtures/test_server_*.pem` test-only cert) and
   `server/tests/test_app_client.py` (remote.py against the real server).
+- **Updates** (`src/update.py`, stdlib; added 2026-11-08): `check()` = GitHub `releases/latest` of SK360/eforms-form1
+  (drafts/pre-releases never count), at most every 20 h, answer in `out/update_check.json`; `menu()` starts it in a
+  thread (`check_in_background`, only when due; joined up to 2 s before the first home screen), so `home()` only reads the file (`available()`: newer than `__version__`) and shows
+  a line + the menu item "⬆ Update to version …" (`ui.update_flow`: release notes, `blockers()` = a pending row or a
+  server outbox entry, confirm with `auto_enter=False`, `apply()`, then `restart()` = os.execv on POSIX; Windows
+  returns "quit" and the user starts atf.cmd again). Off = `update_check: false` (Settings > New versions,
+  `update_setting_flow`); Advanced > Check for a new version now forces it. `apply()`: `.git` present = `git fetch
+  REPO_URL tag` + `merge --ff-only <tag>` (refused: tracked changes, a branch other than main/detached, local
+  commits); else the tag's source ZIP (github.com -> codeload.github.com only, 60 MB cap, `_read_zip` refuses
+  absolute/`..` paths, skips links and `PERSONAL` (data, out, forms, .browser-profile, .venv, .git, .update-backup,
+  CLAUDE.local.md) and checks `__version__` in src/atf.py) -> only differing files written (tmp + os.replace), old ones
+  to `.update-backup/<old version>/`, any failure restores all. Files a release deleted stay (ZIP). requirements.txt
+  changed = pip install -r + playwright install chromium; a different `API =` in src/remote.py in server mode = told
+  to update the server. `atf.cmd` ends its python line with `& exit /b` so cmd never reads on into a file an update
+  replaced while it ran. Tests: `tests/test_update.py`; the sandbox fixture sets `update.APP` = tmp/app and makes
+  `update._get` raise (never GitHub, never the real folder). Not yet tried on a real release (1.2.4 has no updater).
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`; on Linux also `_chromium_start_problem`, a headless launch, for
   missing system libraries), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing

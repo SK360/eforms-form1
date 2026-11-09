@@ -12,3 +12,5 @@ __pycache__/
 *.tmp
 .DS_Store
 .pytest_cache/
+.update-backup/
+*.update-tmp

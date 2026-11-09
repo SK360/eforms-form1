@@ -77,12 +77,20 @@ compares them with your records) and **Check my setup**. Your inventory on your 
 
 ### Get it
 - **With Git** (Mac: built in; Windows: install https://git-scm.com/download/win):
-  `git clone https://github.com/SK360/eforms-form1.git` and later `git pull` (in that folder) to update.
+  `git clone https://github.com/SK360/eforms-form1.git`.
 - **Without Git:** download the ZIP of the latest release from https://github.com/SK360/eforms-form1/releases and
-  unzip it. To update, download the new release and copy your `data`, `forms` and `out` folders into the new copy.
+  unzip it.
 
-**Updates:** [CHANGELOG.md](CHANGELOG.md) lists what's new in each release, and the home screen shows which version
-you have. To be told about new releases, choose **Watch > Custom > Releases** on the repository page.
+**Updates:** when a new version is out, the home screen says so and the menu offers **⬆ Update to version …**. It
+shows what's new, asks, and then updates the folder itself: with Git it moves to the released version, without Git
+it downloads the release from GitHub and replaces the program files (the old ones are kept in `.update-backup`). Your
+`data`, `forms` and `out` folders are never touched, new Python packages are installed if needed, and the menu
+starts again (Windows: start `.\atf.cmd` again). It won't update while a row is pending. The helper asks GitHub at
+most once a day and sends nothing personal; turn that off in **Settings > New versions**, and check by hand with
+**Advanced > Check for a new version now** (or `./atf update`). Version 1.2.4 and older don't have this yet: update
+those once by hand (`git pull`, or the new ZIP with your `data`, `forms` and `out` folders copied in).
+[CHANGELOG.md](CHANGELOG.md) lists what's new in each release; to hear about releases on GitHub too, choose
+**Watch > Custom > Releases** on the repository page.
 
 ### Install (once)
 It needs Python 3.9 to 3.14 (3.13 recommended). A brand-new Python such as 3.15 doesn't have ready-built copies

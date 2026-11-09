@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import atf  # noqa: E402
 import ui  # noqa: E402
 import remote  # noqa: E402
+import update  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320.pdf"
 CLEO_FIXTURE = ROOT / "tests" / "fixtures" / "fake_5320_cleo.pdf"  # its CLEO copy (make_fake_5320.py --cleo)
@@ -53,6 +54,10 @@ def sandbox(tmp_path):
     monkeypatch.setattr(atf, "_FETCHED", {})          # the inventory server's per-run state (server mode)
     monkeypatch.setattr(atf, "SERVER_STATE", {})
     monkeypatch.setattr(remote.Server, "working", {})
+    # updates: never GitHub, never the real program folder (tests/test_update.py gives each its fake release)
+    (tmp_path / "app").mkdir()
+    monkeypatch.setattr(update, "APP", tmp_path / "app")
+    monkeypatch.setattr(update, "_get", lambda *a, **k: (_ for _ in ()).throw(update.UpdateError("no network in tests")))
     real_data = ROOT / "data"
     before = {f.name: f.stat().st_mtime for f in real_data.glob("*")} if real_data.exists() else {}
     monkeypatch.setattr(atf, "emit", atf.emit)
