@@ -191,6 +191,14 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
 
     incoming = data_dir / "incoming"  # approval PDFs uploaded for an import, one request each
 
+    def uploaded(sha):
+        """The uploaded PDF a request names by checksum, or None. Only 64 hex digits make a path: anything else
+        (e.g. "../") could name, and after use delete, a file outside the incoming folder."""
+        if not (isinstance(sha, str) and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha)):
+            return None
+        path = incoming / f"{sha}.pdf"
+        return path if path.is_file() else None
+
     @app.post("/api/import/pdf")
     async def import_pdf(request: Request, me=Depends(device)):
         """One approval PDF for the coming import, streamed to disk (a 137 MB inventory in one request was too much
@@ -228,8 +236,8 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
                 except (TypeError, ValueError, binascii.Error):
                     raise db.Refused("An approval PDF in the import couldn't be read.")
             else:
-                path = incoming / f"{p.get('sha256')}.pdf"
-                if not (len(str(p.get("sha256"))) == 64 and path.is_file()):
+                path = uploaded(p.get("sha256"))
+                if path is None:
                     raise db.Refused(f"The approval PDF for {item['serial'] or item['eform_id']} wasn't uploaded.")
                 item["path"] = path
             files.append(item)
@@ -244,8 +252,8 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
         """Check approvals: new approval PDFs uploaded first with /api/import/pdf ([{eform_id, serial, sha256}])."""
         items = []
         for p in body.get("pdfs") or []:
-            path = incoming / f"{p.get('sha256')}.pdf"
-            if not (len(str(p.get("sha256"))) == 64 and path.is_file()):
+            path = uploaded(p.get("sha256"))
+            if path is None:
                 raise db.Refused(f"The approval PDF for {p.get('serial') or p.get('eform_id')} wasn't uploaded.")
             items.append({"eform_id": str(p.get("eform_id") or ""), "serial": str(p.get("serial") or ""), "path": path})
         try:

@@ -241,10 +241,14 @@ plain CLI, kept for debugging/scripting:
   absolute/`..` paths, skips links and `PERSONAL` (data, out, forms, .browser-profile, .venv, .git, .update-backup,
   CLAUDE.local.md) and checks `__version__` in src/atf.py) -> only differing files written (tmp + os.replace), old ones
   to `.update-backup/<old version>/`, any failure restores all. Files a release deleted stay (ZIP). requirements.txt
-  changed = pip install -r + playwright install chromium; a different `API =` in src/remote.py in server mode = told
+  changed = pip install -r (the NEW list, from a temp file) + playwright install chromium BEFORE any program file
+  changes (`_git_prepare`/`_zip_download`, `_install_packages`, then `_git_merge`/`_zip_write`): a failed install
+  leaves the folder on the old version (it used to say "Not updated" of new code on old packages); a different `API =` in src/remote.py in server mode = told
   to update the server. `atf.cmd` ends its python line with `& exit /b` so cmd never reads on into a file an update
   replaced while it ran. Tests: `tests/test_update.py`; the sandbox fixture sets `update.APP` = tmp/app and makes
-  `update._get` raise (never GitHub, never the real folder). Not yet tried on a real release (1.2.4 has no updater).
+  `update._get` raise (never GitHub, never the real folder). Live 2026-11-08: a git checkout at the updater commit (still 1.2.4) updated itself to the real v1.3.0 release
+  from the menu on macOS, and the real v1.3.0 ZIP set back to 1.2.4 updated itself with `./atf update` (only
+  differing files replaced and backed up; records untouched). Not yet live: Windows.
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`; on Linux also `_chromium_start_problem`, a headless launch, for
   missing system libraries), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing

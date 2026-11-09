@@ -13,8 +13,9 @@ Update (always the user's yes; never while a row is pending or a filing result w
     src/atf.py says the version asked for), then each program file that differs is replaced; the old one is copied to
     .update-backup/<old version>/ first, and any failure puts every file back. Personal folders (data/, forms/,
     out/, .browser-profile/, .venv/) are never written, even if a ZIP had them. Files a release deleted stay.
-Then: requirements.txt changed = pip install -r + playwright install chromium; the menu restarts itself (Windows:
-the user starts it again). A different inventory-server API in the new remote.py = a reminder to update the server.
+Packages first: when the release's requirements.txt differs, pip install -r (the new list) + playwright install
+chromium run BEFORE any program file changes, so a failed install leaves this folder as it was (never new code on
+old packages, which might not start). Then the menu restarts itself (Windows: the user starts it again). A different inventory-server API in the new remote.py = a reminder to update the server.
 """
 import io
 import json
@@ -197,7 +198,9 @@ def _git(*args, check=True):
     return r
 
 
-def _git_update(tag):
+def _git_prepare(tag):
+    """Check this checkout can take the tag and fetch it (nothing in the folder changes yet). Returns the tag's
+    requirements.txt (LF; b"" if it has none)."""
     changed = [line[3:] for line in _git("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if line.strip()]
     if changed:
         raise UpdateError("files of the helper were changed in this folder: " + ", ".join(changed[:5])
@@ -208,10 +211,19 @@ def _git_update(tag):
     r = _git("fetch", "--quiet", "--force", REPO_URL, f"refs/tags/{tag}:refs/tags/{tag}", check=False)
     if r.returncode:
         raise UpdateError(f"couldn't download {tag} with git: {(r.stderr or r.stdout).strip()[:300]}")
-    r = _git("merge", "--ff-only", "--quiet", tag, check=False)
-    if r.returncode:
-        raise UpdateError(f"{tag} can't simply replace this copy (it has commits of its own); update it by hand "
-                          f"(git pull) or start from a fresh copy")
+    if _git("merge-base", "--is-ancestor", "HEAD", tag, check=False).returncode:
+        raise UpdateError(_NOT_FF.format(tag=tag))
+    r = _git("show", f"{tag}:requirements.txt", check=False)
+    return b"" if r.returncode else r.stdout.encode("utf-8").replace(b"\r\n", b"\n")
+
+
+_NOT_FF = ("{tag} can't simply replace this copy (it has commits of its own); update it by hand (git pull) or start "
+           "from a fresh copy")
+
+
+def _git_merge(tag):
+    if _git("merge", "--ff-only", "--quiet", tag, check=False).returncode:
+        raise UpdateError(_NOT_FF.format(tag=tag))
 
 
 def _personal(rel):
@@ -247,12 +259,16 @@ def _read_zip(data, version):
     return files
 
 
-def _zip_update(tag, version):
+def _zip_download(tag, version):
+    """The tag's program files, downloaded and checked (nothing in the folder changes yet)."""
     data, final = _get(ZIP_URL.format(tag=tag), limit=MAX_ZIP, timeout=120)
     from urllib.parse import urlparse
     if urlparse(final).hostname not in ZIP_HOSTS or urlparse(final).scheme != "https":
         raise UpdateError(f"the download came from an unexpected place ({urlparse(final).hostname})")
-    files = _read_zip(data, version)
+    return _read_zip(data, version)
+
+
+def _zip_write(files):
     backup = APP / ".update-backup" / atf.__version__
     saved, created = [], []
     try:
@@ -314,6 +330,28 @@ def _run(*args):
         raise UpdateError(f"{' '.join(args[:3])} failed: {(r.stderr or r.stdout).strip()[-500:]}")
 
 
+def _install_packages(reqs, say):
+    """pip install the new version's requirements (its text, from a temp file: this folder's own requirements.txt
+    is still the old one) and Chromium. UpdateError if either fails; the caller hasn't changed any program file."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="atf-requirements-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(reqs)
+        say("Installing the Python packages the new version needs…")
+        _run("-m", "pip", "install", "--quiet", "-r", tmp)
+        say("Updating the browser (Chromium)…")
+        _run("-m", "playwright", "install", "chromium")
+    except UpdateError as e:
+        raise UpdateError(f"the packages the new version needs couldn't be installed, so this folder was left on "
+                          f"version {atf.__version__} ({e}). Check your internet connection and try again.")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def apply(release, say=lambda text: None):
     """Update this folder to `release` (from check()). Returns {'version', 'how', 'packages', 'server_api'}:
     packages = requirements were installed again; server_api = the new version speaks another inventory-server API
@@ -328,16 +366,20 @@ def apply(release, say=lambda text: None):
     how = kind()
     if how == "git":
         say(f"Getting {tag} with git…")
-        _git_update(tag)
+        new_reqs = _git_prepare(tag)
     else:
         say(f"Downloading {tag} from GitHub…")
-        _zip_update(tag, version)
-    packages = _read("requirements.txt") != reqs
+        files = _zip_download(tag, version)
+        new_reqs = files.get("requirements.txt", (reqs, False))[0].replace(b"\r\n", b"\n")
+    # Packages BEFORE the program files: if they can't be installed, nothing here has changed yet.
+    packages = bool(new_reqs.strip()) and new_reqs != reqs
     if packages:
-        say("Installing the Python packages the new version needs…")
-        _run("-m", "pip", "install", "--quiet", "-r", "requirements.txt")
-        say("Updating the browser (Chromium)…")
-        _run("-m", "playwright", "install", "chromium")
+        _install_packages(new_reqs, say)
+    say(f"Putting version {version} in place…")
+    if how == "git":
+        _git_merge(tag)
+    else:
+        _zip_write(files)
     new_api = _api(_read("src/remote.py").decode("utf-8", "replace"))
     _write_cache({})  # asked again next start, by the new version
     return {"version": version, "how": how, "packages": packages,

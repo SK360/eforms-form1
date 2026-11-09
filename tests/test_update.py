@@ -200,9 +200,58 @@ def test_new_requirements_install_packages(configured, github, monkeypatch):
     zip_app()
     github(release=release_json(), zip=fake_zip(files={"requirements.txt": "rich\nnewthing\n"}))
     ran = []
-    monkeypatch.setattr(update, "_run", lambda *a: ran.append(a))
+
+    def run(*a):
+        if a[1] == "pip":  # the NEW list (a temp file), while this folder still has the old program files
+            ran.append((a[:5], open(a[5]).read(), (update.APP / "src/ui.py").read_text()))
+        else:
+            ran.append(a)
+    monkeypatch.setattr(update, "_run", run)
     assert update.apply(update.check())["packages"] is True
-    assert ran == [("-m", "pip", "install", "--quiet", "-r", "requirements.txt"), ("-m", "playwright", "install", "chromium")]
+    assert ran == [(("-m", "pip", "install", "--quiet", "-r"), "rich\nnewthing\n", "print('old menu')\n"),
+                   ("-m", "playwright", "install", "chromium")]
+    assert "new menu" in (update.APP / "src/ui.py").read_text()
+
+
+def test_packages_that_cannot_be_installed_leave_the_folder_alone(configured, github, monkeypatch, answers, screen):
+    """pip failing used to come AFTER the files were replaced: "Not updated" was said of a folder already on the new
+    code with the old packages. Now the packages go first, and a failure changes no program file."""
+    app = zip_app()
+    before = {p: p.read_bytes() for p in app.rglob("*") if p.is_file()}
+    github(release=release_json(), zip=fake_zip(files={"requirements.txt": "rich\nnewthing\n"}))
+
+    def fails(*a):
+        raise update.UpdateError("-m pip install failed: no network")
+    monkeypatch.setattr(update, "_run", fails)
+    rel = update.check()
+    with pytest.raises(update.UpdateError, match=f"left on version {CUR}"):
+        update.apply(rel)
+    assert {p: p.read_bytes() for p in app.rglob("*") if p.is_file()} == before
+    assert update.available()["version"] == NEXT                                  # still offered: try again later
+    answers(pick("⬆ Update to version"), True, QUIT)
+    ui.menu()
+    assert "Not updated" in screen.getvalue() and "old menu" in (app / "src/ui.py").read_text()
+
+
+def test_git_packages_that_cannot_be_installed_leave_the_checkout_alone(configured, github, upstream, monkeypatch):
+    github(release=release_json())
+    up = update.REPO_URL
+    git(up, "checkout", "-q", "-b", "rel", f"v{NEXT}")                            # a release with another package list
+    (upstream.parent / "upstream" / "requirements.txt").write_text("rich\nnewthing\n")
+    git(up, "commit", "-q", "-am", "reqs")
+    git(up, "tag", "-f", f"v{NEXT}")
+    head = git(upstream, "rev-parse", "HEAD")
+
+    def fails(*a):
+        raise update.UpdateError("-m pip install failed: no network")
+    monkeypatch.setattr(update, "_run", fails)
+    with pytest.raises(update.UpdateError, match=f"left on version {CUR}"):
+        update.apply(update.check())
+    assert git(upstream, "rev-parse", "HEAD") == head and f'"{CUR}"' in (upstream / "src/atf.py").read_text()
+    ran = []
+    monkeypatch.setattr(update, "_run", lambda *a: ran.append(a[1]))
+    assert update.apply(update.check())["packages"] is True and ran == ["pip", "playwright"]
+    assert "newthing" in (upstream / "requirements.txt").read_text()
 
 
 def test_line_endings_alone_are_not_new_requirements(configured, github, monkeypatch):

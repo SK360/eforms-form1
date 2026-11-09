@@ -106,3 +106,19 @@ def test_undo_drops_unfinished_uploads(empty_client, conn, data_dir):
     assert (data_dir / "incoming").exists()
     assert empty_client.post("/api/import/undo", json={}).json() == {"ok": True}       # server empty: just the uploads
     assert not (data_dir / "incoming").exists()
+
+
+def test_a_checksum_that_is_not_hex_names_no_file(empty_client, filled, data_dir):
+    """Only its length was checked: 64 characters starting with ../ named a PDF outside the incoming folder, which
+    was then stored as an approval PDF and deleted where it was."""
+    empty_client.post("/api/import/pdf", content=b"%PDF-1.4 x", headers={"Content-Type": "application/pdf"})
+    name = "../" + "a" * 61
+    outside = data_dir / ("a" * 61 + ".pdf")
+    outside.write_bytes(b"%PDF-1.4 not an upload")
+    assert (data_dir / "incoming" / f"{name}.pdf").is_file()                       # the path the old check accepted
+    for path, body in (("/api/approval-pdfs", {"pdfs": [{"eform_id": "1", "serial": "A101", "sha256": name}]}),
+                       ("/api/import", {"suppressors": [], "sbrs": [], "pdfs": [{"serial": "A101", "sha256": name}]}),
+                       ("/api/approval-pdfs", {"pdfs": [{"serial": "A101", "sha256": ["a"] * 64}]})):
+        r = empty_client.post(path, json=body)
+        assert r.status_code == 400 and "wasn't uploaded" in r.json()["error"], path
+        assert outside.read_bytes() == b"%PDF-1.4 not an upload"
