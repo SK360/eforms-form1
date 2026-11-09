@@ -61,7 +61,7 @@ def zip_app():
                       "requirements.txt": "rich\n", "atf": "#!/bin/sh\necho old\n", "data/trust.yaml": "mine: 1\n",
                       "forms/5320.23.pdf": "my template", "out/submissions.csv": "my log"}.items():
         (app / rel).parent.mkdir(parents=True, exist_ok=True)
-        (app / rel).write_text(text, encoding="utf-8")
+        (app / rel).write_bytes(text.encode())  # bytes: text mode would write CRLF on Windows (not what a ZIP has)
     return app
 
 
@@ -203,6 +203,14 @@ def test_new_requirements_install_packages(configured, github, monkeypatch):
     monkeypatch.setattr(update, "_run", lambda *a: ran.append(a))
     assert update.apply(update.check())["packages"] is True
     assert ran == [("-m", "pip", "install", "--quiet", "-r", "requirements.txt"), ("-m", "playwright", "install", "chromium")]
+
+
+def test_line_endings_alone_are_not_new_requirements(configured, github, monkeypatch):
+    app = zip_app()
+    (app / "requirements.txt").write_bytes(b"rich\r\n")
+    github(release=release_json(), zip=fake_zip())
+    monkeypatch.setattr(update, "_run", lambda *a: pytest.fail("pip ran for a line-ending change"))
+    assert update.apply(update.check())["packages"] is False
 
 
 def test_new_server_api_is_mentioned_in_server_mode(configured, github, monkeypatch):

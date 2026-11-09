@@ -300,8 +300,9 @@ def _api(text):
 
 
 def _read(rel):
+    """A program file's bytes, line endings made LF (a CRLF copy of the same text isn't a change); b"" if missing."""
     try:
-        return (APP / rel).read_bytes()
+        return (APP / rel).read_bytes().replace(b"\r\n", b"\n")
     except OSError:
         return b""
 
