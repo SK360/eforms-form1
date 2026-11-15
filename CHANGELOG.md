@@ -7,6 +7,46 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.4.0 (2026-11-15)
+
+A clearer message for a CLEO address the portal doesn't know, a safer updater, and a status screen, one-file backup
+and update command for the inventory server.
+
+**Updating:** from the menu (**⬆ Update to version 1.4.0**), the first update done that way. No new packages. The
+inventory server is optional to update (the helper works with the one you have); its new Server screen, backup and
+update command need it. This once by hand: `cd /opt/atf-inventory && git pull && systemctl restart atf-inventory`
+(Docker: rebuild the image, see DOCKER.md). From then on: `atf-server update`.
+
+### Fixed
+- **A CLEO city, county or state the portal doesn't offer** stopped filing after 30 seconds with only "Timeout". The
+  portal fills those dropdowns from the ZIP, so a misspelled county (or a city the ZIP doesn't cover) can't be
+  picked. Now it stops within a few seconds, names the choices the page offers and says to check that setting and
+  the ZIP in **Settings > All settings**. The county is the one CLEO question the 5320.23 template can't fill in,
+  so it's the one to check first. Every other dropdown also says what it offers instead of timing out.
+- **Updates:** when a new version needs new Python packages, they are installed before any program file is
+  replaced. A failed install used to leave the new program with the old packages; now the folder stays on the old
+  version and the update is offered again.
+- **Inventory server:** uploads accept only proper checksums for PDF names (a paired device could otherwise name a
+  file outside the server's upload folder).
+
+### Inventory server
+- **Server screen** on the server's page (footer: Server) and in **Check my setup**: its version and whether a newer
+  one is out, the last backups, disk space, when its certificate runs out, and anything that needs attention (no
+  backup for two days, a nearly full disk, a certificate about to expire, approval PDFs missing). The server now
+  reports the same version number as the helper.
+- **One backup file with everything**: the database and every approval PDF in one ZIP, from the Server screen or
+  from the helper (**Settings > Where your inventory lives > Save a backup of the server on this computer**, keeps
+  the newest 5). `atf-server restore <file>` takes it back, checking every PDF first. No certificates or keys in it.
+- **`atf-server update`** (plain installs, as root): backs up, installs packages, moves to the newest release and
+  restarts the service. `--check` only says whether one is out. There's no update button on the page on purpose:
+  the server can't change its own program, and neither can a paired phone.
+
+### Tested
+- Live: a real trust filing with the new dropdown picking (CLEO city, county and state included). The new "isn't one
+  of the choices" message only in tests so far.
+- The server's status screen, backup file and restore in tests. Not yet live: `atf-server update` on a real server
+  and the first update from the menu to a real release on Windows (macOS updates were tried with 1.3.0).
+
 ## 1.3.0 (2026-11-08)
 
 Updates from the menu.
