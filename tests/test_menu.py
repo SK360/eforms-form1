@@ -495,7 +495,7 @@ def test_version_on_home_and_cli(configured, answers, screen, capsys, monkeypatc
     queue(("S1", "9"))
     answers(QUIT)
     ui.menu()
-    assert f"eForms Form 1 v{atf.__version__}" in screen.getvalue()
+    assert f"eForms Form 1 v{atf.__version__} · Helped you out? Follow @sk360.3d2a on Instagram\n" in screen.getvalue()
     assert f"## {atf.__version__} " in (atf.ROOT / "CHANGELOG.md").read_text(encoding="utf-8")   # released with notes
     monkeypatch.setattr(sys, "argv", ["atf", "--version"])
     with pytest.raises(SystemExit):

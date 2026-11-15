@@ -1,5 +1,7 @@
 # eForms Form 1 helper (suppressors, filed by a trust or by you as an individual)
 
+*Made by [@sk360.3d2a on Instagram](https://www.instagram.com/sk360.3d2a/) · [u/StruggleFearless2947 on Reddit](https://www.reddit.com/user/StruggleFearless2947/).*
+
 Fills and submits ATF Form 1s in eForms for suppressors you make, either through your trust (it prepares the 5320.23
 Responsible Person Questionnaire for each one) or as an individual. After a batch it makes the CLEO notification
 packet to print and mail. It also keeps your inventory: approvals read back from eForms, builds, and a page for your

@@ -165,9 +165,15 @@ def summary(rows):
     return " · ".join(parts + ([f"[magenta]{escape(atf.nfa_counts(sbrs))}[/]"] if sbrs else []))
 
 
+INSTAGRAM = "https://www.instagram.com/sk360.3d2a/"
+
+
 def home(rows):
     con.clear()
-    con.print(queue_table(rows, title=f"[bold]eForms Form 1[/] [dim]v{atf.__version__}[/]"))  # no trust name: the screen gets shared
+    # Its own line, not the table's title: that wraps at the table's width. No trust name: the screen gets shared.
+    con.print(f"[bold]eForms Form 1[/] [dim]v{atf.__version__} · Helped you out? Follow "
+              f"[link={INSTAGRAM}]@sk360.3d2a[/link] on Instagram[/]", soft_wrap=True, highlight=False)
+    con.print(queue_table(rows))
     con.print(f"  {summary(rows)}")
     server_line()
     new = update.available()
