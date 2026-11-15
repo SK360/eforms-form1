@@ -440,6 +440,10 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   The wizard's default firearm description is "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE
   ANY PARTS UNTIL A FORM 1 IS APPROVED" (`DEFAULT_DESCRIPTION` in ui.py); users may edit it.
 - **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
+  The county is never on the 5320.23, so the wizard's county question is the only empty one when a template is read.
+  A value the dropdown doesn't offer = `NoSuchOption` after ~3 s naming the page's choices + the step's `fix` hint
+  (`_pick`; it used to be a bare 30 s Playwright timeout: a county typed "MONORE" for MONROE, 2026-11-15). Live
+  2026-11-15: a real trust filing went through with the new `_pick`; the failure message itself not yet seen live.
 - **"validated successfully"** appears only on the Certify page, after ticking verify (`#binary`) and Next.
 - The portal shows the trust name uppercased on the summary; `expect` compares case-insensitively as a whole token
   (`22` matches `22`/`CAL 22` but not `223`; `S101` not `S1015`). Note `12` would still match `12.5`.

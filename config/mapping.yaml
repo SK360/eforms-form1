@@ -125,9 +125,10 @@ portal:
     - {selector: "#cleoAddress-addressLine1", action: fill, value: "{cleo_street}"}
     - {selector: "#cleoAddress-zipCode", action: fill, value: "{cleo_zip}"}
     - {action: wait, value: "1500"}   # city/county/state dropdowns populate from zip
-    - {selector: "#cleoAddress-city", action: select, value: "{cleo_city}"}
-    - {selector: "#cleoAddress-county", action: select, value: "{cleo_county}"}
-    - {selector: "#cleoAddress-state", action: select, value: "{cleo_state}"}
+    # fix: shown when the ZIP's dropdown doesn't offer the setting (e.g. a misspelled county)
+    - {selector: "#cleoAddress-city", action: select, value: "{cleo_city}", fix: "Check the CLEO city and ZIP in Settings > All settings"}
+    - {selector: "#cleoAddress-county", action: select, value: "{cleo_county}", fix: "Check the CLEO county and ZIP in Settings > All settings"}
+    - {selector: "#cleoAddress-state", action: select, value: "{cleo_state}", fix: "Check the CLEO state and ZIP in Settings > All settings"}
     - {selector: "#nextBtn", action: click}
     # --- line-item: add firearm, popup 1 (manufacturer) ---
     - {action: section, value: "Firearm: manufacturer"}

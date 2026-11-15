@@ -2578,8 +2578,13 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             except Exception:
                 emit("step", "    (not present; skipping)")
             continue
-        if act == "fill": _fill(page, loc, val, sel)
-        elif act == "select": _select(page, loc, val, sel)
+        if act in ("fill", "select"):
+            try:
+                (_fill if act == "fill" else _select)(page, loc, val, sel)
+            except NoSuchOption as e:  # fix: where in the settings that value comes from
+                if not s.get("fix"):
+                    raise
+                raise NoSuchOption(f"{e}. {s['fix']}") from None
         elif act == "check": _tick(page, sel)
         elif act == "click": loc.click()
         elif act == "upload": loc.set_input_files(val)
@@ -2646,12 +2651,37 @@ def _shown_value(loc):
 _picks = None  # inside a `check_picks` block: [(selector, locator, value)] picked quickly, checked together at the end
 
 
-def _pick(loc, val):
-    """Choose a dropdown option by its label (else its value)."""
+class NoSuchOption(RuntimeError):
+    """A dropdown doesn't offer the value from the settings (e.g. a misspelled CLEO county)."""
+
+
+_PLACEHOLDER = re.compile(r"^(-+|select\b|choose\b|please\b)", re.I)
+
+
+def _pick(loc, val, wait_ms=30000, grace_ms=3000):
+    """Choose a dropdown option by its label (else its value). Dropdowns filled by the page (the CLEO city/county
+    from the ZIP) may still be loading: wait up to `wait_ms` for any options, then `grace_ms` for the wanted one.
+    Not offered = NoSuchOption naming the choices (Playwright alone waited 30 s and said only "Timeout": a CLEO
+    county typed "MONORE" for MONROE, 2026-11-15)."""
     want = val.strip().lower()
-    labels = loc.evaluate("e => [...e.options].map(o => o.text.trim())") or []
-    label = next((x for x in labels if x.lower() == want), None)
-    loc.select_option(label=label) if label is not None else loc.select_option(val)
+    waited, real_since = 0, None
+    while True:
+        opts = loc.evaluate("e => [...e.options].map(o => [o.text.trim(), o.value])") or []
+        label = next((t for t, _ in opts if t.lower() == want), None)
+        if label is not None:
+            return loc.select_option(label=label)
+        value = next((v for _, v in opts if v.strip().lower() == want), None)
+        if value is not None:
+            return loc.select_option(value=value)
+        real = [t for t, _ in opts if t and not _PLACEHOLDER.match(t)]
+        if real and real_since is None:
+            real_since = waited
+        if waited >= wait_ms or (real_since is not None and waited - real_since >= grace_ms):
+            shown = ", ".join(real[:12]) + (f" and {len(real) - 12} more" if len(real) > 12 else "")
+            raise NoSuchOption(f"{val!r} isn't one of the choices on the page"
+                               + (f" ({shown})" if real else " (it shows none)"))
+        loc.page.wait_for_timeout(250)
+        waited += 250
 
 
 def _kept(loc, val):

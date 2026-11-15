@@ -196,6 +196,35 @@ def test_answers_are_checked_together_and_repicked():
         assert bad                                                                  # "US" must not match "NON-US"
 
 
+def test_a_value_the_dropdown_lacks_fails_fast_and_names_the_choices():
+    """The CLEO city/county dropdowns are filled from the ZIP after a moment. A value that comes late is still picked;
+    one that isn't offered (a county typed "MONORE" for MONROE) fails in seconds, not 30, saying what the page offers
+    and where to fix it. This holds for city and state too."""
+    import time
+    from playwright.sync_api import sync_playwright
+    steps = {s["selector"]: s for s in atf.load_mapping()["portal"]["steps"] if str(s.get("selector", "")).startswith("#cleoAddress-")}
+    for name in ("city", "county", "state"):
+        assert "Settings" in steps[f"#cleoAddress-{name}"].get("fix", ""), name
+    county = dict(steps["#cleoAddress-county"], value="{cleo_county}")
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page()
+        page.set_content("""<select id="cleoAddress-county"><option value="">Select County</option></select>
+          <script>setTimeout(() => { const s = document.getElementById('cleoAddress-county');
+              for (const [v, t] of [['1: Object', 'MONROE'], ['2: Object', 'MCMINN']]) s.add(new Option(t, v)); }, 800);</script>""")
+        atf._run_steps(page, [county], {"cleo_county": "MONROE"}, False, [])          # late options: waited for
+        assert atf._shown_value(page.locator("#cleoAddress-county")) == "MONROE"
+        start = time.monotonic()
+        with pytest.raises(atf.NoSuchOption) as e:
+            atf._run_steps(page, [county], {"cleo_county": "MONORE"}, False, [])
+        assert time.monotonic() - start < 6
+        msg = str(e.value)
+        assert "'MONORE' isn't one of the choices on the page (MONROE, MCMINN)" in msg and "Select County" not in msg
+        assert "Check the CLEO county and ZIP in Settings" in msg and "\n" not in msg   # one line: STEP FAILED shows that
+        page.set_content('<select id="x"><option value="">Select</option></select>')
+        with pytest.raises(atf.NoSuchOption, match=r"\(it shows none\)$"):           # nothing loaded: no fix hint either
+            atf._pick(page.locator("#x"), "MONROE", wait_ms=500)
+
+
 # ---------- other responsible persons in the trust ----------
 def test_read_person_gets_their_name_address_and_never_the_ssn():
     got = atf.read_person(FIXTURE)
