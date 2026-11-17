@@ -19,7 +19,7 @@ def set_cleo(person=None):
     shutil.copy(CLEO_FIXTURE, atf.cleo_template(person))
 
 
-def submitted_pdf(serial, caliber="22"):
+def submitted_pdf(serial, caliber="22", printed=None):
     """A stand-in for a SUBMITTED form's "View PDF": the ATF copy (item 4 at eForms' positions, so the serial can be
     read), an instructions page, then the CLEO copy, which (like eForms') leaves the serial out."""
     doc = pymupdf.open(stream=approved_pdf(serial=serial, caliber=caliber, approved=False, date=""))
@@ -30,6 +30,8 @@ def submitted_pdf(serial, caliber="22"):
     cleo.insert_text((280, 40), "CLEO Copy", fontname="tiro", fontsize=9)
     cleo.insert_text((364, 384), "c. Caliber or gauge", fontname="tiro", fontsize=8)
     cleo.insert_text((398, 413), f"CAL-{caliber}", fontname="helv", fontsize=7)
+    if printed:  # e.g. an internal control number printed on the CLEO copy
+        cleo.insert_text((40, 700), printed, fontname="helv", fontsize=8)
     return doc.tobytes()
 
 
@@ -92,6 +94,19 @@ def test_form1_cleo_copy_is_the_cleo_pages_only(configured, tmp_path):
     assert doc.page_count == 1 and "CLEO Copy" in doc[0].get_text() and "CAL-45ACP" in doc[0].get_text()
     assert "T301" not in text(kept) and "ATF Copy" not in text(kept)
     assert atf._form1_index() == {"2000002": "T301"}
+
+
+def test_a_serial_printed_on_the_form1_cleo_copy_is_blanked_out(configured, tmp_path):
+    """If eForms prints the internal control number (= the serial, Settings) on the CLEO copy, the saved copy must still
+    not show the serial: it's blanked out and said. Other text, and a longer number containing it, stay."""
+    said = []
+    atf.emit = lambda kind, text, **d: said.append((kind, text))
+    pdf = tmp_path / "full.pdf"
+    pdf.write_bytes(submitted_pdf("T301", "45ACP", printed="Internal Control Number: T301 (ref T3010)"))
+    atf.save_form1_cleo(pdf, "2000002", {})
+    kept = text(atf._form1_cleo_path("T301"))
+    assert "T301 " not in kept + " " and "T3010" in kept and "Internal Control Number" in kept and "CAL-45ACP" in kept
+    assert any(k == "warn" and "showed the serial 1 time(s)" in t for k, t in said)
 
 
 SUBMITTED_FORMS = [  # (eForm ID, finalized, PDF, submitted)

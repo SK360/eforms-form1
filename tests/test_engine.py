@@ -216,6 +216,25 @@ def test_answers_are_checked_together_and_repicked():
         assert bad                                                                  # "US" must not match "NON-US"
 
 
+def test_internal_control_number_is_the_serial_unless_turned_off(configured):
+    """The Application page's Internal Control Number gets the serial (searchable on the eForms dashboard) and is read
+    back there; Settings can turn it off (box left empty, no step)."""
+    queue(("ABC123", "9"))
+    steps = _dry_steps()
+    assert "fill #internalControlNumber ABC123" in steps and "expect #internalControlNumber ABC123" in steps
+    assert steps.index("#taxPaid") < steps.index("#internalControlNumber") < steps.index("#noFFL")   # Application page
+    t = atf.load_trust()
+    t["icn_serial"] = False
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
+    assert "internalControlNumber" not in _dry_steps()
+    make_individual()
+    assert not atf.icn_is_serial()                                              # kept when switching to individual
+    t = atf.load_trust()
+    t.pop("icn_serial")
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
+    assert "fill #internalControlNumber ABC123" in _dry_individual()            # individuals too
+
+
 def test_a_value_the_dropdown_lacks_fails_fast_and_names_the_choices():
     """The CLEO city/county dropdowns are filled from the ZIP after a moment. A value that comes late is still picked;
     one that isn't offered (a county typed "MONORE" for MONROE) fails in seconds, not 30, saying what the page offers

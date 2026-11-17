@@ -22,6 +22,10 @@ portal:
     # --- application ---
     - {action: section, value: "Application"}
     - {selector: "#taxPaid", action: check}
+    # Internal Control Number = your own reference for the form: the serial (Settings; off = left empty), so the eForms
+    # dashboard can be searched by serial. Read back here: a box that cut it short would block submitting.
+    - {selector: "#internalControlNumber", action: fill, value: "{icn}", if_set: icn}
+    - {selector: "#internalControlNumber", action: expect, label: "Internal control number", value: "{icn}", exact: true, if_set: icn}
     - {selector: "#nextBtn", action: click}
     # --- applicant ---
     - {action: section, value: "Applicant"}

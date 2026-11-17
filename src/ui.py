@@ -1194,6 +1194,8 @@ def settings_menu():
             questionary.Choice(f"CLEO copies of the 5320.23 ({_cleo_count(t)})", cleo_flow)] if trust_filing else [])
         + [questionary.Choice(f"CLEO packet after each batch ({'on' if atf.cleo_packet_after_batch(t) else 'off: you make it later'})",
                               cleo_packet_flow),
+           questionary.Choice(f"Internal control number on eForms ({'the serial' if atf.icn_is_serial(t) else 'left empty'})",
+                              icn_flow),
            questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
            questionary.Choice(f"New versions ({'tell me when one is out' if update.enabled(t) else 'off'})", update_setting_flow),
            questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
@@ -1629,6 +1631,22 @@ def advanced_flow():
         questionary.Choice("Back", "back")]).ask()
     if callable(what):
         return what()
+
+
+def icn_flow():
+    """Settings > Internal control number on eForms: the serial (the default) or left empty."""
+    t = _settings()
+    con.print("  [dim]Each Form 1 has an Internal Control Number box for your own reference. With the serial in it,\n"
+              "  the eForms home page can search by serial and its results list shows which suppressor each form is.[/]")
+    on = questionary.select("Internal control number:", default="on" if atf.icn_is_serial(t) else "off", choices=[
+        questionary.Choice("The suppressor's serial", "on"),
+        questionary.Choice("Leave it empty", "off")]).ask()
+    if on is None:
+        return
+    t["icn_serial"] = on == "on"
+    _save_settings(t)
+    con.print("  [green]✔ Saved.[/]")
+    pause()
 
 
 def update_setting_flow():

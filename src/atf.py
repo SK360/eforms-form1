@@ -1700,6 +1700,30 @@ def _cleo_pages(doc):
     return [i for i, pg in enumerate(doc) if "CLEO Copy" in {" ".join(ln.split()) for ln in pg.get_text().splitlines()}]
 
 
+def _serial_words(page, serial):
+    """Where `serial` is printed as a whole word on the page (case ignored; A101 doesn't match A1015)."""
+    import pymupdf
+    want = serial.strip().upper()
+    return [pymupdf.Rect(w[:4]) for w in page.get_text("words") if w[4].strip(".,;:()[]").upper() == want]
+
+
+def _redact_serial(doc, serial):
+    """Blank out the serial wherever it's printed as a word in `doc` (the CLEO's copies never show it: ATF leaves item 4e
+    off them, and our internal control number = the serial must not bring it back). Returns how many were removed."""
+    import pymupdf
+    n = 0
+    for page in doc:
+        hits = _serial_words(page, serial)
+        for r in hits:
+            page.add_redact_annot(r, fill=(1, 1, 1))
+        if hits:
+            page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)
+            n += len(hits)
+    if any(_serial_words(page, serial) for page in doc):
+        raise RuntimeError("its CLEO copy shows the serial and it couldn't be removed")
+    return n
+
+
 def save_form1_cleo(pdf, eform_id, index):
     """Keep the CLEO-copy pages of a submitted form's PDF as out/cleo/Form1_<serial>.cleo.pdf. Returns the serial."""
     import pymupdf
@@ -1713,6 +1737,10 @@ def save_form1_cleo(pdf, eform_id, index):
     out = pymupdf.open()
     for i in pages:
         out.insert_pdf(doc, from_page=i, to_page=i)
+    removed = _redact_serial(out, serial)
+    if removed:
+        emit("warn", f"    the Form 1 CLEO copy of {serial} showed the serial {removed} time(s) (the internal control "
+                     "number?); blanked out, since the CLEO's copies never show it")
     _cleo_dir().mkdir(parents=True, exist_ok=True)
     out.save(_form1_cleo_path(serial), garbage=3, deflate=True)
     index[eform_id] = serial
@@ -1862,6 +1890,13 @@ def cleo_packets(serials):
     if included:
         _log_packet(sorted(included), next(path for _, path, _, _ in out if path))
     return out
+
+
+def icn_is_serial(trust=None):
+    """Put the suppressor's serial in the Form 1's Internal Control Number box (Application page; the default), so the
+    eForms dashboard can be searched and read by serial (its results list shows eForm IDs, not serials). Off
+    (`icn_serial: false`) = the box is left empty, e.g. for someone who numbers their forms their own way."""
+    return (trust if trust is not None else load_trust()).get("icn_serial", True) is not False
 
 
 def cleo_packet_after_batch(trust=None):
@@ -2501,6 +2536,7 @@ def _row_context(trust, item):
            "applicant_type": kind,
            "answers": [{"q_id": q, "q_answer": a} for q, a in ans.items()] + [{"q_id": "11.M.2", "q_answer": "N/A"}],
            "upin": upin(trust),
+           "icn": item["serial_number"] if icn_is_serial(trust) else "",
            "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": rp["race"],
            "rp_birth_state": rp["place_of_birth"]["state"].upper(),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),

@@ -445,6 +445,14 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   A value the dropdown doesn't offer = `NoSuchOption` after ~3 s naming the page's choices + the step's `fix` hint
   (`_pick`; it used to be a bare 30 s Playwright timeout: a county typed "MONORE" for MONROE, 2026-11-15). Live
   2026-11-15: a real trust filing went through with the new `_pick`; the failure message itself not yet seen live.
+- **Internal Control Number** (added 2026-11-16 on a user's request): the Application page's `#internalControlNumber`
+  (the user's own reference) gets the serial (`{icn}`, `atf.icn_is_serial()`, `icn_serial: false` in trust.yaml =
+  left empty; Settings > Internal control number on eForms, `icn_flow`) and is read back there (`exact`). The eForms
+  home page has an "Internal Control Number" search box (`#internal-control-num-search`) and results column, so the
+  dashboard becomes searchable by serial (Check approvals / CLEO fetch could match by it instead of opening PDFs: not
+  done). The CLEO's copies must never show the serial: `save_form1_cleo` blanks it out wherever it's printed as a
+  word (`_redact_serial`, warns). Live 2026-11-16 (a real trust filing): filled + read back, shown in the dashboard's
+  ICN column, NOT printed on the Form 1 CLEO copy (identical layout to one filed without it); length limit unknown.
 - **"validated successfully"** appears only on the Certify page, after ticking verify (`#binary`) and Next.
 - The portal shows the trust name uppercased on the summary; `expect` compares case-insensitively as a whole token
   (`22` matches `22`/`CAL 22` but not `223`; `S101` not `S1015`). Note `12` would still match `12.5`.
@@ -499,8 +507,8 @@ prints steps without a browser. `--capture` records screens after the automated 
 - Other responsible persons (added 2026-10-21 on request): practice run passed 2026-10-22 with the user as RP 2 (own
   EFT); a real second person (their own EFT/name) not yet. Verify page RP read-back not mapped. U.S. citizens only.
 - Individuals: U.S. citizens answering No to every question 11 only; not yet filed live (mapped from a capture).
-- CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms). Not yet live: the
-  fetch at the end of a real batch (`file_rows` with `cleo`), and an individual's submitted PDF (assumed to carry the
+- CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms); the fetch at the end
+  of a real batch (`file_rows` with `cleo`) worked live 2026-11-16. Not yet live: an individual's submitted PDF (assumed to carry the
   same "CLEO Copy" pages).
 - Files suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields. They are only
   inventoried, from Check approvals.
