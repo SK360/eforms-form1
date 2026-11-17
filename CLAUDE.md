@@ -289,7 +289,7 @@ plain CLI, kept for debugging/scripting:
   deletes), plus the same records ZIPs in `records/` and a README on restoring. Why not whole ZIPs: approval PDFs +
   CLEO copies are ~270 MB for the user and never change. `backup_stale_days` (folder set, not reached for 7+ days,
   counted from `note_backup_folder_set`) = a yellow line under home. Check my setup "Backups" line (no folder =
-  warn). CLI `backup`. Screens show the folder's name only (`_folder_name`). Tests: `tests/test_backup.py`.
+  ok, saying it's optional: users must not be bugged to set one up; only a CHOSEN folder that's missing warns). CLI `backup`. Screens show the folder's name only (`_folder_name`). Tests: `tests/test_backup.py`.
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`; on Linux also `_chromium_start_problem`, a headless launch, for
   missing system libraries), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing

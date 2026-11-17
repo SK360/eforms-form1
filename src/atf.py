@@ -2749,8 +2749,8 @@ def check_setup():
 def _backup_check(trust):
     folder = backup_folder(trust)
     if not folder:
-        return ("warn", "Backups", "only on this computer (a daily copy of your records): for a copy that survives it, "
-                "choose a USB drive or a cloud folder in Settings > Backups", str(OUT / "backups"))
+        return ("ok", "Backups", "a daily copy of your records on this computer (optional: Settings > Backups adds a "
+                "USB drive or cloud folder)", str(OUT / "backups"))  # optional: never counted as something to look at
     last = _backup_state().get("folder_ok")
     when = f"last copied {last[:10]}" if last else "not copied yet"
     if not Path(folder).expanduser().is_dir():

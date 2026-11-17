@@ -118,6 +118,12 @@ def test_settings_backups_choose_a_folder(configured, answers, screen, tmp_path)
     assert atf.backup_folder() is None
 
 
+def test_no_backup_folder_is_fine_in_check_my_setup(configured):
+    """Backup folders are optional: without one, Check my setup says what's made, and it's not a warning."""
+    level, label, detail, _ = atf._backup_check(atf.load_trust())
+    assert (level, label) == ("ok", "Backups") and "optional" in detail
+
+
 def test_backup_folder_inside_the_helper_folder_is_refused(configured):
     assert ui._backup_folder_ok(str(atf.ROOT / "out")) != True  # noqa: E712
     assert ui._backup_folder_ok(str(atf.ROOT)) != True  # noqa: E712
