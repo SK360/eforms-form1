@@ -102,7 +102,8 @@ plain CLI, kept for debugging/scripting:
   unchanged; `atf.applicant_type()`). Individual (mapped from a live capture 2026-10-11): applicant-type `#Individual`;
   no trust name/title/trust document/5320.23 (the RP popup's `#formFile` and `#citizenType` are locked for individuals:
   `only: trust` / `skip_if_disabled`); the APPLICANT page asks questions `[id='11.A']`..`[id='11.M.1']` (No/Yes) and
-  `11.M.2` (only "N/A" once M.1 is No), `#13answer` alien number (locked), `#14answer` = item 13 UPIN (`if_set: upin`),
+  `11.M.2` (only "N/A" once M.1 is No), `[id='13answer']` alien number (locked), `[id='14answer']` = item 13 UPIN (`if_set: upin`; `atf.upin()`:
+  "N/A"/none = no UPIN; `#14answer` was invalid CSS and failed live 2026-11-16, a test now refuses `#<digit>`),
   `[id='17.Aanswer']` US/NON-US (US only); the verify page shows the answers again (read back by `expect`). Answers are
   saved in `individual.answers` (`QUESTIONS_11` holds ATF's wording; the wizard shows it); `settings_problems` refuses
   filing unless every answer is No; the menu's confirmation lists them and the user affirms they're true today.

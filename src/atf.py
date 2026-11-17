@@ -2478,6 +2478,16 @@ def cmd_check_setup(args):
         sys.exit(1)
 
 
+_NO_UPIN = re.compile(r"^(n/?a|none|no|-+|0+)?$", re.I)
+
+
+def upin(trust):
+    """The individual's UPIN (item 13), or "" when there is none. "N/A", "none", "no" and the like count as none: a
+    user wrote N/A there (2026-11-16) and it would have been typed into the portal's UPIN box."""
+    val = str((trust.get("individual") or {}).get("upin") or "").strip()
+    return "" if _NO_UPIN.match(val) else val
+
+
 def _row_context(trust, item):
     """Placeholder values for config/mapping.yaml steps for one suppressor row."""
     rp = trust["responsible_persons"][0]
@@ -2490,7 +2500,7 @@ def _row_context(trust, item):
            **{f"trust_{k}": v for k, v in tr.get("address", {}).items()}, **item,
            "applicant_type": kind,
            "answers": [{"q_id": q, "q_answer": a} for q, a in ans.items()] + [{"q_id": "11.M.2", "q_answer": "N/A"}],
-           "upin": str((trust.get("individual") or {}).get("upin") or "").strip(),
+           "upin": upin(trust),
            "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": rp["race"],
            "rp_birth_state": rp["place_of_birth"]["state"].upper(),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),

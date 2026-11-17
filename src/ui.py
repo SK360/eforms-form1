@@ -1091,7 +1091,8 @@ def settings_flow(first=False):
         if not trust_filing:
             ind["answers"], ind["upin"] = _questions_11(atf.answers_11(t)), _a(questionary.text(
                 "Unique Personal Identification Number (UPIN), if ATF issued you one (else leave empty):",
-                default=str(ind.get("upin") or ""))).strip()
+                default=atf.upin(t))).strip()
+            ind["upin"] = atf.upin({"individual": ind})  # "N/A" etc. = none
         con.rule("CLEO (chief law enforcement officer you notify)")
         cl = dict(t.get("cleo") or {})
         cl["department"] = _a(questionary.text("Agency / department:", default=get("cleo.department"), validate=_need))

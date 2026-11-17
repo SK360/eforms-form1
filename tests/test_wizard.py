@@ -108,7 +108,7 @@ def test_new_individual_setup(sandbox, answers, screen):
         (f / name).write_bytes(b"x")
     answers(True, "individual",                                         # accept disclaimer; file as an individual
             "01/02/1980", "Male", "White", "Ohio", "Ohio",              # DOB, sex, race, birth state, state of residence
-            *["No"] * len(atf.QUESTIONS_11), "",                         # questions 11.A-11.M.1; no UPIN
+            *["No"] * len(atf.QUESTIONS_11), "N/A",                      # questions 11.A-11.M.1; no UPIN (typed N/A)
             "SPRINGFIELD POLICE DEPARTMENT", "Pat Chief", "CHIEF OF POLICE", "200 MAIN ST", "45502", "Springfield", "Clark", "Ohio",
             D, D, D, str(f / "prints.eft"), str(f / "me.jpg"), False, QUIT)
     ui.menu()
@@ -117,6 +117,7 @@ def test_new_individual_setup(sandbox, answers, screen):
     assert not any("5320.23" in m or "Trust" in m or "title in the trust" in m for m in asked)   # nothing about a trust
     assert asked[7].startswith("11.A. Do you intend to make any firearm") and "Questions 11.A-11.M" in out
     assert t["applicant_type"] == "individual" and set(t["individual"]["answers"].values()) == {"No"}
+    assert t["individual"]["upin"] == ""                                                       # "N/A" = no UPIN
     assert "trust" not in t and "trust_document" not in t["files"] and not (atf.FORMS / "5320.23.pdf").exists()
     assert atf.settings_problems() == [] and "Settings saved" in out
 

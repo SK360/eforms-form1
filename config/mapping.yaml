@@ -42,7 +42,7 @@ portal:
           steps:
             - {selector: "[id='{q_id}']", action: select, value: "{q_answer}"}
         - {selector: "[id='17.Aanswer']", action: select, value: "US"}   # item 16 country of citizenship: US (NON-US not supported)
-    - {selector: "#14answer", action: fill, value: "{upin}", only: individual, if_set: upin}   # item 13: UPIN, if you have one
+    - {selector: "[id='14answer']", action: fill, value: "{upin}", only: individual, if_set: upin}   # item 13: UPIN, if you have one
     - action: repeat
       over: answers
       only: individual

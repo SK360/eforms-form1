@@ -125,12 +125,32 @@ def test_individual_steps(configured):
     assert "{" not in joined and "check #Individual" in steps and "check #Trust" not in steps
     for q, _ in atf.QUESTIONS_11:
         assert f"select [id='{q}'] No" in steps and f"expect [id='{q}'] >> nth=0 No" in steps   # filled, then read back
-    assert "select [id='11.M.2'] N/A" in steps and "select [id='17.Aanswer'] US" in steps and "fill #14answer U123" in steps
+    assert "select [id='11.M.2'] N/A" in steps and "select [id='17.Aanswer'] US" in steps and "fill [id='14answer'] U123" in steps
     for absent in ("#tradeName", "#formFile", "#businessName", "CORPORATION/TRUST", "#titleOfTheSubmitter"):
         assert absent not in joined, absent                                    # no trust, no 5320.23, no trust document
     assert joined.count("upload #file-upload") == 1                            # the supporting doc only
-    make_individual(upin="")
-    assert "#14answer" not in "\n".join(_dry_individual())                    # no UPIN: left empty
+    for none in ("", "N/A", "n/a", "NA", "none", "-"):                         # no UPIN: left empty ("N/A" too: a
+        make_individual(upin=none)                                             # user wrote that, 2026-11-16)
+        assert "14answer" not in "\n".join(_dry_individual()), none
+
+
+def test_no_mapping_selector_starts_an_id_with_a_digit():
+    """`#14answer` is invalid CSS (an id can't start with a digit there): the UPIN step failed with "not a valid
+    selector" for the first individual with a UPIN set (2026-11-16). Such ids need [id='14answer']."""
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            sel = node.get("selector")
+            if isinstance(sel, str) and re.search(r"#\d", sel):
+                found.append(sel)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(atf.load_mapping())
+    assert not found
 
 
 def test_individual_settings_problems(configured):
