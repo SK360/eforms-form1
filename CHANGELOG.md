@@ -7,6 +7,26 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.4.2 (2026-11-16)
+
+Find your forms on eForms by serial.
+
+**Updating:** from the menu (**⬆ Update to version 1.4.2**). No new packages. The inventory server doesn't need
+updating.
+
+### New
+- **The serial goes in each Form 1's Internal Control Number.** That box is the filer's own reference on eForms; with
+  the serial in it, the eForms home page's Internal Control Number search finds a form by serial, and its results
+  list shows which suppressor each form is (it only showed eForm IDs). It's read back before going on, like
+  everything else filled. Only forms filed from now on have it. Don't want it (you number your forms your own way)?
+  **Settings > Internal control number on eForms > Leave it empty.**
+- The CLEO's copies still never show the serial: eForms doesn't print the internal control number on the CLEO copy,
+  and if it ever did, the saved copy would have it blanked out (and say so).
+
+### Tested
+- Live: a real trust filing (the number read back, shown in the eForms dashboard's column, and absent from the
+  Form 1 CLEO copy). The Form 1 CLEO copy saved at the end of a real batch also worked live for the first time.
+
 ## 1.4.1 (2026-11-16)
 
 A fix for filing as an individual with a UPIN.
