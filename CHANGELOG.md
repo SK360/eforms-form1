@@ -7,6 +7,24 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.4.1 (2026-11-16)
+
+A fix for filing as an individual with a UPIN.
+
+**Updating:** from the menu (**⬆ Update to version 1.4.1**). No new packages. The inventory server doesn't need
+updating.
+
+### Fixed
+- **Filing as an individual stopped at the UPIN (item 13)** with "'#14answer' is not a valid selector" whenever a
+  UPIN was set in Settings. The step now finds the field.
+- **"N/A" at the UPIN question means no UPIN.** N/A, NA, none and the like used to be saved as a UPIN and would have
+  been typed into ATF's UPIN box; now the box is left empty, as with no answer. Settings saved before this are read
+  the same way, so nothing needs changing.
+
+### Tested
+- In tests (the UPIN step, N/A and other blanks, and a check that no portal step uses that kind of selector again).
+  Not yet on the live portal: a practice run as an individual with a real UPIN.
+
 ## 1.4.0 (2026-11-15)
 
 A clearer message for a CLEO address the portal doesn't know, a safer updater, and a status screen, one-file backup
