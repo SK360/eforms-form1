@@ -20,6 +20,9 @@ def healthy(configured, monkeypatch):
     monkeypatch.setattr(atf, "_chromium_path", lambda: str(FIXTURE))
     monkeypatch.setattr(atf, "_chromium_start_problem", lambda: None)
     monkeypatch.setattr(atf, "ROOT", configured)
+    t = atf.load_trust()
+    t["backup_folder"] = str(f)  # a backup folder that's there (none = a warning)
+    (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t, sort_keys=False), encoding="utf-8")
     return configured
 
 
@@ -32,7 +35,8 @@ def test_all_good(healthy):
     shutil.copy(CLEO_FIXTURE, atf.cleo_template())
     res = by_label(atf.check_setup())
     assert list(res) == ["Python", "Browser (Chromium)", "Helper folder", "Settings", "Your fingerprint file", "Your photo",
-                         "Trust document", "Supporting document 1", "Your 5320.23 template", "Your 5320.23 CLEO copy", "Inventory"]
+                         "Trust document", "Supporting document 1", "Your 5320.23 template", "Your 5320.23 CLEO copy", "Backups",
+                         "Inventory"]
     assert {level for level, _ in res.values()} == {"ok"}
     assert res["Settings"][1] == "complete (a trust)" and res["Your 5320.23 template"][1].startswith("stamps correctly")
     assert res["Your fingerprint file"][1] == "found, 1 KB" and res["Inventory"][1] == "1 suppressor"

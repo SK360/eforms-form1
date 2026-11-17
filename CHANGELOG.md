@@ -9,7 +9,15 @@ changed. Without Git, download the new release's ZIP and copy your `data`, `form
 
 ## Unreleased
 
-Installing no longer needs Python.
+Backups, and installing no longer needs Python.
+
+### New
+- **Backups.** On each day your records change, a small ZIP of them (inventory, settings, filing log) is kept in
+  `out/backups/`, the last 60 days. For a copy that survives the computer, **Settings > Backups** takes a folder on a
+  USB drive or in a cloud folder: everything is copied there (records, settings, templates, approval PDFs, CLEO
+  copies, your fingerprint/photo/trust files), then only what's new or changed, whenever the menu is open and the
+  folder is there. The home screen warns if it hasn't been reachable for a week. Check my setup shows it too.
+  The server pairing key is never copied. `./atf backup` does it from the command line.
 
 ### Changed
 - **New installs don't need Python installed first.** The installer downloads a pinned, checksum-verified copy of

@@ -296,6 +296,7 @@ optional [inventory server](#optional-an-inventory-server) does.)
 - **CLEO copies of the 5320.23** (trusts): add, replace or remove the CLEO copy of each person's template.
 - **CLEO packet after each batch**: on (the default), or later, for one packet covering several batches.
 - **Where your inventory lives**: this computer, or your own [inventory server](#optional-an-inventory-server).
+- **Backups**: choose a backup folder on a USB drive or a cloud folder; see [Backups](#backups).
 - **Check my setup**: see [above](#first-run-check-my-setup-and-a-practice-run).
 
 ### Advanced
@@ -315,6 +316,19 @@ CLEO copies and the packets (`CLEO packet <date> <time>.pdf`).
 Everything personal lives in `data/`, `forms/`, `out/` and `.browser-profile/` (your logged-in session), which are
 never committed. **Never zip or copy this folder to share it**; share the git repository instead. (With the optional
 [inventory server](#optional-an-inventory-server), your inventory and approval PDFs live on that machine, at home.)
+
+### Backups
+These files are the only copy of your records, so the helper backs them up by itself:
+- **On this computer:** on each day your records change (inventory, settings, filing log), a small ZIP of them goes in
+  `out/backups/` (`records-<date>.zip`, the last 60 days). That undoes a bad change, but not a dead computer.
+- **In a backup folder** (Settings > Backups): choose a folder on a USB drive or in iCloud Drive, OneDrive, Dropbox...
+  Everything is copied into an `eForms Form 1 backup` folder there: your records, settings, 5320.23 templates,
+  approval PDFs, CLEO copies, and the fingerprint, photo and trust files your settings use. After the first copy,
+  only what's new or changed is copied, whenever the menu is open and the folder is there. Nothing is ever deleted
+  from it. If the folder hasn't been reachable for a week, the home screen says so.
+- It holds personal files (fingerprints, signed 5320.23s): keep that folder private.
+- **Putting it back** on a new computer: install the helper, then copy the `data`, `forms` and `out` folders from the
+  backup's `files` folder into the helper's folder. The `README.txt` in the backup folder says the same.
 
 ## Optional: an inventory server
 **Not needed, and most people won't want it.** Everything above works without it.

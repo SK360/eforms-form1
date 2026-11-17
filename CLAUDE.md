@@ -278,6 +278,18 @@ plain CLI, kept for debugging/scripting:
   `update._get` raise (never GitHub, never the real folder). Live 2026-11-08: a git checkout at the updater commit (still 1.2.4) updated itself to the real v1.3.0 release
   from the menu on macOS, and the real v1.3.0 ZIP set back to 1.2.4 updated itself with `./atf update` (only
   differing files replaced and backed up; records untouched). Not yet live: Windows.
+- **Backups** (added 2026-11-17 for 1.5.0; `run_backups(force, now)` in atf.py, never raises; called by the menu
+  before EVERY home screen: cheap, compares sizes/mtimes via `_signature`). Two kinds: (1) records ZIP
+  `out/backups/records-<date>.zip` = the CSV/YAML/JSON(L) files only (KB), written only when their signature changed
+  (state in `out/backups/state.json`), today's rewritten, newest `BACKUP_KEEP_DAYS` (60) kept; (2) with
+  `backup_folder` in trust.yaml (Settings > Backups, `backup_flow`; refuses a folder inside ROOT): `_mirror` copies
+  `_backup_sources` (data/ minus server.yaml + server_cache.json, forms/, out/submissions.csv, out/approved/,
+  out/cleo/ minus "CLEO packet *" PDFs, and settings files outside data/forms as `elsewhere/<label>-<name>`, labels
+  name no one) into `<folder>/eForms Form 1 backup/files/` (tmp + replace, mtime kept, 2 s slack for FAT, NEVER
+  deletes), plus the same records ZIPs in `records/` and a README on restoring. Why not whole ZIPs: approval PDFs +
+  CLEO copies are ~270 MB for the user and never change. `backup_stale_days` (folder set, not reached for 7+ days,
+  counted from `note_backup_folder_set`) = a yellow line under home. Check my setup "Backups" line (no folder =
+  warn). CLI `backup`. Screens show the folder's name only (`_folder_name`). Tests: `tests/test_backup.py`.
 - **Check my setup** (`atf.check_setup()` -> [(ok|warn|fail, label, detail, path)]; CLI `check-setup`, exit 1 on a
   fail): Python version, Chromium (`_chromium_path`; on Linux also `_chromium_start_problem`, a headless launch, for
   missing system libraries), helper folder in a cloud folder (`CLOUD_FOLDERS`), missing

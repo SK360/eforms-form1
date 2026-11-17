@@ -1197,6 +1197,8 @@ def settings_menu():
            questionary.Choice(f"Internal control number on eForms ({'the serial' if atf.icn_is_serial(t) else 'left empty'})",
                               icn_flow),
            questionary.Choice(f"Where your inventory lives ({'your server' if atf.server_settings() else 'this computer'})", server_flow),
+           questionary.Choice(f"Backups ({'to ' + _folder_name(atf.backup_folder(t)) if atf.backup_folder(t) else 'only on this computer'})",
+                              backup_flow),
            questionary.Choice(f"New versions ({'tell me when one is out' if update.enabled(t) else 'off'})", update_setting_flow),
            questionary.Choice("Check my setup (files, templates, browser; no eForms)", check_setup_flow),
            questionary.Choice("Back", "back")]).ask()
@@ -1649,6 +1651,72 @@ def icn_flow():
     pause()
 
 
+def _folder_name(folder):
+    """A folder's own name (or its drive's), never the whole path: screenshots get shared."""
+    p = Path(str(folder)).expanduser()
+    return p.name or p.anchor or str(p)
+
+
+def _backup_folder_ok(s):
+    p = Path(_clean_path(s))
+    if not s.strip():
+        return "Required (drag the folder into this window)"
+    if not p.is_dir():
+        return "Folder not found"
+    root = atf.ROOT.resolve()
+    if p.resolve() == root or root in p.resolve().parents:
+        return "That's inside the helper's folder: choose a USB drive or a cloud folder"
+    return True
+
+
+def backup_flow():
+    """Settings > Backups: a daily copy of the records stays on this computer by itself; a backup folder (a USB drive,
+    a cloud folder) gets a copy of everything, kept up to date while it's connected."""
+    t = _settings()
+    folder = atf.backup_folder(t)
+    con.print(Panel(
+        "Your records (inventory, approvals, filing log) and files (settings, fingerprints, photo, trust document,\n"
+        "5320.23 templates) live only in this folder. A copy of the records is kept here by itself, once a day they\n"
+        f"change (out/backups, the last {atf.BACKUP_KEEP_DAYS}). For a copy that survives this computer, choose a backup folder on a\n"
+        "USB drive or in a cloud folder (iCloud Drive, OneDrive, Dropbox...): everything is copied there, then only\n"
+        "what's new or changed, whenever the menu is open and the folder is there. It holds personal files: keep it private.",
+        title="Backups", border_style="cyan", expand=False))
+    if folder:
+        there = Path(folder).expanduser().is_dir()
+        con.print(f"  Backup folder: [bold]{escape(_folder_name(folder))}[/]"
+                  + ("" if there else " [yellow](not there now: is the drive connected?)[/]"))
+    what = questionary.select("Backups:", choices=(
+        [questionary.Choice("Back up now", "now"), questionary.Choice("Choose a different backup folder", "choose"),
+         questionary.Choice("Stop copying to the backup folder (what's there stays)", "stop")] if folder else
+        [questionary.Choice("Choose a backup folder", "choose")]) + [questionary.Choice("Back", "back")]).ask()
+    if what in (None, "back"):
+        return
+    if what == "stop":
+        t.pop("backup_folder", None)
+        _save_settings(t)
+        con.print("  [green]✔ Saved.[/] Only the daily copy of your records on this computer is made now.")
+        return pause()
+    if what == "choose":
+        path = questionary.path("Backup folder (drag it here):", only_directories=True, validate=_backup_folder_ok).ask()
+        if not path:
+            return
+        t["backup_folder"] = _clean_path(path)
+        _save_settings(t)
+        atf.note_backup_folder_set()
+    with con.status("Copying to your backup folder… (the first time takes a while)"):
+        res = atf.run_backups(force=True)
+    if res["error"]:
+        con.print(f"  [red]✖ Not finished: {escape(res['error'])}. It's tried again each time the menu shows.[/]")
+    elif res["folder"] == "missing":
+        con.print("  [yellow]⚠ The backup folder isn't there: is the drive connected?[/]")
+    else:
+        n, size = res["copied"]
+        con.print(f"  [green]✔[/] Backed up to {escape(_folder_name(atf.backup_folder()))}: "
+                  + (f"{n} file{'s' if n != 1 else ''} copied ({max(1, round(size / 1048576))} MB)." if n else "already up to date.")
+                  + "\n  [dim]In it: an \"eForms Form 1 backup\" folder, with a README on putting it back.[/]")
+    pause()
+
+
 def update_setting_flow():
     """Settings > New versions: ask GitHub once a day at start (the default), or never by itself."""
     t = _settings()
@@ -1739,7 +1807,12 @@ def menu():
             if callable(what):
                 what()
             continue
+        atf.run_backups()  # only what changed since the last time; never raises
         home(rows)
+        stale = atf.backup_stale_days()
+        if stale:
+            con.print(f"  [yellow]⚠ Your backup folder hasn't been reachable for {stale} days: is the drive connected? "
+                      "(Settings > Backups)[/]")
         probs = atf.settings_problems()
         if probs:
             con.print(f"  [yellow]⚠ Settings incomplete ({len(probs)}): {escape(probs[0])}{' …' if len(probs) > 1 else ''}[/]")

@@ -910,6 +910,247 @@ def export_inventory(dest=None):
     return dest
 
 
+# ---------- Backups (automatic; menu: Settings > Backups; CLI: backup) ----------
+# The records (inventory, settings, filing log, approval index) live only in this folder. Two kinds of copy:
+#  - records ZIPs (a few KB: the CSV/YAML/JSON files only), out/backups/records-<date>.zip, written on a day the
+#    records changed (rewritten while they keep changing that day, so an earlier day survives a bad change); the
+#    newest BACKUP_KEEP_DAYS kept;
+#  - with a backup folder (`backup_folder` in trust.yaml: a USB drive, a cloud folder), everything is copied to
+#    <folder>/eForms Form 1 backup/files/ (data, forms, the approval PDFs, ...: only new or changed files, nothing is
+#    ever deleted there) plus the same records ZIPs in records/. A whole copy every day would not fit: the approval
+#    PDFs and CLEO copies run to hundreds of MB, and they never change once saved.
+# Run by the menu each time the home screen is shown (cheap: compares file sizes and times); never raises.
+BACKUP_KEEP_DAYS = 60
+BACKUP_DIR = "eForms Form 1 backup"
+BACKUP_STALE_DAYS = 7  # the home screen warns when the backup folder hasn't been reached for this long
+_BACKUP_SKIP = {"server.yaml", "server_cache.json", ".DS_Store"}  # the server pairing key (never copied) and a cache
+_RECORD_SUFFIXES = (".csv", ".yaml", ".yml", ".json", ".jsonl")
+BACKUP_README = """eForms Form 1 helper: backup
+
+files/    a copy of the helper's data, forms and out folders (your records, settings, approval PDFs, CLEO copies).
+          Nothing is ever deleted here; a changed file is replaced by its newest version.
+files/elsewhere/
+          files your settings use that sit outside the helper's folder (fingerprints, photo, trust document...).
+records/  just the records (inventory, settings, filing log), one ZIP for each day they changed, the newest {keep}.
+
+To put it back on a new computer: install the helper, then copy the data, forms and out folders from files/ into
+the helper's folder. Choose the files from files/elsewhere again in Settings (or put them back where they were).
+To go back to an earlier day's records, unzip one from records/ into the helper's folder (replace when asked).
+
+This holds personal files (fingerprints, photo, trust document, signed 5320.23s): keep it private.
+"""
+
+
+def backup_folder(trust=None):
+    """The backup folder from the settings (a str), or None."""
+    if trust is None:
+        try:
+            trust = load_trust() or {}
+        except FileNotFoundError:
+            return None
+    return str(trust.get("backup_folder") or "").strip() or None
+
+
+def _settings_files(trust):
+    """(label, path) of the files the settings point to (fingerprints, photos, trust document, documents). Labels
+    name no one."""
+    f = trust.get("files") or {}
+    out = [("your-fingerprint-file", f.get("eft")), ("your-photo", f.get("photo")), ("trust-document", f.get("trust_document"))]
+    out += [(f"document-{i}", d.get("path")) for i, d in enumerate(trust.get("docs") or [], 1)]
+    for n, p in enumerate(other_rps(trust), 2):
+        out += [(f"responsible-person-{n}-fingerprint-file", p.get("eft")), (f"responsible-person-{n}-photo", p.get("photo"))]
+    return [(label, Path(str(p))) for label, p in out if p]
+
+
+def _backup_sources(trust):
+    """(path, name) of every file a backup copies: data/ (minus the server pairing key and its cache), forms/, the
+    filing log, out/approved/, out/cleo/ (minus the mail packets, made from the rest), and files the settings use
+    from outside those folders (as elsewhere/<label>-<name>)."""
+    out = []
+
+    def add(base, label):
+        if base.is_file():
+            out.append((base, label))
+        elif base.is_dir():
+            for p in sorted(base.rglob("*")):
+                if (p.is_file() and p.name not in _BACKUP_SKIP and not p.name.endswith((".tmp", ".update-tmp"))
+                        and not (label == "out/cleo" and p.name.startswith("CLEO packet "))):
+                    out.append((p, f"{label}/{p.relative_to(base).as_posix()}"))
+
+    add(DATA, "data")
+    add(FORMS, "forms")
+    add(OUT / "submissions.csv", "out/submissions.csv")
+    add(OUT / "approved", "out/approved")
+    add(OUT / "cleo", "out/cleo")
+    inside = [DATA.resolve(), FORMS.resolve()]
+    for label, p in _settings_files(trust):
+        try:
+            rp = p.expanduser().resolve()
+            if rp.is_file() and not any(rp == d or d in rp.parents for d in inside):
+                out.append((rp, f"elsewhere/{label}-{rp.name}"))
+        except OSError:
+            continue
+    return out
+
+
+def _signature(files):
+    import hashlib
+    h = hashlib.sha256()
+    for p, name in files:
+        st = p.stat()
+        h.update(f"{name}\0{st.st_size}\0{st.st_mtime_ns}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _backup_state_path():
+    return OUT / "backups" / "state.json"
+
+
+def _backup_state():
+    try:
+        return json.loads(_backup_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_backup_state(state):
+    path = _backup_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _records_zip(folder, records, today):
+    """Write <folder>/records-<today>.zip (replacing today's), checked; prune all but the newest BACKUP_KEEP_DAYS."""
+    import zipfile
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / f"records-{today}.zip"
+    tmp = folder / f"records-{today}.zip.tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        for p, name in records:
+            z.write(p, name)
+    with zipfile.ZipFile(tmp) as z:
+        if z.testzip() is not None or len(z.namelist()) != len(records):
+            raise OSError("the records backup didn't read back")
+    os.replace(tmp, dest)
+    for old in sorted(folder.glob("records-????-??-??.zip"))[:-BACKUP_KEEP_DAYS]:
+        old.unlink()
+    return dest
+
+
+def _copy_file(src, dest):
+    """Copy keeping the modification time (so the next run sees it unchanged); tmp + replace, never half a file."""
+    import shutil
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    shutil.copyfile(src, tmp)
+    st = src.stat()
+    os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(tmp, dest)
+
+
+def _mirror(files, root):
+    """Copy each file to root/files/<name> unless a copy of the same size and time is there (2 s slack: FAT/exFAT
+    drives keep times in 2 s steps). Never deletes. Returns (files copied, bytes copied)."""
+    n = size = 0
+    for p, name in files:
+        dest = root / "files" / name
+        st = p.stat()
+        try:
+            ds = dest.stat()
+            if ds.st_size == st.st_size and abs(ds.st_mtime - st.st_mtime) <= 2:
+                continue
+        except FileNotFoundError:
+            pass
+        _copy_file(p, dest)
+        n, size = n + 1, size + st.st_size
+    return n, size
+
+
+def run_backups(force=False, now=None):
+    """Make the backups that are due (see above). force = check every file in the backup folder even if nothing
+    changed here (Back up now). Returns {"records": path|None, "folder": "ok"|"missing"|None, "copied": (files, bytes),
+    "error": str|None}; never raises."""
+    now = now or datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    res = {"records": None, "folder": None, "copied": (0, 0), "error": None}
+    try:
+        try:
+            trust = load_trust() or {}
+        except FileNotFoundError:
+            trust = {}
+        files = _backup_sources(trust)
+        records = [(p, name) for p, name in files if name.endswith(_RECORD_SUFFIXES) and not name.startswith("elsewhere/")]
+        if not records:
+            return res
+        state = _backup_state()
+        rsig = _signature(records)
+        if rsig != state.get("records"):
+            res["records"] = _records_zip(OUT / "backups", records, today)
+            state["records"] = rsig
+            _save_backup_state(state)
+        folder = backup_folder(trust)
+        if folder:
+            base = Path(folder).expanduser()
+            if not base.is_dir():
+                res["folder"] = "missing"
+                return res
+            root = base / BACKUP_DIR
+            fsig = _signature(files)
+            if force or fsig != state.get("folder_sig") or state.get("folder") != str(root):
+                res["copied"] = _mirror(files, root)
+                _records_zip(root / "records", records, today)
+                readme = root / "README.txt"
+                text = BACKUP_README.format(keep=BACKUP_KEEP_DAYS)
+                if not readme.exists() or readme.read_text(encoding="utf-8", errors="replace") != text:
+                    readme.write_text(text, encoding="utf-8")
+                state.update(folder_sig=fsig, folder=str(root))
+            state["folder_ok"] = now.isoformat(timespec="seconds")
+            _save_backup_state(state)
+            res["folder"] = "ok"
+    except Exception as e:  # e.g. a drive pulled out mid-copy, a file Excel has locked: tried again next time
+        res["error"] = str(e).splitlines()[0] if str(e) else type(e).__name__
+    return res
+
+
+def backup_stale_days(now=None):
+    """Days since the backup folder was last reached, when a folder is set and that's BACKUP_STALE_DAYS or more
+    (never reached since it was chosen = counted from then); else None."""
+    if not backup_folder():
+        return None
+    state = _backup_state()
+    since = state.get("folder_ok") or state.get("folder_set")
+    try:
+        days = ((now or datetime.now()) - datetime.fromisoformat(since)).days if since else None
+    except ValueError:
+        return None
+    return days if days is not None and days >= BACKUP_STALE_DAYS else None
+
+
+def note_backup_folder_set(now=None):
+    """Settings > Backups chose a folder: the stale-folder warning counts from now until it's first reached."""
+    state = _backup_state()
+    for k in ("folder_ok", "folder_sig", "folder"):
+        state.pop(k, None)
+    state["folder_set"] = (now or datetime.now()).isoformat(timespec="seconds")
+    _save_backup_state(state)
+
+
+def cmd_backup(args):
+    res = run_backups(force=True)
+    print(f"records: {res['records'] or 'unchanged since the last backup'}")
+    if res["folder"] == "ok":
+        print(f"backup folder: {res['copied'][0]} file(s) copied")
+    elif res["folder"] == "missing":
+        print("backup folder: not found (is the drive connected?)")
+    else:
+        print("backup folder: none set (Settings > Backups)")
+    if res["error"]:
+        print("problem:", res["error"])
+        sys.exit(1)
+
+
 # ---------- 5320.23 PDF ----------
 # Each responsible person signs their own 5320.23. Yours is forms/5320.23.pdf; another responsible person's template is
 # forms/5320.23_<tag>.pdf (`template` in their settings entry) and is stamped to out/5320.23_<serial>.<tag>.pdf.
@@ -2473,6 +2714,7 @@ def check_setup():
                 c = (("fail", c[1], "; ".join(probs), c[3]) if probs else
                      ("ok", c[1], "stamps correctly (caliber and date; no serial, as ATF prints it)", c[3]))
             out.append(c)
+    out.append(_backup_check(trust))
     if server_settings():
         import remote
         s = server_settings()
@@ -2502,6 +2744,18 @@ def check_setup():
         except OSError:
             out.append(("fail", "Inventory", "can't be saved: is it open in Excel? Close it", str(SUPP)))
     return out
+
+
+def _backup_check(trust):
+    folder = backup_folder(trust)
+    if not folder:
+        return ("warn", "Backups", "only on this computer (a daily copy of your records): for a copy that survives it, "
+                "choose a USB drive or a cloud folder in Settings > Backups", str(OUT / "backups"))
+    last = _backup_state().get("folder_ok")
+    when = f"last copied {last[:10]}" if last else "not copied yet"
+    if not Path(folder).expanduser().is_dir():
+        return ("warn", "Backups", f"your backup folder isn't there (is the drive connected?); {when}", folder)
+    return ("ok", "Backups", f"to your backup folder, {when}", folder)
 
 
 def cmd_check_setup(args):
@@ -2995,6 +3249,7 @@ def main():
     p = sub.add_parser("serve", help="your inventory on your phone (same Wi-Fi) until Ctrl-C"); p.set_defaults(fn=lambda a: __import__("phone").cmd_serve(a))
     p = sub.add_parser("check-setup", help="check settings, files, templates and the browser (no eForms)"); p.set_defaults(fn=cmd_check_setup)
     p = sub.add_parser("update", help="update this folder to the newest release (asks first)"); p.add_argument("--check", action="store_true", help="only say whether a newer version is out (exit 2 if so)"); p.add_argument("--yes", action="store_true", help="don't ask before updating"); p.set_defaults(fn=lambda a: __import__("update").cmd_update(a))
+    p = sub.add_parser("backup", help="make the backups now (records ZIP if changed; your backup folder from Settings)"); p.set_defaults(fn=cmd_backup)
     p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
     p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
     p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.add_argument("--cleo", action="store_true", help="after the batch, save each filed Form 1's CLEO copy to out/cleo/ (read-only)"); p.set_defaults(fn=cmd_fill_form1)
