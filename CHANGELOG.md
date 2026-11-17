@@ -7,7 +7,7 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
-## Unreleased
+## 1.5.0 (2026-11-17)
 
 Backups, and installing no longer needs Python.
 
@@ -28,7 +28,9 @@ Backups, and installing no longer needs Python.
 - **Existing installs: nothing to do.** Re-running the installer keeps a `.venv` that already works, and updates from
   the menu behave as before (they never run the installer, and never touch `.uv`).
 - Delete `.venv` and `.uv` together to reinstall from scratch.
-- Not yet tried live by a user on Windows or Linux (the automated tests cover all three systems).
+- Tried live: a fresh install on a Windows PC (it got its own Python 3.13 although 3.11 was installed). Linux and the
+  fallback only by the automated tests, which now install with no Python on Windows, Linux and macOS.
+- Backups: only by the automated tests so far.
 
 ## 1.4.2 (2026-11-16)
 
