@@ -12,7 +12,7 @@ Update (always the user's yes; never while a row is pending or a filing result w
   - a ZIP install: that tag's source ZIP from github.com into memory, checked (no absolute or .. paths, no links, and
     src/atf.py says the version asked for), then each program file that differs is replaced; the old one is copied to
     .update-backup/<old version>/ first, and any failure puts every file back. Personal folders (data/, forms/,
-    out/, .browser-profile/, .venv/) are never written, even if a ZIP had them. Files a release deleted stay.
+    out/, .browser-profile/, .venv/, .uv/) are never written, even if a ZIP had them. Files a release deleted stay.
 Packages first: when the release's requirements.txt differs, pip install -r (the new list) + playwright install
 chromium run BEFORE any program file changes, so a failed install leaves this folder as it was (never new code on
 old packages, which might not start). Then the menu restarts itself (Windows: the user starts it again). A different inventory-server API in the new remote.py = a reminder to update the server.
@@ -40,8 +40,8 @@ APP = atf.ROOT  # the helper's folder (tests point it at a temp folder)
 EVERY = timedelta(hours=20)  # check at most this often
 MAX_ZIP = 60 * 1024 * 1024
 # Never written by an update, whatever a ZIP contains: the user's records, their browser session, the Python env.
-PERSONAL = ("data", "out", "forms", ".browser-profile", ".venv", ".git", ".update-backup", "CLAUDE.local.md")
-SKIP_PARTS = (".venv", "__pycache__", ".pytest_cache", ".DS_Store")
+PERSONAL = ("data", "out", "forms", ".browser-profile", ".venv", ".uv", ".git", ".update-backup", "CLAUDE.local.md")
+SKIP_PARTS = (".venv", ".uv", "__pycache__", ".pytest_cache", ".DS_Store")
 
 
 class UpdateError(Exception):

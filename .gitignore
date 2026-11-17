@@ -7,6 +7,8 @@ CLAUDE.local.md
 
 # Environment / OS noise
 .venv/
+# the installer's private uv + Python 3.13 (.venv depends on it)
+.uv/
 __pycache__/
 *.pyc
 *.tmp

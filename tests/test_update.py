@@ -157,6 +157,14 @@ def test_zip_update_replaces_program_files_only(configured, github):
     assert not (atf.OUT / "update_check.json").exists() or update.available() is None
 
 
+def test_zip_update_never_writes_the_private_uv_folder(configured, github):
+    app = zip_app()
+    github(release=release_json(), zip=fake_zip(files={".uv/bin/uv": "THEIRS", ".uv/python/x/python": "THEIRS",
+                                                        "config/mapping.yaml": "portal: {}\n"}))
+    assert update.apply(update.check())["version"] == NEXT
+    assert not (app / ".uv").exists()
+
+
 def test_zip_update_puts_everything_back_on_a_failure(configured, github, monkeypatch):
     app = zip_app()
     github(release=release_json(), zip=fake_zip(files={"src/new.py": "x = 1\n"}))

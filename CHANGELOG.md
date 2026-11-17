@@ -7,6 +7,21 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## Unreleased
+
+Installing no longer needs Python.
+
+### Changed
+- **New installs don't need Python installed first.** The installer downloads a pinned, checksum-verified copy of
+  uv and uses it to put a private Python 3.13 in the folder's `.uv` folder (the `.venv` is made from it). Nothing is
+  installed system-wide.
+- **If uv can't be downloaded** (offline, blocked, an unsupported computer), the installer says why and uses a Python
+  3.9 to 3.14 already on the computer, as before. A checksum that doesn't match stops the install instead.
+- **Existing installs: nothing to do.** Re-running the installer keeps a `.venv` that already works, and updates from
+  the menu behave as before (they never run the installer, and never touch `.uv`).
+- Delete `.venv` and `.uv` together to reinstall from scratch.
+- Not yet tried live by a user on Windows or Linux (the automated tests cover all three systems).
+
 ## 1.4.2 (2026-11-16)
 
 Find your forms on eForms by serial.

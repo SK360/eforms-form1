@@ -1,5 +1,11 @@
 @echo off
 rem One-time setup on Windows. In this folder run:  .\install.cmd   then:  .\atf.cmd
+rem
+rem Python: if .venv already works (Python 3.9-3.14) it is kept. Otherwise a pinned copy of uv is downloaded (checked
+rem against a SHA-256 kept in tools\get-uv.ps1) and it installs a private Python 3.13 for this folder, in .uv.
+rem Any problem getting uv or its Python = the Python already on this computer is used instead (the older way).
+rem Testing only: ATF_PYTHON=<python> or ATF_NO_UV=1 use the older way straight away; ATF_UV_BASE=<url> replaces the
+rem place uv is downloaded from.
 setlocal
 cd /d "%~dp0"
 
@@ -7,6 +13,56 @@ rem Tested Pythons: 3.9 - 3.14. A brand-new Python (e.g. 3.15 in its first month
 rem yet, and pip then needs a C++ compiler, so it is never picked unless ATF_PYTHON names it.
 set "FITS=import sys; sys.exit(0 if (3, 9) <= sys.version_info[:2] <= (3, 14) else 1)"
 set "PY="
+
+if defined ATF_PYTHON goto :legacy
+if "%ATF_NO_UV%"=="1" goto :legacy
+
+rem A .venv that works and is Python 3.9-3.14 is kept, whatever made it
+if exist .venv\Scripts\python.exe .venv\Scripts\python.exe -c "%FITS%" >nul 2>&1 && goto :packages
+if exist .venv echo Rebuilding the .venv folder & rmdir /s /q .venv
+
+echo Getting uv 0.13.6 (it installs a private Python for this folder)...
+set "ARCH=%PROCESSOR_ARCHITECTURE%"
+if defined PROCESSOR_ARCHITEW6432 set "ARCH=%PROCESSOR_ARCHITEW6432%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\get-uv.ps1" -Root "%CD%\." -Arch "%ARCH%"
+set "RC=%errorlevel%"
+if "%RC%"=="0" goto :uvready
+if "%RC%"=="2" goto :uvmismatch
+echo Could not get uv, so using the Python on this computer instead.
+goto :legacy
+
+:uvready
+echo Getting Python 3.13 for this folder...
+set "UV_PYTHON_INSTALL_DIR=%CD%\.uv\python"
+set "UV_CACHE_DIR=%CD%\.uv\cache"
+set "UV_NO_CONFIG=1"
+"%CD%\.uv\bin\uv.exe" venv --python 3.13 --python-preference only-managed --seed .venv
+set "RC=%errorlevel%"
+if not "%RC%"=="0" goto :uvfailed
+if not exist .venv\Scripts\python.exe goto :uvfailed
+"%CD%\.uv\bin\uv.exe" cache clean >nul 2>&1
+set "UV_PYTHON_INSTALL_DIR="
+set "UV_CACHE_DIR="
+set "UV_NO_CONFIG="
+goto :packages
+
+:uvfailed
+set "UV_PYTHON_INSTALL_DIR="
+set "UV_CACHE_DIR="
+set "UV_NO_CONFIG="
+echo Could not get Python 3.13 with uv, so using the Python on this computer instead.
+if exist .venv rmdir /s /q .venv
+goto :legacy
+
+:uvmismatch
+if exist .uv\bin\uv.exe del /f /q .uv\bin\uv.exe
+echo.
+echo ERROR: the uv download did not match its expected checksum, so it was not used.
+echo Something is wrong with the download or your network. Try again later. If it keeps happening,
+echo run install.cmd with ATF_NO_UV=1 set to use a Python you installed yourself.
+goto :fail
+
+:legacy
 if defined ATF_PYTHON set "PY=%ATF_PYTHON%"
 for %%v in (3.13 3.14 3.12 3.11 3.10 3.9) do if not defined PY call :trypy %%v
 if not defined PY python -c "%FITS%" >nul 2>&1 && set "PY=python"
@@ -23,6 +79,8 @@ if exist .venv if not "%HAVE%"=="%WANT%" echo Rebuilding the .venv folder for %W
 if not exist .venv\Scripts\python.exe (
   %PY% -m venv .venv || goto :fail
 )
+
+:packages
 .venv\Scripts\python.exe -m pip install --quiet --upgrade pip || goto :fail
 .venv\Scripts\python.exe -m pip install --quiet -r requirements.txt || goto :fail
 .venv\Scripts\python.exe -m playwright install chromium || goto :fail

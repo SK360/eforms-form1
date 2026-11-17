@@ -95,33 +95,38 @@ those once by hand (`git pull`, or the new ZIP with your `data`, `forms` and `ou
 **Watch > Custom > Releases** on the repository page.
 
 ### Install (once)
-It needs Python 3.9 to 3.14 (3.13 recommended). A brand-new Python such as 3.15 doesn't have ready-built copies
-of all the packages yet; the installer skips it and asks you to add 3.13 next to it.
+You don't need to install Python first. The installer downloads a small tool called uv (checked against a built-in
+checksum) and uses it to put a private copy of Python 3.13 in this folder's `.uv` folder; nothing is installed
+system-wide. If that download isn't possible (offline, a blocked download, an unusual computer), it says so and uses
+a Python 3.9 to 3.14 already on your computer instead (3.13 recommended; a brand-new Python such as 3.15 doesn't have
+ready-built copies of all the packages yet, so the installer skips it). Already installed it before? Nothing to do:
+re-running the installer keeps a working `.venv` as it is, and updates from the menu are unaffected. Don't delete
+`.uv` by itself, because `.venv` depends on it; to start the install over, delete both `.venv` and `.uv` and run the
+installer again.
 
-**Mac or Linux** (Terminal, in the folder; macOS offers to install Python the first time if needed):
+**Mac or Linux** (Terminal, in the folder):
 ```bash
 ./install.sh
 ```
 On **Linux**, use a desktop session: filing opens a browser window that you log in through. The installer also
 checks that Chromium can start. On Debian/Ubuntu it installs the system libraries Chromium needs with apt (sudo asks
-for your password), and you may first need `sudo apt install python3-venv`. On other distributions, if the installer
-says libraries are missing, install them with your package manager. Filing has been tested live on Mac and Windows;
-on Linux, so far only by the automated tests.
+for your password). If it has to use your own Python, you may first need `sudo apt install python3-venv`. On other
+distributions, if the installer says libraries are missing, install them with your package manager. Filing has been
+tested live on Mac and Windows; on Linux, so far only by the automated tests.
 
 **Windows:**
-1. Install **Python 3.13** (not the newest: 3.15 doesn't work with this yet, and it's what python.org's big Download
-   button gives you now). Easiest way:
-   - On https://www.python.org/downloads/ click Download to get the **Python install manager** and install it.
-   - Open a terminal and run `py install 3.13`. Having 3.15 installed as well is fine; the installer below picks 3.13.
-
-   (Or, from https://www.python.org/downloads/windows/, any 3.13 or 3.14 release that has a "Windows installer
-   (64-bit)"; tick **"Add python.exe to PATH"** when installing.)
-2. Put this folder somewhere outside OneDrive/Dropbox (e.g. `C:\Users\<you>\eforms-form1`): it will hold your
+1. Put this folder somewhere outside OneDrive/Dropbox (e.g. `C:\Users\<you>\eforms-form1`): it will hold your
    personal records and a large browser profile that shouldn't sync.
-3. In the folder, right-click > Open in Terminal, and run:
+2. In the folder, right-click > Open in Terminal, and run:
 ```
 .\install.cmd
 ```
+If the installer says it couldn't get its own Python and found none on your computer, install **Python 3.13** (not
+the newest: 3.15 doesn't work with this yet, and it's what python.org's big Download button gives you now) and run it
+again. Easiest way: on https://www.python.org/downloads/ click Download to get the **Python install manager**, install
+it, then open a terminal and run `py install 3.13` (having 3.15 as well is fine). Or, from
+https://www.python.org/downloads/windows/, any 3.13 or 3.14 release that has a "Windows installer (64-bit)"; tick
+**"Add python.exe to PATH"** when installing.
 
 ### Making your 5320.23 template (once, trusts only)
 You make one signed 5320.23 with placeholder caliber and serial; for each suppressor the helper copies it, replaces

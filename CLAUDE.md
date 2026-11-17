@@ -7,12 +7,20 @@ rich + questionary. Built interactively 2026-10-08/09. Personal status for a giv
 (gitignored) if present.
 
 ## How a user runs it
-- **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd` (pick Python 3.9-3.14, preferring 3.13, or `ATF_PYTHON`; a
-  brand-new Python like 3.15 is refused because PyYAML etc. had no Windows wheels yet and pip wanted a C++ compiler;
-  a `.venv` from another Python is rebuilt; make `.venv`,
-  install requirements + Chromium; Linux: test-launches Chromium and, if it can't start, runs `playwright
-  install-deps chromium` via apt/sudo, and explains a missing `python3-venv`); then `./atf` / `.\atf.cmd` (Windows: always say `atf.cmd`; PowerShell may try to
-  open the extensionless `atf` shell script as a document).
+- **Setup:** Mac/Linux `./install.sh`, Windows `.\install.cmd`. Rules (same in both): `ATF_PYTHON` or `ATF_NO_UV=1` =
+  the legacy path (system Python 3.9-3.14, preferring 3.13; a brand-new 3.15 is refused because PyYAML etc. had no
+  Windows wheels yet and pip wanted a C++ compiler). Otherwise a WORKING `.venv` (runs, 3.9-3.14, made by anything) is
+  KEPT and uv is never fetched (existing users unchanged; the menu updater never runs the installer, only `.venv`'s
+  `pip install -r` when requirements.txt changed, and `.uv` is in its PERSONAL/SKIP_PARTS). A broken/out-of-range
+  `.venv` is rebuilt. Else a pinned uv (SHA-256 hard-coded in the script; mismatch = stop, no fallback) goes in
+  `.uv/bin`, installs a private Python 3.13 in `.uv/python` and makes `.venv` with `--seed` (pip for the updater); any
+  other uv/download failure prints one line and falls back to the legacy path. Test hooks: `ATF_NO_UV=1`,
+  `ATF_UV_BASE=<url>` (CI's fallback step points it at a dead port). Deleting `.uv` breaks `.venv`: delete both. Then
+  packages + Chromium; Linux: test-launches Chromium and, if it can't start, runs `playwright
+  install-deps chromium` via apt/sudo, and explains a missing `python3-venv`; launchers `./atf` / `.\atf.cmd`
+  (unchanged; Windows: always say `atf.cmd`; PowerShell may try to open the extensionless `atf` shell script as a
+  document). CI: job `test` (ATF_PYTHON, legacy path) and `install-uv` (no Python, all three OSes, keep-.venv and
+  fallback steps).
   First run = setup wizard (disclaimer, trust, responsible person, CLEO, firearm defaults, files, other responsible
   persons) -> `data/trust.yaml`.
 - **Normal use:** `./atf` -> Add suppressors -> File N queued. The menu stamps the 5320.23s (dated today), asks once

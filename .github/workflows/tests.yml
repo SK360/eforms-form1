@@ -40,7 +40,7 @@ jobs:
           .\atf.cmd fill-form1 --help
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\.venv\Scripts\python.exe --version
-      - name: Installer picks a supported Python by itself (no ATF_PYTHON), rebuilding a .venv from another one
+      - name: Installer keeps a working .venv from another Python (no ATF_PYTHON, no uv)
         if: runner.os == 'Windows' && matrix.python == '3.13'
         shell: cmd
         run: |
@@ -49,8 +49,10 @@ jobs:
           git clone -q . "%RUNNER_TEMP%\pick" || exit /b 1
           cd /d "%RUNNER_TEMP%\pick"
           python -m venv .venv || exit /b 1
+          .venv\Scripts\python.exe -c "import sys; open('before.txt','w').write(sys.base_prefix)" || exit /b 1
           call install.cmd || exit /b 1
-          .venv\Scripts\python.exe -c "import sys, yaml, fitz, playwright; print(sys.version); sys.exit(0 if (3, 9) <= sys.version_info[:2] <= (3, 14) else 1)"
+          .venv\Scripts\python.exe -c "import sys, yaml, fitz, playwright; print(sys.version); b = open('before.txt').read(); sys.exit(0 if (sys.base_prefix == b and (3, 9) <= sys.version_info[:2] <= (3, 14)) else 1)" || exit /b 1
+          if exist .uv (echo .uv was created for a working .venv & exit /b 1)
       - name: Tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -68,6 +70,92 @@ jobs:
         run: |
           .venv/bin/python -m pip install --quiet pytest
           .venv/bin/python -m pytest -q -p no:cacheprovider
+
+  install-uv:
+    # New users: no Python installed, no ATF_PYTHON. The installer gets uv + a private Python 3.13 into .uv/.
+    name: install without Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install (Windows, as a user would)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: install.cmd
+      - name: Install (Mac and Linux, as a user would)
+        if: runner.os != 'Windows'
+        run: ./install.sh
+
+      - name: .venv is Python 3.13 from this folder's .uv, with pip
+        shell: python
+        run: |
+          import os, subprocess, sys
+          py = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(".venv", "bin", "python")
+          out = subprocess.check_output([py, "-c", "import sys; print(sys.version_info[0], sys.version_info[1]); print(sys.base_prefix)"], text=True).split("\n")
+          print(out)
+          assert out[0] == "3 13", out[0]
+          base = os.path.realpath(out[1])
+          uvpy = os.path.realpath(os.path.join(".uv", "python"))
+          assert base.startswith(uvpy + os.sep), (base, uvpy)
+          subprocess.check_call([py, "-m", "pip", "--version"])
+          with open("base_prefix.txt", "w") as f:
+              f.write(out[1])
+      - name: Launcher works from Command Prompt and PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmd /c "atf.cmd fill-form1 --help"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\atf.cmd fill-form1 --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Launcher works (Mac and Linux)
+        if: runner.os != 'Windows'
+        run: ./atf fill-form1 --help
+
+      - name: Running the installer again keeps the .venv and downloads nothing
+        shell: python
+        run: |
+          import os, subprocess, sys
+          cmd = ["install.cmd"] if os.name == "nt" else ["./install.sh"]
+          res = subprocess.run(cmd, capture_output=True, text=True, shell=(os.name == "nt"))
+          text = res.stdout + res.stderr
+          print(text)
+          assert res.returncode == 0, res.returncode
+          assert "Getting uv" not in text and "Getting Python" not in text, "it downloaded again"
+          py = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(".venv", "bin", "python")
+          now = subprocess.check_output([py, "-c", "import sys; print(sys.base_prefix, end='')"], text=True)
+          assert now == open("base_prefix.txt").read(), "the .venv was rebuilt"
+
+      - name: Tests
+        shell: python
+        run: |
+          import os, subprocess, sys
+          py = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(".venv", "bin", "python")
+          subprocess.check_call([py, "-m", "pip", "install", "--quiet", "pytest"])
+          sys.exit(subprocess.call([py, "-m", "pytest", "-q", "-p", "no:cacheprovider"]))
+
+      - name: Fallback when uv can't be downloaded (uses the runner's own Python)
+        shell: python
+        run: |
+          import os, subprocess, sys, tempfile
+          dest = os.path.join(tempfile.mkdtemp(), "fallback")
+          subprocess.check_call(["git", "clone", "-q", ".", dest])
+          env = dict(os.environ, ATF_UV_BASE="http://127.0.0.1:9")
+          env.pop("ATF_PYTHON", None)
+          cmd = ["install.cmd"] if os.name == "nt" else ["./install.sh"]
+          res = subprocess.run(cmd, cwd=dest, env=env, capture_output=True, text=True, shell=(os.name == "nt"))
+          text = res.stdout + res.stderr
+          print(text)
+          assert res.returncode == 0, res.returncode
+          assert "instead" in text, "no fallback line printed"
+          py = os.path.join(dest, ".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(dest, ".venv", "bin", "python")
+          subprocess.check_call([py, "-c", "import yaml, fitz, playwright"])
+          assert not os.path.exists(os.path.join(dest, ".uv", "python")), "a private Python appeared"
 
   server:
     # The optional inventory server (server/): its tests (API, database rules, its page in Chromium and WebKit) and
