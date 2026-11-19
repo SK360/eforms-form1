@@ -75,7 +75,8 @@ know ATF's lists). Then `#unitOfMeasure` (CALIBER/GAUGE/...), **`#barrelLength`*
 Firearm" is fixed text "FOR ALL LAWFUL PURPOSES". On-screen rules: model must match the receiver's engraving; one
 caliber (9, 45, 357, 5.56, 7.62, 300); serial must match the engraving. "Save As New Template" is a button to avoid.
 
-**Popup 3, documents:** optional (Finish with none worked). 10 files/line item, 3 MB each, 30 MB total.
+**Popup 3, documents:** not enforced (Finish with none worked live), but the National Gun Trusts eForm 1 guide says
+non-silencer NFA items should upload a photo of the engravings here: plan on one markings photo per SBR. 10 files/line item, 3 MB each, 30 MB total.
 
 **Line-item grid** columns: Status, ID, Type, Manufacturer, **Manufacturer Address**, Product Type, Caliber, Model,
 Barrel Length, Overall Length, Serial Number. ATF supplies the maker's address from its licensee record: read it
@@ -107,6 +108,7 @@ EXTENDED; 4g never alter the existing serial; markings: maker's (the trust's) na
 | overall length (stock extended) | 30 | `#overallLength` |
 | serial (existing) | as engraved | `#serialNumber`, 5320.23 4e |
 | description (optional) | free text, 120 max | `#description` |
+| receiver markings photo | JPG/PDF, 3 MB max | popup 3 `#file-upload` + description, PER ROW (today's `docs:` is the same for every filing) |
 
 5320.23 stamping (option B) then covers 4a type, 4b maker name/address, 4c model as well as 4d/4e; the template's
 `SILENCER` / trust-as-maker / `N/A` text is covered like the caliber and serial are today. Decided 2026-11-19: 4b on the
@@ -135,6 +137,9 @@ existing firearm). Suppressors keep the trust as maker.
 Capture with `./atf inspect` on each popup during a practice run.
 
 ## Sources
+
+- National Gun Trusts, "ATF eForm 1 walk-through guide": engraving photo for non-silencer NFA items; FMI only
+  for items you make from scratch (https://www.nationalguntrusts.com/blogs/nfa-gun-trust-atf-information-database-blog/atf-eform-1-nfa-tax-stamp-walk-through-guide)
 
 - John Pierce, "Why do some approved Form 1's say FORM 1 REGISTRATION in box 4a?": FMI for unserialized lowers;
   for a serialized receiver, choose the original licensed manufacturer
