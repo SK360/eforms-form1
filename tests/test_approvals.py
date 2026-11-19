@@ -2,6 +2,7 @@
 fake eForms dashboard with View Form / Submit Void buttons. The test fails if anything but the read-only controls is clicked."""
 import csv
 import json
+from urllib.parse import unquote
 
 import pymupdf
 import pytest
@@ -112,17 +113,20 @@ def test_safe_click_refuses_anything_unexpected():
 
 
 DASHBOARD = """<a href='#' onclick="document.title='LOGGEDOUT'">Log Out</a><div id=app></div><script>
-const FORMS = %s, PER = %d, LINKS = %d, MODE = %s, STATUS = %s;  // LINKS page numbers shown at a time, in blocks or sliding
+const BY = %s, PER = %d, LINKS = %d, MODE = %s;  // BY: status -> forms; LINKS page numbers shown at a time, in blocks or sliding
+let STATUS = '';
 const app = () => document.getElementById('app');
 function home() {
   app().innerHTML = `<select id="form-type-search"><option>Select...</option><option>ATF Form 1 (5320.1)</option><option>ATF Form 4 (5320.4)</option></select>
-   <select id="form-status-search"><option>Select...</option><option>APPROVED</option><option>DISAPPROVED</option><option>SUBMITTED/IN PROCESS</option></select>
+   <select id="form-status-search"><option>Select...</option><option>APPROVED</option><option>DISAPPROVED</option><option>RETURNED FOR CORRECTION</option>
+   <option>RETURNED WITHOUT ACTION</option><option>SUBMITTED/IN PROCESS</option></select>
    <button id="queryBtn" onclick="search()">Search</button>
    <div id=results>No data to display 1 10 | Total Rows: 0</div>`;   // like eForms: an empty table before searching
 }
 function search() {
-  const ok = document.getElementById('form-type-search').value.startsWith('ATF Form 1') && document.getElementById('form-status-search').value === STATUS;
-  window.hits = ok ? FORMS : []; setTimeout(() => showPage(1), 1500);   // results arrive after a delay, like the real portal
+  STATUS = document.getElementById('form-status-search').value; fetch('/searched/' + encodeURIComponent(STATUS));
+  const ok = document.getElementById('form-type-search').value.startsWith('ATF Form 1');
+  window.hits = ok ? (BY[STATUS] || []) : []; setTimeout(() => showPage(1), 1500);   // results arrive after a delay, like the real portal
 }
 function showPage(n) {
   // markup like a UI-library table: empty first cell, column titles inside cells, hidden duplicate buttons
@@ -156,10 +160,12 @@ home();
 
 @pytest.fixture
 def dashboard(monkeypatch):
-    """dashboard(forms) -> state; forms = [(eform_id, finalized, pdf_bytes[, submitted])]. state['pdf_hits'], state['bad_clicks'].
-    status: what the search finds them under (APPROVED; SUBMITTED/IN PROCESS rows have Withdraw Form, not Submit Void)."""
+    """dashboard(forms) -> state; forms = [(eform_id, finalized, pdf_bytes[, submitted])]. state['pdf_hits'], state['bad_clicks'],
+    state['searches'] (each status searched). status: what the search finds them under (APPROVED; SUBMITTED/IN PROCESS rows
+    have Withdraw Form, not Submit Void); others: {status: forms} found under other statuses."""
     from playwright.sync_api import sync_playwright
-    state = {"pdf_hits": 0, "bad_clicks": []}
+    state = {"pdf_hits": 0, "bad_clicks": [], "searches": []}
+    monkeypatch.setattr(atf, "NOT_APPROVED_WAIT", 2)   # the fake's results come after 1.5 s
     logout = atf._logout
 
     def tracked_logout(page):
@@ -167,16 +173,20 @@ def dashboard(monkeypatch):
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(forms, start="/home", per=10, links=5, mode="slide", status="APPROVED"):
-        pdfs = {f[0]: f[2] for f in forms}
-        html = DASHBOARD % (json.dumps([{"id": f[0], "fin": f[1], "sub": f[3] if len(f) > 3 else "1/2/2026"} for f in forms]),
-                            per, links, json.dumps(mode), json.dumps(status))
+    def configure(forms, start="/home", per=10, links=5, mode="slide", status="APPROVED", others=None):
+        by = {status: forms, **(others or {})}
+        pdfs = {f[0]: f[2] for fs in by.values() for f in fs}
+        html = DASHBOARD % (json.dumps({st: [{"id": f[0], "fin": f[1], "sub": f[3] if len(f) > 3 else "1/2/2026"} for f in fs]
+                                       for st, fs in by.items()}), per, links, json.dumps(mode))
 
         def route(r):
             path = r.request.url.split("fake.test", 1)[1]
             if path.startswith("/pdf/"):
                 state["pdf_hits"] += 1
                 return r.fulfill(body=pdfs[path[5:]], content_type="application/pdf")
+            if path.startswith("/searched/"):
+                state["searches"].append(unquote(path[10:]))
+                return r.fulfill(body="")
             if path.startswith("/clicked/"):
                 state["bad_clicks"].append(path)
                 return r.fulfill(body="")
@@ -252,11 +262,11 @@ def test_results_page_that_wont_load(configured, dashboard, monkeypatch):
     state, fails = dashboard(FORMS), {"left": 0}
     real = atf._approved_results
 
-    def flaky(page, page_no=1, search=True, status="APPROVED"):
+    def flaky(page, page_no=1, search=True, status="APPROVED", wait=30):
         if page_no == 2 and fails["left"]:
             fails["left"] -= 1
             raise RuntimeError("Locator.inner_text: Timeout 15000ms exceeded.\nCall log: ...")
-        return real(page, page_no, search, status)
+        return real(page, page_no, search, status, wait)
     monkeypatch.setattr(atf, "_approved_results", flaky)
 
     fails["left"] = 99                                            # page 2 never loads: page 1 is still saved and reported
@@ -332,7 +342,7 @@ def test_q_at_login_stops_cleanly(configured, dashboard, monkeypatch):
 
 
 def test_menu_survives_an_unexpected_error(configured, answers, screen, monkeypatch):
-    def boom():
+    def boom(*args, **kw):
         raise RuntimeError("Locator.select_option: Timeout 30000ms exceeded.\nCall log: ...")
     monkeypatch.setattr(atf, "fetch_approved", boom)
     answers(pick("Check approvals"), True, QUIT)
@@ -501,3 +511,117 @@ def test_saved_pdfs_fill_missing_filed_dates_without_logging_in(configured, answ
     got = {r["serial_number"]: r["filed_date"] for r in atf.load_rows()}
     assert got == {"T1": "05/01/2026", "T2": "05/20/2026", "T3": "", "T4": "", "T5": "05/05/2026"}
     assert atf.backfill_from_approval_pdfs() == []
+
+
+# ---------- disapproved and returned forms ----------
+def filed(*rows):
+    """filed(("T301", "filed", "11/01/2026"), ...): rows with a status and filed date."""
+    atf.save_rows([{"serial_number": s, "caliber": "22", "status": st, "filed_date": d, "overall_length": "12",
+                    "application_number": f"90000030{n}" if st else ""} for n, (s, st, d) in enumerate(rows, 1)])
+
+
+def rejected_pdf(serial, signed, disapproved=False):
+    return approved_pdf(serial=serial, approved=False, disapproved=disapproved, signed=signed)
+
+
+REJECTED = {  # made-up forms eForms lists as not approved: (eForm ID, finalized, PDF (item 9 = the day it was signed), submitted)
+    "DISAPPROVED": [("3000001", "11/12/2026", rejected_pdf("T301", "11/01/2026", True), "11/1/2026"),
+                    ("3000003", "10/12/2026", rejected_pdf("T303", "10/01/2026", True), "10/1/2026")],   # an earlier filing
+    "RETURNED WITHOUT ACTION": [("3000002", "11/13/2026", rejected_pdf("T302", "11/01/2026"), "11/1/2026")],
+    "RETURNED FOR CORRECTION": [("3000004", "11/14/2026", rejected_pdf("T304", "11/02/2026"), "11/2/2026")],
+}
+WAITING = (("T301", "filed", "11/01/2026"), ("T302", "pending", "11/01/2026"), ("T303", "filed", "11/10/2026"),
+           ("T304", "filed", "11/02/2026"), ("T305", "", ""))
+
+
+def test_disapproved_and_returned_forms_are_found_and_marked(configured, dashboard):
+    filed(*WAITING)
+    state = dashboard(FORMS[:1], others=REJECTED)
+    others = []
+    found, problems = atf.fetch_approved(others)
+    assert problems == [] and state["bad_clicks"] == [] and state["logged_out"]                    # read-only, logged out
+    assert list(dict.fromkeys(state["searches"])) == ["APPROVED", *atf.NOT_APPROVED] and len(found) == 1   # (again after each PDF)
+    assert sorted((r["status"], r["eform_id"]) for r in others) == [
+        ("DISAPPROVED", "3000001"), ("DISAPPROVED", "3000003"), ("RETURNED FOR CORRECTION", "3000004"), ("RETURNED WITHOUT ACTION", "3000002")]
+    saved = {p.relative_to(atf.OUT / "not-approved").as_posix() for p in (atf.OUT / "not-approved").rglob("*.pdf")}
+    assert saved == {"disapproved/T301.pdf", "disapproved/T303.pdf", "returned-without-action/T302.pdf",
+                     "returned-for-correction/T304.pdf"}
+    assert not (atf.OUT / "approved" / "T301.pdf").exists()                                         # never among approvals
+
+    records, more = atf.read_approved(others)
+    rep = atf.not_approved_report(records, atf.load_rows())
+    assert more == [] and rep["unsure"] == []
+    assert [(row["serial_number"], rec["status"]) for row, rec in rep["disapproved"]] == [
+        ("T301", "DISAPPROVED"), ("T302", "RETURNED WITHOUT ACTION")]                               # T303 was filed again since
+    assert [row["serial_number"] for row, _ in rep["correction"]] == ["T304"]
+    assert atf.record_disapprovals([row["serial_number"] for row, _ in rep["disapproved"]]) == ["T301", "T302"]
+    status = {r["serial_number"]: r["status"] for r in atf.load_rows()}
+    assert status == {"T301": "disapproved", "T302": "disapproved", "T303": "filed", "T304": "filed", "T305": ""}
+    assert atf.record_disapprovals(["T301", "t302", "T303x"]) == []                                # already marked: nothing to do
+
+    # the next run downloads nothing again, and a disapproved row no longer counts for the old form
+    state["pdf_hits"] = 0
+    others = []
+    atf.fetch_approved(others)
+    assert state["pdf_hits"] == 0 and len(others) == 4
+    rep = atf.not_approved_report(atf.read_approved(others)[0], atf.load_rows())
+    assert rep["disapproved"] == [] and [row["serial_number"] for row, _ in rep["correction"]] == ["T304"]
+
+
+def test_no_extra_searches_while_nothing_is_waiting(configured, dashboard):
+    filed(("T301", "approved", "10/01/2026"), ("T305", "", ""))
+    state = dashboard(FORMS[:1], others=REJECTED)
+    others = []
+    atf.fetch_approved(others)
+    assert set(state["searches"]) == {"APPROVED"} and others == []
+    atf.fetch_approved()                                                                            # without `others`: never
+    assert set(state["searches"]) == {"APPROVED"}
+
+
+def test_a_failed_search_keeps_the_approvals(configured, dashboard, monkeypatch):
+    filed(*WAITING)
+    dashboard(FORMS[:1], others=REJECTED)
+    real = atf._approved_results
+
+    def broken(page, page_no=1, search=True, status="APPROVED", wait=30):
+        if status == "RETURNED WITHOUT ACTION":
+            raise RuntimeError("the page layout changed")
+        return real(page, page_no, search, status, wait)
+    monkeypatch.setattr(atf, "_approved_results", broken)
+    others = []
+    found, problems = atf.fetch_approved(others)
+    assert len(found) == 1 and sorted(r["status"] for r in others) == ["DISAPPROVED", "DISAPPROVED", "RETURNED FOR CORRECTION"]
+    assert problems == ["couldn't search returned without action Form 1s: the page layout changed"]
+
+
+def test_which_forms_count_for_a_row():
+    rows = [{"serial_number": s, "status": st, "filed_date": d} for s, st, d in (
+        ("A1", "filed", "11/01/2026"), ("A2", "filed", ""), ("A3", "approved", "11/01/2026"), ("A4", "", ""), ("A5", "filed", "11/01/2026"))]
+    rec = lambda serial, signed="", submitted="", status="DISAPPROVED", type_="SILENCER": {  # noqa: E731
+        "serial": serial, "filed_date": signed, "submitted": submitted, "status": status, "type": type_, "eform_id": "3000009"}
+    rep = atf.not_approved_report([rec("a1", submitted="11/1/2026"),                             # no item 9: the results list's date
+                                   rec("A2", "11/01/2026"),                                      # the row has no filed date
+                                   rec("A3", "11/01/2026"), rec("A4", "11/01/2026"),              # approved / never filed: not ours
+                                   rec("A5", "11/01/2026", type_="SHORT BARRELED RIFLE"),         # another NFA type
+                                   rec("A9", "11/01/2026")], rows)                                # not in the inventory
+    assert [r["serial_number"] for r, _ in rep["disapproved"]] == ["A1"]
+    assert [r["serial_number"] for r, _ in rep["unsure"]] == ["A2"] and rep["correction"] == []
+
+
+def test_menu_reports_disapprovals_and_refiles_them(configured, dashboard, answers, screen, monkeypatch):
+    filed(*WAITING)
+    dashboard(FORMS[:1], others=REJECTED)
+    calls = []
+    monkeypatch.setattr(ui, "file_flow", lambda indices=None, force=False: calls.append((indices, force)))
+    answers(pick("Check approvals"), True, False,                                  # open the browser; don't add T201
+            pick("Advanced"), pick("Re-file"), pick("T302"), True, QUIT)
+    ui.menu()
+    out = screen.getvalue()
+    for shown in ("Disapproved or returned by ATF (2)", "returned without action", "2 marked disapproved", "Advanced > Re-file",
+                  "T304: returned for correction", "Filed, not approved yet: 2", "2 Form 1s disapproved by ATF"):
+        assert shown in out, shown
+    titles = [str(c.title) for c in answers.kw["Re-file which row?"]["choices"]]
+    assert titles[:2] == ["T301  (caliber 22)  disapproved", "T302  (caliber 22)  disapproved"]   # first, then the filed ones
+    assert "ATF disapproved or returned T302" in out and answers.kw["File it again?"]["auto_enter"] is False
+    rows = atf.load_rows()
+    assert calls == [([next(i for i, r in enumerate(rows) if r["serial_number"] == "T302")], True)]

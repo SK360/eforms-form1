@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.5.0"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.5.1"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -1782,10 +1782,11 @@ def _parse_result_row(text):
             "submitted": dates[1] if len(dates) > 1 else ""}
 
 
-def _approved_results(page, page_no=1, search=True, status="APPROVED"):
+def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
     """Search Form 1 + APPROVED (or `status`; search=False: stay on the results page shown), go to results page `page_no`;
     returns (total rows, [{eform_id, control_number, finalized}]). Search only from a home page WITHOUT results: a
-    table still showing is read as the new results, and the search coming back then resets it to page 1."""
+    table still showing is read as the new results, and the search coming back then resets it to page 1. `wait`:
+    seconds to wait for result rows (an empty search looks the same as a slow one until then)."""
     def rows():
         return [r for r in (_parse_result_row(t) for t in page.evaluate(_ROW_TEXTS_JS)) if r]
     current = rows()
@@ -1794,9 +1795,9 @@ def _approved_results(page, page_no=1, search=True, status="APPROVED"):
         page.locator("#form-status-search").select_option(label=status)
         _safe_click(page.locator("#queryBtn"), "Search")
         # The home page already shows an empty table ("Total Rows: 0") before any search, and results arrive a moment
-        # after Search: wait for result rows rather than for the text (up to 30 s; then there really are none).
+        # after Search: wait for result rows rather than for the text (up to `wait` s; then there really are none).
         current = rows()
-        for _ in range(120):
+        for _ in range(int(wait * 4)):
             if current:
                 break
             page.wait_for_timeout(250)
@@ -2219,52 +2220,97 @@ def _migrate_approved_names(folder):
     return index
 
 
-def fetch_approved():
+# Form 1s ATF didn't approve, by eForms' "Form Status" search. Disapproved and returned without action are finished:
+# the serial has to be filed again (a new application). Returned for correction is reported only.
+NOT_APPROVED = ("DISAPPROVED", "RETURNED WITHOUT ACTION", "RETURNED FOR CORRECTION")
+CORRECTION = "RETURNED FOR CORRECTION"
+# These searches usually find nothing, and an empty result can't be told from a slow one: wait less than for approvals.
+NOT_APPROVED_WAIT = 15
+
+
+def _not_approved_dir(status):
+    """out/not-approved/<status>/ (e.g. returned-without-action), resolved at call time."""
+    return OUT / "not-approved" / re.sub(r"[^a-z]+", "-", status.lower()).strip("-")
+
+
+def fetch_approved(others=None):
     """READ-ONLY: list approved Form 1s on eForms and save each one's PDF to out/approved/<serial>.pdf (already
-    saved ones are skipped). Returns (results rows found, problems). Logs out at the end, whatever happens."""
+    saved ones are skipped). Returns (results rows found, problems). Logs out at the end, whatever happens.
+    `others` (a list): while any suppressor is filed or pending, also search each NOT_APPROVED status, save those
+    PDFs to out/not-approved/<status>/ and add their result rows (with "status") to it."""
     folder = OUT / "approved"
     folder.mkdir(parents=True, exist_ok=True)
-    index = _migrate_approved_names(folder)
     found, problems = [], []
     pw, ctx, page = _browser()
     try:
         page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter. From here the script only reads... ")
-        emit("section", "--- Searching approved Form 1s ---", name="Searching approved Form 1s")
-        total, rows = _approved_results(page)
-        pages = -(-total // max(len(rows), 1))
-        emit("info", f"{total} approved Form 1(s) on {pages} page(s)")
-        for n in range(1, pages + 1):
-            try:
-                if n > 1:
-                    emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
-                    _, rows = _results_page(page, n, search=False)  # on from page n-1, which is showing
-                _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems)
-            except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
-                msg = f"stopped at results page {n} of {pages}: {str(e).splitlines()[0]}"
-                problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
-                emit("error", msg)  # ✖ on the section instead of a later ✔
-                seen = {r["eform_id"] for r in found}
-                found += [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
-                          for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
-                          if eid not in seen and (folder / name).exists()]
-                break
+        _fetch_status(page, ctx, "APPROVED", folder, found, problems)
+        if others is not None and _anything_waiting():
+            for status in NOT_APPROVED:
+                before = len(problems)
+                try:
+                    _go_home(page, reload=True)  # never Search while results show
+                    sub = _not_approved_dir(status)
+                    sub.mkdir(parents=True, exist_ok=True)
+                    got = []
+                    _fetch_status(page, ctx, status, sub, got, problems, wait=NOT_APPROVED_WAIT)
+                    others += [{**r, "status": status} for r in got]
+                except Exception as e:  # the approvals above are kept whatever happens here
+                    if len(problems) == before:
+                        problems.append(f"couldn't search {status.lower()} Form 1s: {str(e).splitlines()[0]}")
+                    emit("error", f"couldn't search {status.lower()} Form 1s")
     finally:
         _shutdown(page, ctx, pw)
     return found, problems
 
 
-def _results_page(page, n, search=True, status="APPROVED"):
+def _anything_waiting():
+    """Is any suppressor filed or pending (the only ones a disapproval can be for)? False if the inventory can't be read."""
+    try:
+        return any(r["status"] in ("filed", "pending") for r in load_rows())
+    except Exception:
+        return False
+
+
+def _fetch_status(page, ctx, status, folder, found, problems, wait=30):
+    """Search Form 1s with this status and save each result's PDF into `folder` (by serial, with its index.csv;
+    already saved ones are skipped), page after page. Adds the result rows (with "pdf") to `found`."""
+    index = _migrate_approved_names(folder)
+    label = status.lower()
+    emit("section", f"--- Searching {label} Form 1s ---", name=f"Searching {label} Form 1s")
+    total, rows = _approved_results(page, status=status, wait=wait)
+    pages = -(-total // max(len(rows), 1))
+    emit("info", f"{total} {label} Form 1(s) on {pages} page(s)")
+    for n in range(1, pages + 1):
+        try:
+            if n > 1:
+                emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
+                _, rows = _results_page(page, n, search=False, status=status, wait=wait)  # on from page n-1, which is showing
+            _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems, status, wait)
+        except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
+            which = "" if status == "APPROVED" else f"{label} "
+            msg = f"stopped at {which}results page {n} of {pages}: {str(e).splitlines()[0]}"
+            problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
+            emit("error", msg)  # ✖ on the section instead of a later ✔
+            seen = {r["eform_id"] for r in found}
+            found += [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
+                      for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
+                      if eid not in seen and (folder / name).exists()]
+            break
+
+
+def _results_page(page, n, search=True, status="APPROVED", wait=30):
     """Results page n (search=False: page on from the results shown), starting over from a freshly loaded home page
     once if it fails."""
     try:
-        return _approved_results(page, n, search, status)
+        return _approved_results(page, n, search, status, wait)
     except Exception as e:
         emit("step", f"results page {n} didn't load ({str(e).splitlines()[0]}); trying once more")
         _go_home(page, reload=True)
-        return _approved_results(page, n, status=status)
+        return _approved_results(page, n, status=status, wait=wait)
 
 
-def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
+def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems, status="APPROVED", wait=30):
     """Save the PDF of every row on results page n that isn't saved yet."""
     for row in rows:
         known = index.get(row["eform_id"])
@@ -2283,7 +2329,7 @@ def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
             problems.append(f"eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
             emit("warn", f"could not get the PDF for eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
         _go_home(page)
-        _results_page(page, n)  # back to the same results page for the next row
+        _results_page(page, n, status=status, wait=wait)  # back to the same results page for the next row
 
 
 def read_approved(found=None):
@@ -2354,6 +2400,45 @@ def apply_approvals(records, import_unknown=False):
     return updated, added
 
 
+def not_approved_report(records, rows):
+    """Form 1s eForms lists as DISAPPROVED, RETURNED WITHOUT ACTION or RETURNED FOR CORRECTION (read_approved of
+    fetch_approved's `others`), matched with your suppressors by serial. A form counts only for a row that is filed or
+    pending, and only if it is that row's CURRENT filing: signed (item 9; else the results list's submitted date) on or
+    after the row's filed date. An older form of a serial that was filed again since is left alone (eForms keeps
+    listing it). Returns {"disapproved": [(row, rec)] (to be marked disapproved: re-file them), "correction":
+    [(row, rec)] (ATF wants changes; nothing is marked), "unsure": [(row, rec)] (a date is missing; nothing is marked)}."""
+    mine = {r["serial_number"].strip().upper(): r for r in rows}
+    rep = {"disapproved": [], "correction": [], "unsure": []}
+    for rec in sorted(records, key=lambda r: serial_key(r["serial"])):
+        row = mine.get(rec["serial"].strip().upper()) if rec["serial"].strip() and not is_other_nfa(rec) else None
+        if row is None or row["status"] not in ("filed", "pending"):
+            continue
+        signed, filed = _date(rec.get("filed_date")) or _date(rec.get("submitted")), _date(row["filed_date"])
+        if signed is None or filed is None:
+            rep["unsure"].append((row, rec))
+        elif signed >= filed:
+            rep["correction" if rec["status"] == CORRECTION else "disapproved"].append((row, rec))
+    return rep
+
+
+def record_disapprovals(serials):
+    """Mark these suppressors disapproved (only while filed or pending), so Advanced > Re-file offers them. Returns
+    the serials changed."""
+    rows = load_rows()
+    by = {r["serial_number"].strip().upper(): r for r in rows}
+    todo = list(dict.fromkeys(by[s.strip().upper()]["serial_number"] for s in serials
+                              if s.strip().upper() in by and by[s.strip().upper()]["status"] in ("filed", "pending")))
+    if not todo:
+        return []
+    if server_settings():
+        _server_op("record_approvals", {"updates": [{"serial": s, "fields": {"status": "disapproved"}} for s in todo], "added": []})
+        return todo
+    for s in todo:
+        by[s.strip().upper()]["status"] = "disapproved"
+    save_rows(rows)
+    return todo
+
+
 def send_approval_pdfs(records):
     """With a server: upload the approval PDFs it doesn't have yet (by eForm ID). Returns how many it added."""
     import hashlib
@@ -2414,12 +2499,25 @@ def approval_report(records, rows, trust):
 
 def cmd_check_approved(_):
     """CLI: read-only check of approved Form 1s against data/suppressors.csv (suppressors only)."""
-    found, problems = fetch_approved()
+    others = []
+    found, problems = fetch_approved(others)
     records, more = read_approved(found)
+    rejected, more_rejected = read_approved(others)
     rep = approval_report(records, load_rows(), load_trust())
     updated, added = apply_approvals(records, import_unknown=getattr(_, "import_unknown", False))
+    nrep = not_approved_report(rejected, load_rows())
+    marked = record_disapprovals([row["serial_number"] for row, _rec in nrep["disapproved"]])
     print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s); "
-          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv.")
+          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv; {len(marked)} marked disapproved.")
+    for key, title in (("disapproved", "Disapproved or returned by ATF (file them again: Advanced > Re-file)"),
+                       ("correction", "Returned for correction (nothing marked: see eForms)"),
+                       ("unsure", "Not approved, but couldn't tell if it's the current filing (nothing marked)")):
+        if nrep[key]:
+            print(f"\n{title}: {len(nrep[key])}")
+            for row, rec in nrep[key]:
+                print(f"  {row['serial_number']:12} {rec['status'].lower():24} eForm {rec['eform_id']}  filed {row['filed_date'] or '?'}")
+    rep["waiting"] = [r for r in rep["waiting"] if r["serial_number"] not in marked]
+    problems += more_rejected
     print(f"\n{len(records)} approved Form 1(s); suppressors: {sum(1 for r in records if 'SILENCER' in r['type'].upper())}; "
           f"other NFA items: {sum(1 for r in records if is_other_nfa(r))}; skipped: {dict(rep['skipped']) or 'none'}")
     for title, key in (("Approved and in your records", "matched"), ("Approved, but check these", "differs"),

@@ -7,6 +7,24 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.5.1 (2026-11-19)
+
+Disapproved forms can be filed again.
+
+### New
+- **Check approvals finds disapproved and returned Form 1s.** While any suppressor is filed and waiting, it also
+  searches eForms for Form 1s that are disapproved or returned without action, saves their PDFs to
+  `out/not-approved/`, and marks those suppressors *disapproved* (the home screen says how many). Returned for
+  correction is reported, not marked. Only a serial's current filing counts: an old disapproved form of a serial
+  that was filed again since is left alone.
+- **Advanced > Re-file lists disapproved suppressors first**, with a reminder to fix what ATF disapproved them for
+  (eForms has the letter) before filing again. Each re-filing is a new application. Until now a disapproved form
+  stayed "filed", and deleting rows from the Excel export or the filing log didn't change that.
+
+### Tested
+- With a fake eForms dashboard, and against a real inventory server. Not yet seen live: a real disapproved or
+  returned form in eForms (its PDF is expected to have the same item 4 as an approved one).
+
 ## 1.5.0 (2026-11-17)
 
 Backups, and installing no longer needs Python.

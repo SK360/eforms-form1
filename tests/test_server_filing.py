@@ -136,6 +136,22 @@ def test_approvals_go_to_the_server(server, configured):
     assert atf.apply_approvals([rec]) == ([], [])                                                # nothing new: nothing sent
 
 
+def test_a_disapproval_goes_to_the_server_and_the_row_can_be_filed_again(server, configured, portal):
+    queued_on_server(server, "S1")
+    atf._server_op("mark_pending", {"serial": "S1", "filed_date": "11/01/2026"})
+    atf._server_op("mark_filed", {"serial": "S1", "application_number": "900000777"})
+    assert atf.record_disapprovals(["s1"]) == ["S1"] and atf.record_disapprovals(["S1"]) == []      # once only
+    atf._FETCHED.clear()
+    assert atf.load_rows()[0]["status"] == "disapproved" and history("S1")[-1] == "record_approvals"
+    assert "S1" not in [r["serial_number"] for r in atf.load_rows() if r["status"] not in atf.SKIP]   # File leaves it alone
+    portal([("S1", "9")])
+    atf.file_rows(atf.load_rows(), [0], SimpleNamespace(**{**OPTS, "force": True}))              # Advanced > Re-file
+    atf._FETCHED.clear()
+    row = atf.load_rows()[0]
+    assert (row["status"], row["application_number"], row["filed_date"]) == ("filed", "900000001", TODAY)
+    assert history("S1")[-2:] == ["mark_pending", "mark_filed"] and atf.outbox() == []
+
+
 def test_the_server_keeps_each_type(server, configured):
     queued_on_server(server, "S1")
     sbs = {"type": "SHORT BARRELED SHOTGUN", "approved": True, "serial": "G1", "approval_date": "10/30/2026", "eform_id": "2000002",

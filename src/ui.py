@@ -175,6 +175,10 @@ def home(rows):
               f"[link={INSTAGRAM}]@sk360.3d2a[/link] on Instagram[/]", soft_wrap=True, highlight=False)
     con.print(queue_table(rows))
     con.print(f"  {summary(rows)}")
+    rejected = sum(1 for r in rows if r["status"] == "disapproved")
+    if rejected:
+        con.print(f"  [red]✖ {rejected} Form 1{'s' if rejected != 1 else ''} disapproved by ATF: fix why, then file "
+                  f"{'them' if rejected != 1 else 'it'} again (Advanced > Re-file).[/]")
     server_line()
     new = update.available()
     if new:
@@ -834,14 +838,26 @@ def redate_flow():
 
 def refile_flow():
     rows = atf.load_rows()
+    rejected = [i for i, r in enumerate(rows) if r["status"] == "disapproved"]
     filed = [i for i, r in enumerate(rows) if r["status"] == "filed"][::-1]
-    if not filed:
-        con.print("  Nothing is marked filed.")
+    if not rejected and not filed:
+        con.print("  Nothing is marked filed or disapproved.")
         return pause()
-    i = questionary.select("Re-file which row?", choices=[_row_choice(rows, i, f"  #{short(rows[i]['application_number'])}") for i in filed]).ask()
+    choices = [_row_choice(rows, i, "  disapproved") for i in rejected] + \
+              [_row_choice(rows, i, f"  #{short(rows[i]['application_number'])}") for i in filed]
+    i = questionary.select("Re-file which row?", choices=choices).ask()
     if i is None:
         return
-    con.print(Panel(f"{escape(rows[i]['serial_number'])} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
+    serial = escape(rows[i]["serial_number"])
+    if rows[i]["status"] == "disapproved":
+        con.print(Panel(f"ATF disapproved or returned {serial}'s Form 1. Filing again makes a new application.\n"
+                        "First fix what it was disapproved for (eForms has ATF's letter), or it will be again: e.g. a\n"
+                        "new 5320.23 template (Settings) if an address was wrong. The form uses your settings as they are now.",
+                        border_style="yellow", expand=False))
+        if questionary.confirm("File it again?", default=False, auto_enter=False).ask():
+            file_flow([i], force=True)
+        return
+    con.print(Panel(f"{serial} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
                     "Filing again creates a SECOND application for the same serial.", border_style="red", expand=False))
     if questionary.confirm("Re-file it anyway?", default=False, auto_enter=False).ask():
         file_flow([i], force=True)
@@ -1566,19 +1582,41 @@ def _approved_table(items, title, style):
     return t
 
 
+def _not_approved_lines(nrep, marked):
+    """Check approvals: the Form 1s eForms lists as disapproved or returned (atf.not_approved_report)."""
+    if nrep["disapproved"]:
+        t = Table(box=box.ROUNDED, header_style="bold", title_justify="left", border_style="red",
+                  title=f"[bold]Disapproved or returned by ATF ({len(nrep['disapproved'])})[/]")
+        for col in ("Serial", "Caliber", "Filed", "eForms says"):
+            t.add_column(col)
+        for row, rec in nrep["disapproved"]:
+            t.add_row(escape(row["serial_number"]), escape(row["caliber"]), escape(row["filed_date"]), escape(rec["status"].lower()))
+        con.print(t)
+        con.print(f"  [bold red]✖[/] {len(marked)} marked disapproved. Find out why first (eForms has ATF's letter), fix it\n"
+                  "    (e.g. a new 5320.23 template if an address was wrong), then file them again: [bold]Advanced > Re-file[/].")
+    for key, what in (("correction", "returned for correction: open it in eForms to see what ATF wants (nothing changed here)"),
+                      ("unsure", "not approved in eForms, but its dates don't show whether that's this filing (nothing changed here)")):
+        for row, rec in nrep[key]:
+            con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: {what}[/]")
+
+
 def approvals_flow():
     con.print(Panel("Reads your [bold]approved[/] Form 1s on eForms. Read-only: it only clicks Search, View Form, View PDF\n"
                     "and Go Home. Each PDF is saved to out/approved/, and suppressors are checked against your records by\n"
                     "serial (caliber, overall length). SBRs, SBSs and other types go in their own list. The first run fetches every\n"
-                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals.",
+                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals. While forms are waiting,\n"
+                    "it also looks for disapproved and returned ones, so you can file those again.",
                     title="Check approvals", border_style="cyan", expand=False))
     if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
         return
+    others = []
     try:
-        found, problems = atf.fetch_approved()
+        found, problems = atf.fetch_approved(others)
     finally:
         P.finish()
     records, more = atf.read_approved(found)
+    rejected, more_rejected = atf.read_approved(others)
+    more += more_rejected
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
     nfa = [{"type": " ".join(r["type"].upper().split())} for r in records if atf.is_other_nfa(r)]
@@ -1592,12 +1630,15 @@ def approvals_flow():
         con.print(_approved_table(rep["differs"], f"[bold]Approved, check these ({len(rep['differs'])})[/]", "yellow"))
     if rep["unknown"]:
         con.print(_approved_table(rep["unknown"], f"[bold]Approved, NOT in your records ({len(rep['unknown'])})[/]", "cyan"))
-    waiting = [r["serial_number"] for r in rep["waiting"]]
+    updated, added = atf.apply_approvals(records)
+    nrep = atf.not_approved_report(rejected, atf.load_rows())
+    marked = atf.record_disapprovals([row["serial_number"] for row, _ in nrep["disapproved"]])
+    _not_approved_lines(nrep, marked)
+    waiting = [r["serial_number"] for r in rep["waiting"] if r["serial_number"] not in marked]
     con.print(f"  Filed, not approved yet: [bold]{len(waiting)}[/]" + (f"  ({escape(', '.join(waiting[:12]))}{', …' if len(waiting) > 12 else ''})" if waiting else ""))
     alerts = [f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]] + problems + more
     if alerts:
         con.print(Panel("\n".join(f"• {escape(a)}" for a in alerts), title="Look at these", border_style="red", expand=False))
-    updated, added = atf.apply_approvals(records)
     if rep["unknown"]:
         serials = [r["serial"] for r, _ in rep["unknown"]]
         names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
@@ -1627,7 +1668,7 @@ def advanced_flow():
         questionary.Choice("Practice run: fill a form without submitting", practice_flow)] + ([
         questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow)] if trust_filing else []) + [
         questionary.Choice("Make CLEO packets for filed forms", cleo_packets_flow),
-        questionary.Choice("Re-file a row that's already filed", refile_flow),
+        questionary.Choice("Re-file a disapproved or already filed row", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),
         questionary.Choice("Check for a new version now", lambda: update_flow(force=True)),
         questionary.Choice("Back", "back")]).ask()

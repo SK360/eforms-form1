@@ -332,6 +332,20 @@ plain CLI, kept for debugging/scripting:
   table reads as the new results, then the search resets to page 1): page n is reached from page n-1
   (`search=False`), Search only after Go Home; a failed page is retried once from a reloaded home page; if it still
   fails, paging stops with a problem line (✖) and the report covers every PDF already saved (index.csv).
+  **Disapproved/returned** (added 2026-11-19, after a user's Form 1s were disapproved for an RPQ address and they
+  couldn't re-file: nothing ever set `disapproved` and Re-file listed only `filed`): `fetch_approved(others)` (menu and
+  CLI pass a list) runs `_fetch_status` for each `NOT_APPROVED` status (DISAPPROVED, RETURNED WITHOUT ACTION, RETURNED
+  FOR CORRECTION; eForms' `#form-status-search` options from the captures) after APPROVED, only while a row is
+  filed/pending (`_anything_waiting`), each from a reloaded home page, `wait=NOT_APPROVED_WAIT` (15 s: an empty
+  search can't be told from a slow one); PDFs into `out/not-approved/<status-slug>/` (own index.csv); result rows
+  get "status"; a failed status search is one problem line, the approvals are kept. `not_approved_report(records,
+  rows)`: a form counts only for a filed/pending row whose filed_date <= the form's item 9 (else the results'
+  submitted date) = its CURRENT filing (eForms keeps listing the old form after a re-file); no dates = "unsure";
+  RETURNED FOR CORRECTION = reported only. `record_disapprovals(serials)` -> status disapproved (server:
+  `record_approvals` with status disapproved; mark_pending `force` already allowed disapproved). Menu: table + home
+  line "N Form 1s disapproved", Advanced > Re-file lists disapproved rows first ("File it again?", reminder to fix
+  the cause: the re-file uses the settings/template as they are now). Not yet seen live: a real disapproved form's
+  View PDF (assumed to have item 4 like an approved one).
 - **CLEO notification copies** (added 2026-11-06; optional; files in `out/cleo/`, path via `_cleo_dir()`). The CLEO
   gets the Form 1 and each RP's 5320.23, and **neither shows the serial** (ATF leaves it off the CLEO's copies; so must
   everything made for the CLEO, the packet's cover included). 5320.23: the generator's CLEO copy = ATF's CLEO-copy

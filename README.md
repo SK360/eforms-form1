@@ -247,10 +247,19 @@ of eForms first (eForms allows one session at a time).
   recorded in your inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed
   before using this tool). A suppressor with no filed date (filed before this tool) gets the date you signed it,
   item 9 of the approval; a recorded filed date is never changed. The helper still only files suppressors.
+- **Disapproved or returned forms:** while any suppressor is filed and waiting, Check approvals also looks for Form 1s
+  that eForms lists as **disapproved** or **returned without action** (PDFs saved to `out/not-approved/`). Those
+  suppressors are marked *disapproved*, and the home screen says so. Find out why (eForms has ATF's letter) and fix
+  it first, or the new one will be disapproved too: for example, an address that doesn't match your trust document
+  means a new 5320.23 template (Settings). Then file them again with **Advanced > Re-file**, which lists them
+  first; each becomes a new application. Only the current filing counts: once a serial is filed again, its old
+  disapproved form is ignored. Forms **returned for correction** are only reported (open them in eForms).
+  Don't delete rows from `inventory.xlsx` or `out/submissions.csv` to re-file: the first is an export and the second
+  a log, so neither changes your inventory.
 
 ### Your inventory
 - **Inventory**: every suppressor in serial order (A1, A2 … A10) with caliber, length, status (queued, filed,
-  approved), filed date, approval date, how many days ATF took (or has taken so far), and a ⚠ for approvals with
+  approved, disapproved), filed date, approval date, how many days ATF took (or has taken so far), and a ⚠ for approvals with
   conditions. Below the table: the median and average wait of the last 12 months' approvals. **Show another view**
   filters by Approved / In progress / Queued / Built / Approved, not built, or shows your other approved items (called
   SBRs if that's all you have, Other NFA items if you have a mix). From there you can also open any approved Form 1 PDF
@@ -302,7 +311,7 @@ optional [inventory server](#optional-an-inventory-server) does.)
 ### Advanced
 - **Advanced**: **practice run** (fills a form in eForms and stops before signing; nothing is submitted, the row
   stays queued); preview the steps without a browser; regenerate a 5320.23 with another date (trusts); **make CLEO
-  packets** for forms already filed (while they're still in process); re-file; capture portal pages if ATF changes
+  packets** for forms already filed (while they're still in process); re-file a disapproved or filed row; capture portal pages if ATF changes
   the site.
 - The plain command line is still underneath: `./atf fill-form1 --help` (Windows: `.\atf.cmd fill-form1 --help`).
 
