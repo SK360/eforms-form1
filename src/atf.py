@@ -2912,12 +2912,16 @@ def _norm_name(text):
     return re.sub(r"[^A-Z0-9 ]", "", re.sub(r"\s+", " ", (text or "").upper())).strip()
 
 
+_MFR_WAIT_MS = 8000  # how long eForms' name search may take to list anything
+
+
 def _pick_manufacturer(page, code, name, tries=3):
     """Firearm popup 1. With a code (FMI for a suppressor, or one saved earlier): By Manufacturer Code. Without one (an
     SBR etc.): eForms' own name search, the way a person does it (mapped live 2026-11-19): type the name into the
     PrimeNG autocomplete `p-autocomplete#manufacturerName input` (real keystrokes; it matches any part of a name),
-    read `.ui-autocomplete-panel li.ui-autocomplete-list-item`. An exact match (ignoring case/punctuation) is picked;
-    otherwise you choose from the list in the terminal, or type another spelling (no list = nothing matched).
+    read `.ui-autocomplete-panel li` (no hits for the full name: shorter, a word at a time). An exact match (ignoring case/punctuation) is picked;
+    otherwise you choose from the list in the terminal, type another spelling, or pick + verify it in the browser
+    yourself and press Enter (the code is then read from the page).
     Then Verify Manufacturer; the code is read from #manufacturerCodeFromName. Returns {mfr_code, mfr_atf_name}."""
     if code:
         _tick(page, "#byCode")
@@ -2927,38 +2931,66 @@ def _pick_manufacturer(page, code, name, tries=3):
         return {"mfr_code": code}
     _tick(page, "#byName")
     box = page.locator("#manufacturerName input")
-    query, picked = name, None
-    for _ in range(tries):
-        box.fill("")
-        box.press_sequentially(query, delay=60)
-        items = page.locator(".ui-autocomplete-panel li.ui-autocomplete-list-item")
+    items = page.locator(".ui-autocomplete-panel li")
+
+    def verified_by_hand():  # the user picked + verified it in the browser while we waited (2026-11-19 practice run)
         try:
-            items.first.wait_for(timeout=6000)
+            found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
+            shown = (box.input_value() or "").strip()
+        except Exception:
+            return None
+        if found:
+            emit("step", f"    manufacturer verified in the browser: {shown} (code {found})")
+            return {"mfr_code": found, "mfr_atf_name": shown}
+        return None
+
+    def search(q):
+        box.fill("")
+        box.press_sequentially(q, delay=60)
+        try:
+            items.first.wait_for(timeout=_MFR_WAIT_MS)
         except Exception:
             pass
-        names = [t.strip() for t in items.all_inner_texts()]
+        page.wait_for_timeout(500)  # the list can grow as more results arrive
+        return [t.strip() for t in items.all_inner_texts() if t.strip()]
+
+    # the full name first, then shorter (drop a word at a time): "AERO PRECISION LLC" -> "AERO PRECISION" -> "AERO"
+    words = name.split()
+    queries = [" ".join(words[:n]) for n in range(len(words), 0, -1)] or [name]
+    query, picked, names = queries[0], None, []
+    for _ in range(tries):
+        for query in queries:
+            names = search(query)
+            if names:
+                break
         exact = [n for n in names if _norm_name(n) == _norm_name(name)]
         if len(exact) == 1:
             picked = exact[0]
             emit("step", f"    manufacturer: {picked} (exact match)")
             break
+        hint = ("Or pick it in the browser, click Verify Manufacturer, then press Enter here. q stops: ")
         if names:
             listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(names, 1))
             ans = ask(f"eForms lists these manufacturers for \"{query}\". Which one is marked on the receiver?\n{listing}\n"
-                      "Type its number, or another spelling to search again (q stops): ").strip()
+                      "Type its number, or another spelling to search again. " + hint).strip()
         else:
-            ans = ask(f"eForms has no manufacturer matching \"{query}\". Type another spelling (shorter is better, e.g. "
-                      "the first word), or q to stop: ").strip()
+            ans = ask(f"eForms shows no manufacturer for \"{name}\" (also tried shorter). Type another spelling. "
+                      + hint).strip()
         if ans.lower() == "q":
             raise RuntimeError("manufacturer not chosen")
+        if not ans:  # Enter: the user chose it in the browser
+            done = verified_by_hand()
+            if done:
+                return done
+            continue  # nothing verified there: search again
         if ans.isdigit() and names and 1 <= int(ans) <= len(names):
             picked = names[int(ans) - 1]
             break
-        query = ans or query
+        queries = [ans]
     if picked is None:
         raise RuntimeError(f"no eForms manufacturer chosen for {name!r}")
     # exact text: "PALMETTO STATE ARMORY" must not hit "PALMETTO STATE ARMORY LLC"
-    page.locator(".ui-autocomplete-panel li.ui-autocomplete-list-item",
+    page.locator(".ui-autocomplete-panel li",
                  has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
     page.locator("#verifyManufacturer").click()
     page.wait_for_timeout(1500)

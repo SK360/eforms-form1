@@ -198,7 +198,9 @@ def mfr_page():
     page = br.new_page()
     page.set_default_timeout(3000)
     page.set_content(FAKE_MFR)
+    atf._MFR_WAIT_MS, saved = 800, atf._MFR_WAIT_MS
     yield page
+    atf._MFR_WAIT_MS = saved
     br.close()
     pw.stop()
 
@@ -222,10 +224,27 @@ def test_name_search_with_no_match_asks_for_another_spelling(mfr_page, monkeypat
     asked = []
     monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or next(answers))
     assert atf._pick_manufacturer(mfr_page, "", "Aeroo Precisionn")["mfr_code"] == "AP2"
-    assert "no manufacturer matching" in asked[0]
+    assert "shows no manufacturer" in asked[0]
 
 
 def test_name_search_can_be_stopped(mfr_page, monkeypatch):
     monkeypatch.setattr(atf, "ask", lambda prompt: "q")
     with pytest.raises(RuntimeError, match="not chosen"):
         atf._pick_manufacturer(mfr_page, "", "Nothing Like It")
+
+
+def test_name_search_tries_shorter_names(mfr_page, monkeypatch):
+    asked = []
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or "2")
+    # nothing lists "AERO PRECISION TACOMA"; "AERO PRECISION" does (INC and LLC), so it asks which
+    assert atf._pick_manufacturer(mfr_page, "", "Aero Precision Tacoma")["mfr_code"] == "AP2"
+    assert '"AERO PRECISION"' in asked[0].upper() and "AERO PRECISION LLC" in asked[0]
+
+
+def test_name_search_accepts_a_pick_made_in_the_browser(mfr_page, monkeypatch):
+    def by_hand(prompt):  # the 2026-11-19 practice run: the list never reached the script, the user verified it by hand
+        mfr_page.evaluate("""() => { const box = document.querySelector('#manufacturerName input');
+            box.value = 'AERO PRECISION LLC'; document.getElementById('manufacturerCodeFromName').value = 'AP2'; }""")
+        return ""
+    monkeypatch.setattr(atf, "ask", by_hand)
+    assert atf._pick_manufacturer(mfr_page, "", "Nothing Like It") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
