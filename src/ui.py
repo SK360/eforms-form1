@@ -638,12 +638,12 @@ def add_nfa_flow():
         return pause()
     taken = {r["serial_number"].upper() for r in atf.load_rows()}
     con.print(Panel(
-        "Have the receiver in front of you (or a clear photo of its markings). You'll need:\n"
-        "• the manufacturer's ATF code: in eForms, Add Firearm > By Manufacturer Name, pick the EXACT name marked on\n"
-        "  the receiver (e.g. INC vs LLC), click Verify Manufacturer: the code shows next to it (e.g. AP2)\n"
-        "• that manufacturer's name and address, for the 5320.23 item 4b\n"
+        "Have the receiver in front of you (or a clear photo of its markings). Everything comes from its markings:\n"
+        "• the manufacturer's name, city and state (the law requires them on the receiver)\n"
         "• model and serial exactly as engraved; ONE caliber (a receiver marked MULTI: the caliber you'll build in)\n"
-        "• barrel length, and overall length with the stock EXTENDED",
+        "• barrel length, and overall length with the stock EXTENDED\n"
+        "When you file, the script finds the manufacturer in eForms' list by name; if it isn't sure which one,\n"
+        "it shows you eForms' list in this window to pick from.",
         title="Adding an SBR or other NFA item", border_style="cyan", expand=False))
 
     def need(v):
@@ -656,9 +656,8 @@ def add_nfa_flow():
     kind = questionary.select("Type:", choices=[questionary.Choice(k.title(), k) for k in NFA_KINDS]).ask()
     unit = "GAUGE" if kind == "SHORT BARRELED SHOTGUN" else "CALIBER"
     asks = [("serial_number", "Serial number (exactly as engraved on the receiver):", "", new_serial),
-            ("mfr_code", "Manufacturer's ATF code (e.g. AP2):", "", need),
-            ("mfr_name", "Manufacturer's name as ATF lists it (e.g. AERO PRECISION LLC):", "", need),
-            ("mfr_address", "Manufacturer's address (street, city, state ZIP):", "", need),
+            ("mfr_name", "Manufacturer's name as marked on the receiver (e.g. AERO PRECISION):", "", need),
+            ("mfr_address", "Manufacturer's city and state as marked (e.g. TACOMA, WA):", "", need),
             ("mfr_country", "Manufacturer's country:", "UNITED STATES", need),
             ("model", "Model (as engraved):", "", need),
             ("caliber", f"{unit.title()} (one only, e.g. 5.56 or 12):", "", _one_caliber),
@@ -684,7 +683,7 @@ def add_nfa_flow():
         return pause()
     con.print(Panel("\n".join(f"{k}: {escape(v)}" for k, v in (
         ("Type", kind), ("Serial", row["serial_number"]),
-        ("Manufacturer", f"{row['mfr_name']} ({row['mfr_code']}), {row['mfr_country']}"), ("Address", row["mfr_address"]),
+        ("Manufacturer", f"{row['mfr_name']}, {row['mfr_address']} ({row['mfr_country']})"),
         ("Model", row["model"]), (unit.title(), row["caliber"]), ("Barrel", row["barrel_length"] + '"'),
         ("Overall", row["overall_length"] + '" (stock extended)'), ("Description", row["description"] or "-"),
         ("Markings photo", Path(row["photo"]).name if row["photo"] else "none (optional)")))

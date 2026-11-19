@@ -106,8 +106,8 @@ def nfa_row_problems(row):
     or gauge (another designation goes in the description), lengths with the stock extended, the existing serial."""
     if not is_nfa_row(row):
         return []
-    need = [("mfr_code", "the manufacturer's ATF code"), ("mfr_name", "the manufacturer's name"),
-            ("mfr_address", "the manufacturer's address (5320.23 item 4b)"), ("model", "the model as engraved"),
+    need = [("mfr_name", "the manufacturer's name (as marked)"),
+            ("mfr_address", "the manufacturer's city and state (as marked; 5320.23 item 4b)"), ("model", "the model as engraved"),
             ("caliber", "the caliber or gauge"), ("barrel_length", "the barrel length"), ("overall_length", "the overall length")]
     probs = [f"{row['serial_number']}: {what} is missing" for key, what in need if not (row.get(key) or "").strip()]
     if re.search(r"\bMULTI\b", row.get("caliber", ""), re.I):
@@ -2885,7 +2885,7 @@ def _row_context(trust, item):
                     "docs": ctx["docs"] + ([{"doc_path": photo, "doc_desc": "PHOTO OF RECEIVER MARKINGS",
                                              "doc_file": json.dumps(Path(photo).name)}] if photo else [])})
     ctx.update({"nfa": "yes" if is_nfa_row(item) else "", "product_type": (item.get("type") or "SILENCER").upper(),
-                "mfr_code": item.get("mfr_code") or "FMI", "mfr_country": item.get("mfr_country") or "UNITED STATES",
+                "mfr_code": item.get("mfr_code") or ("" if is_nfa_row(item) else "FMI"), "_found": {}, "mfr_country": item.get("mfr_country") or "UNITED STATES",
                 "unit": item.get("unit") or "CALIBER", "barrel_length": item.get("barrel_length", "")})
     others = [_other_rp_context(p, n, item) for n, p in enumerate(other_rps(trust), 2)]
     ctx.update({"other_rps": others, "has_other_rps": "yes" if others else "", "rp_count": str(1 + len(others))})
@@ -2906,6 +2906,67 @@ def _other_rp_context(person, n, item):
             "rp_birth_state": person["place_of_birth"]["state"].upper(),
             "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
             "photo_path": person["photo"], "eft_path": person["eft"]}
+
+
+def _norm_name(text):
+    return re.sub(r"[^A-Z0-9 ]", "", re.sub(r"\s+", " ", (text or "").upper())).strip()
+
+
+def _pick_manufacturer(page, code, name, tries=3):
+    """Firearm popup 1. With a code (FMI for a suppressor, or one saved earlier): By Manufacturer Code. Without one (an
+    SBR etc.): eForms' own name search, the way a person does it (mapped live 2026-11-19): type the name into the
+    PrimeNG autocomplete `p-autocomplete#manufacturerName input` (real keystrokes; it matches any part of a name),
+    read `.ui-autocomplete-panel li.ui-autocomplete-list-item`. An exact match (ignoring case/punctuation) is picked;
+    otherwise you choose from the list in the terminal, or type another spelling (no list = nothing matched).
+    Then Verify Manufacturer; the code is read from #manufacturerCodeFromName. Returns {mfr_code, mfr_atf_name}."""
+    if code:
+        _tick(page, "#byCode")
+        page.locator("#manufacturerCode").fill(code)
+        page.locator("#verifyManufacturer").click()
+        page.wait_for_timeout(1500)
+        return {"mfr_code": code}
+    _tick(page, "#byName")
+    box = page.locator("#manufacturerName input")
+    query, picked = name, None
+    for _ in range(tries):
+        box.fill("")
+        box.press_sequentially(query, delay=60)
+        items = page.locator(".ui-autocomplete-panel li.ui-autocomplete-list-item")
+        try:
+            items.first.wait_for(timeout=6000)
+        except Exception:
+            pass
+        names = [t.strip() for t in items.all_inner_texts()]
+        exact = [n for n in names if _norm_name(n) == _norm_name(name)]
+        if len(exact) == 1:
+            picked = exact[0]
+            emit("step", f"    manufacturer: {picked} (exact match)")
+            break
+        if names:
+            listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(names, 1))
+            ans = ask(f"eForms lists these manufacturers for \"{query}\". Which one is marked on the receiver?\n{listing}\n"
+                      "Type its number, or another spelling to search again (q stops): ").strip()
+        else:
+            ans = ask(f"eForms has no manufacturer matching \"{query}\". Type another spelling (shorter is better, e.g. "
+                      "the first word), or q to stop: ").strip()
+        if ans.lower() == "q":
+            raise RuntimeError("manufacturer not chosen")
+        if ans.isdigit() and names and 1 <= int(ans) <= len(names):
+            picked = names[int(ans) - 1]
+            break
+        query = ans or query
+    if picked is None:
+        raise RuntimeError(f"no eForms manufacturer chosen for {name!r}")
+    # exact text: "PALMETTO STATE ARMORY" must not hit "PALMETTO STATE ARMORY LLC"
+    page.locator(".ui-autocomplete-panel li.ui-autocomplete-list-item",
+                 has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
+    page.locator("#verifyManufacturer").click()
+    page.wait_for_timeout(1500)
+    found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
+    if not found:
+        raise RuntimeError(f"eForms did not verify {picked!r} (no manufacturer code shown)")
+    emit("step", f"    manufacturer code: {found}")
+    return {"mfr_code": found, "mfr_atf_name": picked}
 
 
 _current_step = ""
@@ -2940,6 +3001,14 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             continue
         _current_step = sel or act
         if s.get("if_set") and not str(ctx_vals.get(s["if_set"]) or "").strip():  # e.g. a UPIN only if you have one
+            continue
+        if act == "pick_manufacturer":  # by code if known, else eForms' own name search (see _pick_manufacturer)
+            code = str(ctx_vals.get("mfr_code") or "").strip()
+            emit("step", f"pick_manufacturer {'code ' + code if code else 'by name ' + str(ctx_vals.get('mfr_name', ''))}")
+            if not dry:
+                found = _pick_manufacturer(page, code, str(ctx_vals.get("mfr_name") or ""))
+                if not code and isinstance(ctx_vals.get("_found"), dict):
+                    ctx_vals["_found"].update(found)
             continue
         if s.get("tag") in skip_tags:
             emit("step", f"(skipping {s['tag']} step)")
@@ -3168,6 +3237,11 @@ def _file_one(page, args, trust, steps, rows, idx):
             _save_failure(page)
         ask("Browser left open on the failing page. Look at it, then press Enter to log out and close... ")
         sys.exit(1)
+    found = ctx_vals.get("_found") or {}
+    if found.get("mfr_code") and not item.get("mfr_code"):  # looked up by name: keep it, so a re-file uses the code
+        item.update(mfr_code=found["mfr_code"])
+        if not server_settings():
+            save_rows(rows)
     if bad:
         emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")
     if args.submit:

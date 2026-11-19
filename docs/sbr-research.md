@@ -117,6 +117,15 @@ EXTENDED; 4g never alter the existing serial; markings: maker's (the trust's) na
 5320.23 = the ORIGINAL manufacturer's name and address, matching Form 1 item 4a (ATF instruction K(1) for a modified
 existing firearm). Suppressors keep the trust as maker.
 
+## Manufacturer lookup (live 2026-11-19, clean browser)
+
+Users don't know ATF codes, so the tool finds them: the name box is a PrimeNG autocomplete
+(`p-autocomplete#manufacturerName input`) that needs real keystrokes and matches any part of a name ("palmetto" ->
+6 incl. "RAWL, JAMES B DBA PALMETTO ARMAMENT"); suggestions are `.ui-autocomplete-panel li.ui-autocomplete-list-item`
+(plain names; the code/address aren't in the page); no match = no panel. Verify -> code in
+`#manufacturerCodeFromName`. 5320.23 item 4b uses the name + city/state MARKED on the receiver (27 CFR 478.92
+requires them there; Form 1 instruction K(1) asks for "name and location"), so no address lookup is needed.
+
 ## Code touch points
 
 1. `config/mapping.yaml`: `#productType` from `{firearm_type}`; manufacturer popup branches (FMI vs. lookup);

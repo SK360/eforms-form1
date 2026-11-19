@@ -39,8 +39,9 @@ def test_queue_keeps_the_sbr_columns_and_suppressor_files_keep_their_header(conf
 def test_sbr_needs_every_marking_and_one_caliber(configured, tmp_path):
     assert atf.nfa_row_problems(sbr()) == []
     assert atf.nfa_row_problems({"serial_number": "S1", "caliber": "9"}) == []           # a suppressor: not checked here
-    probs = " ".join(atf.nfa_row_problems(sbr(mfr_code="", barrel_length="", caliber="MULTI")))
-    assert "ATF code" in probs and "barrel length" in probs and "ONE caliber" in probs
+    assert atf.nfa_row_problems(sbr(mfr_code="")) == []                                  # eForms finds the code by name
+    probs = " ".join(atf.nfa_row_problems(sbr(mfr_name="", barrel_length="", caliber="MULTI")))
+    assert "manufacturer's name" in probs and "barrel length" in probs and "ONE caliber" in probs
     assert "120" in " ".join(atf.nfa_row_problems(sbr(description="X" * 121)))
     assert "not found" in " ".join(atf.nfa_row_problems(sbr(photo=str(tmp_path / "nope.jpg"))))
     big = tmp_path / "big.jpg"
@@ -75,7 +76,7 @@ def test_portal_steps_for_an_sbr(configured, tmp_path):
     atf.stamp_5320(row, TODAY)
     steps = dry_steps(row)
     assert "{" not in steps
-    for expected in ("fill #manufacturerCode AP2", "select #country UNITED STATES", "select #productType SHORT BARRELED RIFLE",
+    for expected in ("pick_manufacturer code AP2", "select #country UNITED STATES", "select #productType SHORT BARRELED RIFLE",
                      "check #descriptionNotListed", "fill #weaponModel M4E1", "fill #weaponCaliber 5.56",
                      "select #unitOfMeasure CALIBER", "fill #barrelLength 10.3", "fill #overallLength 30",
                      "fill #serialNumber XYZ123", "fill #description RECEIVER MARKED MULTI",
@@ -92,12 +93,19 @@ def test_markings_photo_is_optional(configured):
     assert "PHOTO OF RECEIVER MARKINGS" not in steps and "fill #barrelLength 10.3" in steps
 
 
+def test_without_a_code_the_manufacturer_is_found_by_name(configured):
+    row = add_sbr(mfr_code="")
+    atf.stamp_5320(row, TODAY)
+    steps = dry_steps(row)
+    assert "pick_manufacturer by name EXAMPLE ARMS LLC" in steps and "FMI" not in steps
+
+
 def test_suppressor_steps_are_unchanged(configured):
     queue(("ABC123", "9"))
     row = atf.load_rows()[0]
     atf.stamp_5320(row, TODAY)
     steps = dry_steps(row)
-    for expected in ("fill #manufacturerCode FMI", "select #productType SILENCER", "select #unitOfMeasure CALIBER",
+    for expected in ("pick_manufacturer code FMI", "select #productType SILENCER", "select #unitOfMeasure CALIBER",
                      "expect #weaponType SILENCER", "fill #weaponModel N/A"):
         assert expected in steps, expected
     assert "descriptionNotListed" not in steps and "barrelLength" not in steps
@@ -139,14 +147,14 @@ def test_menu_adds_an_sbr_and_refuses_multi(configured, answers, screen):
     def caliber(kw):
         seen["multi"] = kw["validate"]("MULTI")
         return "5.56"
-    answers(pick("Add suppressors"), pick("An SBR"), pick("Short Barreled Rifle"), "XYZ123", "ap2", "Example Arms LLC",
-            "1 Factory Rd, Anytown, OH 45000", lambda kw: kw["default"], "m4e1", caliber, "10.3", "30", "receiver marked multi",
+    answers(pick("Add suppressors"), pick("An SBR"), pick("Short Barreled Rifle"), "XYZ123", "Example Arms LLC",
+            "Anytown, OH", lambda kw: kw["default"], "m4e1", caliber, "10.3", "30", "receiver marked multi",
             "", True, lambda kw: "quit")
     ui.menu()
     row = atf.load_rows()[0]
     assert seen["multi"].startswith("One caliber")
-    assert (row["type"], row["mfr_code"], row["mfr_name"], row["model"], row["caliber"], row["barrel_length"], row["photo"]) == (
-        "SHORT BARRELED RIFLE", "AP2", "EXAMPLE ARMS LLC", "M4E1", "5.56", "10.3", "")
+    assert (row["type"], row["mfr_code"], row["mfr_name"], row["mfr_address"], row["model"], row["caliber"], row["barrel_length"],
+            row["photo"]) == ("SHORT BARRELED RIFLE", "", "EXAMPLE ARMS LLC", "ANYTOWN, OH", "M4E1", "5.56", "10.3", "")
     assert row["description"] == "RECEIVER MARKED MULTI" and row["mfr_country"] == "UNITED STATES"
     assert "Added XYZ123 (SBR)" in screen.getvalue()
 
@@ -161,3 +169,63 @@ def test_cleo_copy_gets_items_4a_to_4c_and_still_no_serial(configured):
     text = pymupdf.open(dest)[0].get_text()
     assert "SHORT BARRELED RIFLE" in text and "EXAMPLE ARMS LLC" in text and "M4E1" in text
     assert "XYZ123" not in text
+
+
+# eForms' manufacturer popup as mapped live 2026-11-19: a PrimeNG autocomplete that matches any part of a name
+FAKE_MFR = """<input type="radio" id="byName" checked><input type="radio" id="byCode"><input id="manufacturerCode">
+<p-autocomplete id="manufacturerName"><span><input type="text"></span></p-autocomplete><div id="panel"></div>
+<input id="manufacturerCodeFromName" readonly><button id="verifyManufacturer">Verify Manufacturer</button>
+<script>
+const LIST = {"AERO PRECISION INC": "AP1", "AERO PRECISION LLC": "AP2", "PALMETTO STATE ARMORY": "PS1",
+              "PALMETTO STATE ARMORY LLC": "PS2", "RAWL, JAMES B DBA PALMETTO ARMAMENT": "RW1"};
+let chosen = null;
+const box = document.querySelector('#manufacturerName input'), panel = document.getElementById('panel');
+box.addEventListener('keyup', () => { const q = box.value.toUpperCase();
+  const hits = q.length < 3 ? [] : Object.keys(LIST).filter(n => n.includes(q));
+  panel.innerHTML = hits.length ? '<div class="ui-autocomplete-panel"><ul>' + hits.map(n =>
+    '<li class="ui-autocomplete-list-item"><span>' + n + '</span></li>').join('') + '</ul></div>' : ''; });
+panel.addEventListener('click', e => { const li = e.target.closest('li'); if (li) { chosen = li.innerText.trim(); box.value = chosen; panel.innerHTML = ''; } });
+document.getElementById('verifyManufacturer').onclick = () => {
+  document.getElementById('manufacturerCodeFromName').value = document.getElementById('byCode').checked ? '' : (LIST[chosen] || ''); };
+</script>"""
+
+
+@pytest.fixture
+def mfr_page():
+    from playwright.sync_api import sync_playwright
+    pw = sync_playwright().start()
+    br = pw.chromium.launch(headless=True)
+    page = br.new_page()
+    page.set_default_timeout(3000)
+    page.set_content(FAKE_MFR)
+    yield page
+    br.close()
+    pw.stop()
+
+
+def test_name_search_picks_the_exact_match(mfr_page, monkeypatch):
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("an exact match needs no question"))
+    assert atf._pick_manufacturer(mfr_page, "", "Aero Precision LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+def test_name_search_asks_when_not_sure(mfr_page, monkeypatch):
+    asked = []
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or "1")
+    # "PALMETTO STATE ARMORY" is listed with and without LLC: picking #1 must not click the LLC one
+    got = atf._pick_manufacturer(mfr_page, "", "Palmetto")
+    assert got == {"mfr_code": "PS1", "mfr_atf_name": "PALMETTO STATE ARMORY"}
+    assert "PALMETTO STATE ARMORY LLC" in asked[0] and "RAWL, JAMES B DBA PALMETTO ARMAMENT" in asked[0]
+
+
+def test_name_search_with_no_match_asks_for_another_spelling(mfr_page, monkeypatch):
+    answers = iter(["aero", "2"])
+    asked = []
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or next(answers))
+    assert atf._pick_manufacturer(mfr_page, "", "Aeroo Precisionn")["mfr_code"] == "AP2"
+    assert "no manufacturer matching" in asked[0]
+
+
+def test_name_search_can_be_stopped(mfr_page, monkeypatch):
+    monkeypatch.setattr(atf, "ask", lambda prompt: "q")
+    with pytest.raises(RuntimeError, match="not chosen"):
+        atf._pick_manufacturer(mfr_page, "", "Nothing Like It")

@@ -88,7 +88,14 @@ plain CLI, kept for debugging/scripting:
 - **Other NFA items being filed** (SBR/SBS/AOW from an existing receiver): queued in `data/suppressors.csv` too, so
   filing/pending/resolve/CLEO work unchanged. `NFA_QUEUE_COLS` (type, mfr_code, mfr_name, mfr_address, mfr_country,
   model, barrel_length, unit, description, photo) are written only when such a row exists (`save_rows` keeps a
-  suppressor-only file's old header). `is_nfa_row` (type set and not SILENCER); `nfa_row_problems` (all markings,
+  suppressor-only file's old header). `is_nfa_row` (type set and not SILENCER). The user types only what's MARKED on the receiver (name, city/state
+  in `mfr_address`, model, serial); no ATF code: `pick_manufacturer` (mapping action -> `_pick_manufacturer`) uses
+  the row's code if it has one (FMI for suppressors), else eForms' own name search (PrimeNG autocomplete
+  `p-autocomplete#manufacturerName input`, real keystrokes, matches any part of a name; list
+  `.ui-autocomplete-panel li.ui-autocomplete-list-item`; nothing listed = no match): an exact match (case and
+  punctuation ignored) is picked, else the list is shown in the terminal (`ask`: number, another spelling, q);
+  exact-text click (PALMETTO STATE ARMORY vs ... LLC); Verify; code read from `#manufacturerCodeFromName` and saved
+  to the row by `_file_one` (mapped live 2026-11-19 in a clean browser). `nfa_row_problems` (all markings,
   ONE caliber: "MULTI" refused per Form 1 instruction K(3), description <= 120, optional markings photo exists and
   <= 3 MB, local inventory only) is checked by the menu and by `file_rows` before the browser. `_row_context` adds
   `nfa`, `product_type`, `mfr_code` (FMI for suppressors), `mfr_country`, `unit`, `barrel_length`, the row's model and

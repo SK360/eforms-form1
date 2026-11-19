@@ -101,7 +101,7 @@ def test_shared_mapping_resolves_from_settings(configured):
     steps = _dry_steps()
     assert "{" not in steps                                                   # every placeholder filled, selectors too
     for expected in ("fill #tradeName DOE FAMILY TRUST", "fill #titleOfTheSubmitter Trustee", "has-text('Asian')",
-                     "fill #manufacturerCode FMI", "select #cleoAddress-county CLARK", "select #cleoAddress-city SPRINGFIELD",
+                     "pick_manufacturer code FMI", "select #cleoAddress-county CLARK", "select #cleoAddress-city SPRINGFIELD",
                      "select #birthState OHIO", "fill #serialNumber ABC123", "fill #weaponCaliber 9",
                      f"upload #photoFile {configured / 'files' / 'me.jpg'}", "fill #description 3D PRINTER"):
         assert expected in steps, expected
