@@ -102,15 +102,16 @@ EXTENDED; 4g never alter the existing serial; markings: maker's (the trust's) na
 | manufacturer name + address | AERO PRECISION LLC, city/state | 5320.23 4b (name from verify, address from the grid) |
 | manufacturer country | UNITED STATES | `#country` |
 | model (as engraved) | M4E1 | `#weaponModel` (not-listed), 5320.23 4c |
-| caliber/gauge + unit | 5.56 / CALIBER | `#weaponCaliber`, `#unitOfMeasure`, 5320.23 4d |
+| caliber/gauge + unit (ONE caliber; a receiver marked MULTI = the built caliber here, "MULTI" in description, per instruction K(3)) | 5.56 / CALIBER | `#weaponCaliber`, `#unitOfMeasure`, 5320.23 4d |
 | barrel length | 10.3 | `#barrelLength` |
 | overall length (stock extended) | 30 | `#overallLength` |
 | serial (existing) | as engraved | `#serialNumber`, 5320.23 4e |
 | description (optional) | free text, 120 max | `#description` |
 
 5320.23 stamping (option B) then covers 4a type, 4b maker name/address, 4c model as well as 4d/4e; the template's
-`SILENCER` / trust-as-maker / `N/A` text is covered like the caliber and serial are today. To check: whether ATF wants
-4b on the 5320.23 = the original manufacturer (as Form 1 item 4a) or the trust as maker.
+`SILENCER` / trust-as-maker / `N/A` text is covered like the caliber and serial are today. Decided 2026-11-19: 4b on the
+5320.23 = the ORIGINAL manufacturer's name and address, matching Form 1 item 4a (ATF instruction K(1) for a modified
+existing firearm). Suppressors keep the trust as maker.
 
 ## Code touch points
 
