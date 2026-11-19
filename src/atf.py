@@ -2933,14 +2933,14 @@ def _pick_manufacturer(page, code, name, tries=3):
     box = page.locator("#manufacturerName input")
     items = page.locator(".ui-autocomplete-panel li")
 
-    def verified_by_hand():  # the user picked + verified it in the browser while we waited (2026-11-19 practice run)
+    def verified_by_hand():  # eForms shows a verified code (it took the name, or the user picked it by hand)
         try:
             found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
             shown = (box.input_value() or "").strip()
         except Exception:
             return None
         if found:
-            emit("step", f"    manufacturer verified in the browser: {shown} (code {found})")
+            emit("step", f"    manufacturer verified: {shown} (code {found})")
             return {"mfr_code": found, "mfr_atf_name": shown}
         return None
 
@@ -2968,6 +2968,16 @@ def _pick_manufacturer(page, code, name, tries=3):
             picked = exact[0]
             emit("step", f"    manufacturer: {picked} (exact match)")
             break
+        if not names:  # no list reached us; the site may still take the typed name as is (2026-11-19: it showed AP2)
+            box.fill("")
+            box.press_sequentially(name, delay=60)
+            page.wait_for_timeout(1000)
+            page.keyboard.press("Escape")
+            page.locator("#verifyManufacturer").click()
+            page.wait_for_timeout(1500)
+        done = verified_by_hand()  # the page already shows a verified code: nothing to ask
+        if done:
+            return done
         hint = ("Or pick it in the browser, click Verify Manufacturer, then press Enter here. q stops: ")
         if names:
             listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(names, 1))

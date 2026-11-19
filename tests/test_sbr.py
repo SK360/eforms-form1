@@ -248,3 +248,14 @@ def test_name_search_accepts_a_pick_made_in_the_browser(mfr_page, monkeypatch):
         return ""
     monkeypatch.setattr(atf, "ask", by_hand)
     assert atf._pick_manufacturer(mfr_page, "", "Nothing Like It") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+def test_name_search_takes_a_name_the_site_verifies_without_a_list(mfr_page, monkeypatch):
+    # the practice run: no suggestion list reached the script, but eForms verified the typed name (code AP2)
+    mfr_page.evaluate("""() => { const panel = document.getElementById('panel');
+      new MutationObserver(() => { if (panel.innerHTML) panel.innerHTML = ''; }).observe(panel, {childList: true});
+      document.getElementById('verifyManufacturer').onclick = () => {
+        const v = document.querySelector('#manufacturerName input').value.toUpperCase();
+        document.getElementById('manufacturerCodeFromName').value = v === 'AERO PRECISION LLC' ? 'AP2' : ''; }; }""")
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("eForms verified it; nothing to ask"))
+    assert atf._pick_manufacturer(mfr_page, "", "AERO PRECISION LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
