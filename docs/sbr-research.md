@@ -1,0 +1,83 @@
+# Filing SBRs (and other Form 1 types): research
+
+Status: research only (branch `sbr-research`). Nothing below has been mapped live in eForms yet.
+
+## What changes compared to a suppressor
+
+A suppressor Form 1 made by this tool is always "maker = the applicant" (manufacturer code `FMI`), type `SILENCER`,
+model `N/A`, a fresh serial the user assigns, no barrel length. An SBR is usually made from a rifle or receiver that
+already exists and already has a serial, so most of item 4 comes from that firearm instead of from settings.
+
+## New information needed per SBR row
+
+| Field | Form 1 item | Where it goes in eForms | Suppressor today | SBR |
+|---|---|---|---|---|
+| Type of firearm | 4b | `#productType` | fixed `SILENCER` | `SHORT BARRELED RIFLE` (also SBS / AOW use the same flow) |
+| Original manufacturer | 4a | manufacturer popup (`#byCode` / `#manufacturerCode`, or search by name) | fixed `FMI` | the receiver's maker (e.g. Aero Precision, Brownells) chosen from ATF's licensee list; `FMI` only if the receiver is unserialized / home-built (80%) |
+| Manufacturer country | 4a | `#country` | US | maker's country (imports: importer too) |
+| Model | 4d | `#weaponModel` | `N/A` from settings | receiver's model as marked (e.g. `M4E1`, `BRN-10`) |
+| Caliber or gauge | 4c | `#weaponCaliber` + `#unitOfMeasure` | free text, `CALIBER` | may be a dropdown once a firearm type is chosen; `GAUGE` for an SBS |
+| Barrel length (in) | 4e | unknown selector (hidden for SILENCER, per mapping comment) | n/a | planned barrel length, e.g. `10.3` |
+| Overall length (in) | 4f | `#overallLength` | settings default | measured with the stock **extended**, bare muzzle |
+| Serial number | 4g | `#serialNumber` | user-assigned | the **existing** serial exactly as engraved on the receiver |
+| Additional description | 4h | `#description` | "I possess no parts…" | e.g. "AR-15 type rifle to be fitted with a 10.3 in barrel"; the "no parts" statement doesn't fit since the receiver already exists |
+| Supporting docs | | `docs:` repeat | none | usually none needed |
+
+Per-row, not per-settings: manufacturer, model, caliber, barrel length, overall length, serial (and type). Today's
+queue CSV (`data/suppressors.csv`) holds only serial, caliber, overall length, so SBRs need their own queue rows
+with these columns. `SBR_COLS` in `src/atf.py` already has type, model, barrel_length, overall_length for approved
+SBRs read from PDFs; a queue would add `manufacturer`, `manufacturer_code` (or name), `country`, `description`,
+`status`, `application_number`, `filed_date`.
+
+## 5320.23 (responsible person questionnaire)
+
+The template from the jakepro716 generator has item 4 baked in. Checked a real trust template:
+4a type = `SILENCER`, 4b maker = the trust's name and address, 4c model = `N/A`. Only 4d caliber and 4e serial (plus date and
+CLEO line) are stamped per row.
+
+For SBRs, either:
+- **A. Separate SBR templates per responsible person** (type `SHORT BARRELED RIFLE`, model filled in), stamped the
+  same way. Simple, but one template set per type/model.
+- **B. Stamp 4a and 4c too** (cover the template's text and print the row's type and model, as 4d/4e are handled now).
+  One template set covers everything; needs `_near()` positions for 4a/4c on the generator's layout.
+
+4b on the 5320.23 stays the maker = the trust (the trust is the one making the NFA firearm). This still needs to be checked.
+
+## Process differences (not code, but the tool should say so)
+
+- After approval, 27 CFR 479.102: engrave the **maker (trust name) and city/state** on the receiver. The existing serial is kept,
+  so no new serial is needed. The model and caliber markings only change if they differ from what's already marked.
+- Don't install the short barrel or put the rifle in SBR configuration until it's approved.
+- State law check (some states ban SBRs).
+- The CLEO packet and the fingerprints / EFT are unchanged.
+
+## Code touch points
+
+1. `config/mapping.yaml`: `#productType` from `{firearm_type}`; manufacturer popup branches (FMI vs. lookup);
+   barrel-length step (only for non-silencer); caliber select vs. fill; read-back `#weaponType` expects
+   `{firearm_type}`, plus barrel length.
+2. `src/atf.py`: queue rows with the new columns; `_row_context()` placeholders; filing-log match at ~line 253
+   (`"SILENCER" in rec["type"]`) accepts the row's type; approved SBRs move from "queued" into `sbrs.csv`.
+3. `src/ui.py`: "Add an SBR" flow (asks the fields above), queue/edit screens show type, and the "built" flow stays
+   suppressor-only.
+4. `src/remote.py` / `src/phone.py`: the server inventory API (types already there since API 2) needs queued SBRs.
+5. 5320.23 stamping (option A or B above).
+
+## Open questions to answer live (practice run up to the read-back page, never submitting)
+
+- Manufacturer popup: is searching by name/code enough for common makers, and what does "not listed" look like?
+- After `SHORT BARRELED RIFLE` is chosen: barrel-length selector, and whether caliber becomes a dropdown.
+- Read-back page IDs for barrel length and the original manufacturer.
+- Whether eForms requires a supporting document for an SBR (believed not).
+
+Capture with `./atf inspect` on each popup during a practice run.
+
+## Sources
+
+- John Pierce, "Why do some approved Form 1's say FORM 1 REGISTRATION in box 4a?": FMI for unserialized lowers;
+  for a serialized receiver, choose the original licensed manufacturer
+  (https://johnpierceesq.com/why-do-some-approved-form-1s-say-form-1-registration-in-box-4a/)
+- Ammoland, "How to Fill Out an ATF eForm 1": OAL with stock extended; serial exactly as engraved
+  (https://www.ammoland.com/2023/02/how-to-fill-out-an-atf-eform-1/)
+- AccurateShooter, barrel and overall length rules (https://bulletin.accurateshooter.com/?p=58965)
+- 27 CFR 479.102 (marking): https://www.ecfr.gov/current/title-27/chapter-II/subchapter-B/part-479/subpart-I/section-479.102
