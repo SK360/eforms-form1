@@ -138,20 +138,29 @@ portal:
     - {action: section, value: "Firearm: manufacturer"}
     - {selector: "#addFirearm", action: click}
     - {selector: "#byCode", action: check}
-    - {selector: "#manufacturerCode", action: fill, value: "FMI"}   # always FMI for a Form 1 (maker = the applicant)
+    # FMI ("Form 1 registration": maker = the applicant) for a suppressor; an SBR etc. made from an existing receiver
+    # uses the ORIGINAL manufacturer's code (the portal: "Only use ... FMI if serialized part is wholly manufactured by
+    # Registrant"). Found once with the popup's name search (mapped live 2026-11-19: AERO PRECISION LLC = AP2).
+    - {selector: "#manufacturerCode", action: fill, value: "{mfr_code}"}
     - {selector: "#verifyManufacturer", action: click}
     - {action: wait, value: "1500"}
     - {selector: "#closeVerifiedManufacturerModal", action: click}
-    - {selector: "#country", action: select, value: "UNITED STATES", skip_if_disabled: true}   # skipped if locked/prefilled
+    - {selector: "#country", action: select, value: "{mfr_country}", skip_if_disabled: true}   # skipped if locked/prefilled
     - {selector: "#nextButton", action: click}
     # --- firearm popup 2 ---
     - {action: section, value: "Firearm: details"}
-    - {selector: "#productType", action: select, value: "SILENCER"}
-    - {action: wait, value: "500"}          # form re-renders (caliber becomes free text, barrel length hidden)
+    - {selector: "#productType", action: select, value: "{product_type}"}
+    - {action: wait, value: "500"}          # form re-renders (SILENCER: caliber free text, barrel length hidden)
+    # Other types with a real manufacturer: Model is an ng-select of ATF's list for that maker and Caliber a select.
+    # "My item description is not in the list" turns both into the same text inputs a silencer has, so the model is
+    # typed as engraved (live 2026-11-19). Barrel length only exists for these types.
+    - {selector: "#descriptionNotListed", action: check, if_set: nfa}
+    - {action: wait, value: "800", if_set: nfa}
     - {selector: "#weaponModel", action: fill, value: "{model}"}
     - {selector: "#weaponCaliber", action: fill, value: "{caliber}"}
     - {selector: "#serialNumber", action: fill, value: "{serial_number}"}
-    - {selector: "#unitOfMeasure", action: select, value: "CALIBER"}
+    - {selector: "#unitOfMeasure", action: select, value: "{unit}"}   # CALIBER; GAUGE for a shotgun
+    - {selector: "#barrelLength", action: fill, value: "{barrel_length}", if_set: nfa}
     - {selector: "#overallLength", action: fill, value: "{overall_length}"}
     - {selector: "#description", action: fill, value: "{description}"}
     # #descriptionNotListed stays unchecked
@@ -184,9 +193,11 @@ portal:
     - {action: wait, value: "1500"}
     - {selector: "#serialNumberMessage", action: expect, label: "Serial number", value: "{serial_number}"}
     - {selector: "#model", action: expect, label: "Model", value: "{model}"}
-    - {selector: "#weaponType", action: expect, label: "Type", value: "SILENCER"}
+    - {selector: "#weaponType", action: expect, label: "Type", value: "{product_type}"}
     - {selector: "#caliber", action: expect, label: "Caliber", value: "{caliber}"}
     - {selector: "#overallLength", action: expect, label: "Overall length", value: "{overall_length}"}
+    # verify page shows "Barrel Length" for these types; id not read live yet (assumed): a practice run confirms it
+    - {selector: "#barrelLength", action: expect, label: "Barrel length", value: "{barrel_length}", if_set: nfa}
     - {selector: "#businessName >> nth=0", action: expect, label: "Trust name", private: true, value: "{trust_name}", only: trust}
     - action: repeat
       over: answers

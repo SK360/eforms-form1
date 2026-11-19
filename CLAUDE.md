@@ -85,6 +85,20 @@ plain CLI, kept for debugging/scripting:
   rounded half up like the phone page). Shown as the Days column of `inventory_table` and `build_table`, `wait_line`
   under the Inventory views (not on home), Excel "Days to approve" (approved only), phone page "ATF wait" + "median
   wait" in `#sum` (computed in JS from `filed`/`approved`; /api/inventory unchanged).
+- **Other NFA items being filed** (SBR/SBS/AOW from an existing receiver): queued in `data/suppressors.csv` too, so
+  filing/pending/resolve/CLEO work unchanged. `NFA_QUEUE_COLS` (type, mfr_code, mfr_name, mfr_address, mfr_country,
+  model, barrel_length, unit, description, photo) are written only when such a row exists (`save_rows` keeps a
+  suppressor-only file's old header). `is_nfa_row` (type set and not SILENCER); `nfa_row_problems` (all markings,
+  ONE caliber: "MULTI" refused per Form 1 instruction K(3), description <= 120, optional markings photo exists and
+  <= 3 MB, local inventory only) is checked by the menu and by `file_rows` before the browser. `_row_context` adds
+  `nfa`, `product_type`, `mfr_code` (FMI for suppressors), `mfr_country`, `unit`, `barrel_length`, the row's model and
+  description, and the photo as an extra supporting doc ("PHOTO OF RECEIVER MARKINGS"). Mapping: `#productType`,
+  then (if_set: nfa) tick `#descriptionNotListed` so `#weaponModel`/`#weaponCaliber` are text inputs, `#barrelLength`,
+  read-back `#weaponType` = type and `#barrelLength` (assumed id). `stamp_5320` also stamps 4a type, 4b the ORIGINAL
+  manufacturer's name + address (two lines over the template's 1-3), 4c model (decided 2026-11-19: 4b matches Form 1
+  item 4a). `record_sbrs` drops a filed/pending NFA queue row once its approval is in sbrs.csv. Server mode: adding
+  is refused and `move_to_server` refuses while one is queued (the server's schema has no such columns yet). Menu:
+  Add > "An SBR, SBS or AOW..." (`add_nfa_flow`). Tests: `tests/test_sbr.py`.
 - **`data/sbrs.csv` = every approved non-suppressor** (`SBR_COLS`; the file, table and function names date from when
   it held only SBRs): `type` as the PDF and the portal's `#productType` print it (`NFA_TYPES`: SHORT BARRELED RIFLE,
   SHORT BARRELED SHOTGUN, ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN; live PDFs seen only for SILENCER and the
@@ -457,7 +471,8 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   If no Valid message appears, submitting is refused (see `require`); look at it.
 - **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
   barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
-- **Manufacturer code is always `FMI`** for a Form 1 suppressor (fixed in config/mapping.yaml, not a setting).
+- **Manufacturer code is `FMI`** for a Form 1 suppressor (`{mfr_code}` defaults to it); an SBR etc. made from an
+  existing receiver uses the ORIGINAL manufacturer's code (the portal's own popup text says so).
   The wizard's default firearm description is "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE
   ANY PARTS UNTIL A FORM 1 IS APPROVED" (`DEFAULT_DESCRIPTION` in ui.py); users may edit it.
 - **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
@@ -530,8 +545,9 @@ prints steps without a browser. `--capture` records screens after the automated 
 - CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms); the fetch at the end
   of a real batch (`file_rows` with `cleo`) worked live 2026-11-16. Not yet live: an individual's submitted PDF (assumed to carry the
   same "CLEO Copy" pages).
-- Files suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields. They are only
-  inventoried, from Check approvals.
+- **SBR / SBS / AOW filing (branch `sbr-research`, 2026-11-19; NOT yet filed live)**: see "Other NFA items" above and
+  docs/sbr-research.md. Popups mapped live on a throwaway draft; the verify page's barrel-length id is assumed
+  (`#barrelLength`): the first practice run must confirm it (Capture portal pages). Local inventory only.
 - Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on
   GitHub's Windows runners. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
 - Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);

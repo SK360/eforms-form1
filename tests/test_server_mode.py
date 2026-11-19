@@ -240,7 +240,7 @@ def test_menu_connects_shows_the_server_and_switches_back(fake, configured, answ
     queue(("S1", "9"))
     local = atf.SUPP.read_bytes()
     answers(pick("Settings"), pick("Where your inventory lives"), "connect", fake["address"], True, "", "PC", "123456",
-            lambda kw: "quit" if {"Add suppressors", "Check approvals on eForms", "Advanced…"} <= {str(c.title) for c in kw["choices"]}
+            lambda kw: "quit" if {"Add suppressors or an SBR", "Check approvals on eForms", "Advanced…"} <= {str(c.title) for c in kw["choices"]}
             and any(str(c.title).startswith("File 1 queued") for c in kw["choices"]) else "unexpected")   # everything, on the server
     ui.menu()
     out = screen.getvalue()

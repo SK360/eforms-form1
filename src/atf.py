@@ -85,6 +85,43 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
 # status: "" queued | pending (Sign & Submit clicked, confirmation never read) | filed | approved | disapproved
 # built: "yes" once made ("" = not yet; only approved rows are ever marked built, see record_build).
 # design: what it is, free text (e.g. "PCC Short").
+# Other NFA items (an SBR made from an existing receiver, ...) queue in the same file so filing, pending and resolving
+# work the same; these columns stay empty for suppressors. type = the portal's #productType ("" = SILENCER).
+# mfr_* = the ORIGINAL manufacturer as ATF lists it (code verified in the portal; name + address go in 5320.23 item 4b),
+# model as engraved, barrel_length in inches, description (item 4h, 120 max), photo = optional markings photo.
+# Once approved they leave this file for data/sbrs.csv (record_sbrs). Filing them needs this computer's inventory.
+NFA_QUEUE_COLS = ["type", "mfr_code", "mfr_name", "mfr_address", "mfr_country", "model", "barrel_length", "unit",
+                  "description", "photo"]
+QUEUE_COLS = COLS + NFA_QUEUE_COLS
+
+
+def is_nfa_row(row):
+    """A queued row for something other than a suppressor (SBR, SBS, AOW...)."""
+    kind = (row.get("type") or "").strip().upper()
+    return bool(kind) and kind != "SILENCER"
+
+
+def nfa_row_problems(row):
+    """What a queued SBR (etc.) row still needs before it can be filed; [] = ready. Form 1 instruction K: one caliber
+    or gauge (another designation goes in the description), lengths with the stock extended, the existing serial."""
+    if not is_nfa_row(row):
+        return []
+    need = [("mfr_code", "the manufacturer's ATF code"), ("mfr_name", "the manufacturer's name"),
+            ("mfr_address", "the manufacturer's address (5320.23 item 4b)"), ("model", "the model as engraved"),
+            ("caliber", "the caliber or gauge"), ("barrel_length", "the barrel length"), ("overall_length", "the overall length")]
+    probs = [f"{row['serial_number']}: {what} is missing" for key, what in need if not (row.get(key) or "").strip()]
+    if re.search(r"\bMULTI\b", row.get("caliber", ""), re.I):
+        probs.append(f"{row['serial_number']}: caliber must be ONE caliber (put MULTI in the description)")
+    if len(row.get("description", "")) > 120:
+        probs.append(f"{row['serial_number']}: description is over 120 characters (the portal's limit)")
+    photo = (row.get("photo") or "").strip()
+    if photo and not Path(photo).is_file():
+        probs.append(f"{row['serial_number']}: markings photo not found ({Path(photo).name})")
+    elif photo and Path(photo).stat().st_size > 3 * 1024 * 1024:
+        probs.append(f"{row['serial_number']}: markings photo is over 3 MB (the portal's limit per file)")
+    if server_settings():
+        probs.append(f"{row['serial_number']}: SBRs can only be filed from this computer's inventory for now")
+    return probs
 
 
 def load_rows():
@@ -94,7 +131,7 @@ def load_rows():
         with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
             rows = list(csv.DictReader(f))
     for r in rows:
-        for c in COLS:  # older files have fewer columns
+        for c in QUEUE_COLS:  # older files have fewer columns
             r[c] = (r.get(c) or "").strip()
         r["status"] = r["status"].lower()
     return rows
@@ -156,7 +193,11 @@ def clear_build(serial):
 
 
 def add_queued(new_rows):
-    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new."""
+    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new.
+    Other NFA items (is_nfa_row) carry NFA_QUEUE_COLS too and only work with this computer's inventory."""
+    if server_settings() and any(is_nfa_row(r) for r in new_rows):
+        raise ServerReadOnly("Filing SBRs and other NFA items works with this computer's inventory only for now "
+                             "(Settings > Where your inventory lives).")
     if server_settings():
         _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in ("serial_number", "caliber", "overall_length")}
                                            for r in new_rows]})
@@ -309,8 +350,9 @@ def save_rows(rows):
     if server_settings():
         raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = SUPP.with_suffix(".csv.tmp")  # write-then-rename so a crash can't leave a half-written queue
+    cols = QUEUE_COLS if any(is_nfa_row(r) for r in rows) else COLS  # suppressor-only files keep their old header
     with tmp.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     tmp.replace(SUPP)
@@ -652,6 +694,9 @@ def move_to_server(try_only=False, progress=lambda text: None):
     request first (all of them in one request was too much for a small container), then the rows in one import that
     names them by checksum. progress(text) is told how far it got. Returns {suppressors, built, sbrs, pdfs, problems,
     moved, renamed}."""
+    if any(is_nfa_row(r) for r in _read_csv(SUPP)):
+        raise ServerReadOnly("Your queue has an SBR or other NFA item, which the server can't hold yet: "
+                             "file it (or remove it) first, then move.")
     import hashlib
     import remote
     if not server_settings():
@@ -833,6 +878,13 @@ def record_sbrs(records):
         _server_op("record_sbrs", {"rows": send})
     elif changed:
         save_sbrs(rows)
+    if not server_settings() and SUPP.exists():  # filed by this tool: done once its approval is in data/sbrs.csv
+        approved = {r["serial_number"].upper() for r in rows}
+        queue = load_rows()
+        keep = [r for r in queue if not (is_nfa_row(r) and r["status"] in ("filed", "pending")
+                                         and r["serial_number"].upper() in approved)]
+        if len(keep) != len(queue):
+            save_rows(keep)
     return added
 
 
@@ -1196,7 +1248,9 @@ def cmd_fields(args):
 
 
 def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
-    """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23.
+    """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23. For an SBR or
+    other NFA item (is_nfa_row) also the type (4a), the ORIGINAL manufacturer's name and address (4b) and the model (4c),
+    which the template has as SILENCER / your trust / N/A.
     Old values are redacted (text removed), photo/signature untouched. Returns (path, keys not found after).
     person: another responsible person's settings entry: their template, and their CLEO line is left as they made it
     (item 5 is the CLEO where THEY live; the CLEO in your settings is yours).
@@ -1205,8 +1259,13 @@ def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
     out_dir = Path(out_dir or (_cleo_dir() if cleo else OUT))
     out_dir.mkdir(parents=True, exist_ok=True)
     # (page, key) -- located by searching the template, so layout changes are caught
-    targets = [(0, "4d")] + ([] if cleo else [(0, "4e")]) + [(1, "date")] + ([] if person else [(0, "cleo")])
+    nfa = is_nfa_row(row)
+    targets = ([(0, "4a"), (0, "4b"), (0, "4c")] if nfa else []) + [(0, "4d")] + ([] if cleo else [(0, "4e")]) \
+        + [(1, "date")] + ([] if person else [(0, "cleo")])
     new = {"4d": row["caliber"], "4e": row["serial_number"], "date": when}
+    if nfa:
+        new.update({"4a": row["type"].upper(), "4c": row.get("model") or "N/A",
+                    "4b": "\n".join(x for x in (row.get("mfr_name", ""), row.get("mfr_address", "")) if x.strip())})
     if not person:
         cl = load_trust()["cleo"]
         new["cleo"] = f"{cl['official']}, {cl['title']}"
@@ -1218,12 +1277,17 @@ def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
     for pg in (0, 1):
         doc[pg].apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
     for pg, k in targets:
-        x0, _, _, y1 = boxes[k]
+        x0, y0, _, y1 = boxes[k]
+        if k == "4b":  # one line each, starting where the first typed line was
+            for n, line in enumerate(str(new[k]).splitlines()):
+                doc[pg].insert_text((x0, y0 + 8.5 + 9 * n), line, fontname="helv", fontsize=8)
+            continue
         doc[pg].insert_text((x0, y1 - 2.5), str(new[k]), fontname="helv", fontsize=8)
     dest = out_dir / (f"5320.23_{row['serial_number']}" + (f".{_rp_tag(person)}" if person else "") + (".cleo" if cleo else "") + ".pdf")
     doc.save(dest)
     chk = pymupdf.open(dest)  # re-read: each new value must be in the text layer where it was stamped
-    missing = [k for pg, k in targets if not chk[pg].search_for(str(new[k]), clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
+    missing = [k for pg, k in targets
+               if not chk[pg].search_for(str(new[k]).splitlines()[0] if new[k] else "", clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
     return dest, missing
 
 
@@ -1298,7 +1362,15 @@ def _find_value_box(page, key):
             return official[0]["bbox"]
         sys.exit("Could not find the CLEO official's name/title (item 5) on forms/5320.23.pdf. "
                  "Was it made with the 5320.23 generator?")
-    word = {"4d": "Caliber", "4e": "Serial Number", "date": "Date"}[key]
+    if key == "4b":  # maker name + address: up to 3 typed lines under its label, returned as one box
+        lab = page.search_for("Name and Address of Maker")
+        if not lab:
+            sys.exit("label for 4b not found")
+        lines = [sp["bbox"] for sp in _near(page, "Name and Address of Maker", (-40, 40), (0, 45))]
+        if not lines:
+            sys.exit("could not locate existing value for 4b")
+        return (min(b[0] for b in lines), min(b[1] for b in lines), max(b[2] for b in lines), max(b[3] for b in lines))
+    word = {"4a": "Type of Firearm", "4c": "Firearm Model", "4d": "Caliber", "4e": "Serial Number", "date": "Date"}[key]
     hits = page.search_for(word)
     if not hits:
         sys.exit(f"label for {key} not found")
@@ -2807,6 +2879,14 @@ def _row_context(trust, item):
            "trust_doc_file": json.dumps(Path(f.get("trust_document") or "").name),
            "docs": [{"doc_path": d["path"], "doc_desc": d["description"], "doc_file": json.dumps(Path(d["path"]).name)}
                     for d in trust.get("docs") or []]}
+    if is_nfa_row(item):  # an SBR etc.: the receiver's own maker/model, typed as "not in the list" (see mapping.yaml)
+        photo = item.get("photo", "").strip()
+        ctx.update({"model": item["model"] or "N/A", "description": item.get("description", ""),
+                    "docs": ctx["docs"] + ([{"doc_path": photo, "doc_desc": "PHOTO OF RECEIVER MARKINGS",
+                                             "doc_file": json.dumps(Path(photo).name)}] if photo else [])})
+    ctx.update({"nfa": "yes" if is_nfa_row(item) else "", "product_type": (item.get("type") or "SILENCER").upper(),
+                "mfr_code": item.get("mfr_code") or "FMI", "mfr_country": item.get("mfr_country") or "UNITED STATES",
+                "unit": item.get("unit") or "CALIBER", "barrel_length": item.get("barrel_length", "")})
     others = [_other_rp_context(p, n, item) for n, p in enumerate(other_rps(trust), 2)]
     ctx.update({"other_rps": others, "has_other_rps": "yes" if others else "", "rp_count": str(1 + len(others))})
     return ctx
@@ -3146,6 +3226,9 @@ def file_rows(rows, todo, args):
         sys.exit("Settings incomplete (./atf > Settings):\n  " + "\n  ".join(probs))
     # Check every row's inputs BEFORE opening the browser (an exit after login would skip the logout).
     today, probs = datetime.now().strftime("%m/%d/%Y"), []
+    nfa_probs = [p for i in todo for p in nfa_row_problems(rows[i])]
+    if nfa_probs:
+        sys.exit("Not ready to file:\n  " + "\n  ".join(nfa_probs))
     for i in todo:
         _row_context(trust, rows[i])
         if applicant_type(trust) == "trust":
