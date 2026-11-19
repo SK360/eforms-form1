@@ -665,7 +665,8 @@ def add_nfa_flow():
                               "a pinned-and-welded muzzle device counts, a screw-on one does not):", "", _inches),
             ("overall_length", "Overall length in inches (stock fully extended; muzzle end to the back of the stock, "
                                "parallel to the bore):", "", _inches),
-            ("description", "Description (optional, 120 characters max; e.g. RECEIVER MARKED MULTI):", "",
+            ("description", "Description (optional, 120 characters max). Receiver marked MULTI: type RECEIVER MARKED MULTI. "
+                            "Marked with one caliber: leave blank (Enter):", "",
              lambda v: len(v.strip()) <= 120 or "120 characters max")]
     row = {"type": kind, "unit": unit, "status": ""}
     for key, prompt, default, check in ([] if kind is None else asks):
