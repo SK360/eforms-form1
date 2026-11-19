@@ -1,6 +1,7 @@
 # Filing SBRs (and other Form 1 types): research
 
-Status: research only (branch `sbr-research`). Nothing below has been mapped live in eForms yet.
+Status: research (branch `sbr-research`). The firearm popups were mapped live on 2026-11-19 with a throwaway draft
+(test serial, never submitted); see "Live mapping" below. The 5320.23 approach chosen: **stamp more fields** (option B).
 
 ## What changes compared to a suppressor
 
@@ -50,6 +51,66 @@ For SBRs, either:
 - Don't install the short barrel or put the rifle in SBR configuration until it's approved.
 - State law check (some states ban SBRs).
 - The CLEO packet and the fingerprints / EFT are unchanged.
+
+## Live mapping (2026-11-19, draft only)
+
+**Popup 1, manufacturer.** The popup's own instructions: silencer = Manufacturer Code `FMI`; "Short-Barrel
+Rifle/Shotgun, AOW, or Destructive Device: Enter the name of the original manufacturer (stamped/engraved on serialized
+part). Only use manufacturing code of FMI if serialized part is wholly manufactured by Registrant".
+- `#byName` radio (default) | `#byCode`. By name: a text box with NO id (an autocomplete) offering ATF licensee names
+  as you type ("AERO PRECISION" offered `AERO PRECISION INC` and `AERO PRECISION LLC`: the user must pick the exact
+  legal name), then `#verifyManufacturer` -> "Manufacturer successfully verified" (Ok) and the code appears in
+  `#manufacturerCodeFromName` (here `AP2`). Storing the CODE per row and using `#byCode` (as FMI does today) is the
+  simplest automation; the name search is for finding it once.
+- `#country` (select) must be set too. `#loadTemplate` = "Saved Line items" (not used).
+
+**Popup 2, details.** `#productType` options: ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN, SHORT BARRELED RIFLE,
+SHORT BARRELED SHOTGUN, SILENCER. With a manufacturer other than FMI, Model is an ng-select (`ng-select#weaponModel`, ATF's
+list for that maker: for AP2 "17DM-15, A15, AC-9, AERO PRECISION M4E1, AP15, AR15, ...") and Caliber a select
+(`select#weaponCaliber`, 58 values like `5.56`, `5.56 NATO`, `300 BLACKOUT`). Ticking `#descriptionNotListed` ("My
+item description is not in the list, create new item") turns both into plain text inputs `input#weaponModel`
+(maxlength 50) and `input#weaponCaliber`: the same ids the silencer steps fill, so **tick it and type** (no need to
+know ATF's lists). Then `#unitOfMeasure` (CALIBER/GAUGE/...), **`#barrelLength`** (maxlength 6),
+`#overallLength` (6), `#serialNumber` (30), `#description` (textarea, maxlength 120). "State Why You Intend To Make
+Firearm" is fixed text "FOR ALL LAWFUL PURPOSES". On-screen rules: model must match the receiver's engraving; one
+caliber (9, 45, 357, 5.56, 7.62, 300); serial must match the engraving. "Save As New Template" is a button to avoid.
+
+**Popup 3, documents:** optional (Finish with none worked). 10 files/line item, 3 MB each, 30 MB total.
+
+**Line-item grid** columns: Status, ID, Type, Manufacturer, **Manufacturer Address**, Product Type, Caliber, Model,
+Barrel Length, Overall Length, Serial Number. ATF supplies the maker's address from its licensee record: read it
+here for the 5320.23 item 4b.
+
+**Verify page** (`/verify`): Firearm block = Serial Number, Model, Weapon Type, Caliber, Barrel Length, Overall
+Length, and a second "Business Name" (presumably the manufacturer). Ids not read (a browser extension blocked
+scripts); the existing `#serialNumberMessage`, `#model`, `#weaponType`, `#caliber`, `#overallLength` presumably hold,
+barrel length likely `#barrelLength`: confirm with Capture portal pages on the first SBR practice run.
+
+**Application page:** "Tax Paid ... $0 for other types of firearms" = the same `#taxPaid` box.
+
+ATF instruction K (Form 1): 4a, modifying an existing firearm = name and location of the ORIGINAL manufacturer;
+4c one caliber or gauge; 4e/4f one barrel length and one overall length, folding/collapsible stock measured
+EXTENDED; 4g never alter the existing serial; markings: maker's (the trust's) name, city and state per 27 CFR
+478.92 / 479.102. SBR/SBS/DD/MG: a Form 5320.20 may be needed before interstate transport.
+
+## Information to collect per SBR (final list)
+
+| Setting | Example | Used for |
+|---|---|---|
+| type | SHORT BARRELED RIFLE | `#productType`, read-back, 5320.23 4a |
+| manufacturer code | AP2 | `#byCode` + verify (found once with the name search) |
+| manufacturer name + address | AERO PRECISION LLC, city/state | 5320.23 4b (name from verify, address from the grid) |
+| manufacturer country | UNITED STATES | `#country` |
+| model (as engraved) | M4E1 | `#weaponModel` (not-listed), 5320.23 4c |
+| caliber/gauge + unit | 5.56 / CALIBER | `#weaponCaliber`, `#unitOfMeasure`, 5320.23 4d |
+| barrel length | 10.3 | `#barrelLength` |
+| overall length (stock extended) | 30 | `#overallLength` |
+| serial (existing) | as engraved | `#serialNumber`, 5320.23 4e |
+| description (optional) | free text, 120 max | `#description` |
+
+5320.23 stamping (option B) then covers 4a type, 4b maker name/address, 4c model as well as 4d/4e; the template's
+`SILENCER` / trust-as-maker / `N/A` text is covered like the caliber and serial are today. To check: whether ATF wants
+4b on the 5320.23 = the original manufacturer (as Form 1 item 4a) or the trust as maker.
 
 ## Code touch points
 
