@@ -76,7 +76,9 @@ Firearm" is fixed text "FOR ALL LAWFUL PURPOSES". On-screen rules: model must ma
 caliber (9, 45, 357, 5.56, 7.62, 300); serial must match the engraving. "Save As New Template" is a button to avoid.
 
 **Popup 3, documents:** not enforced (Finish with none worked live), but the National Gun Trusts eForm 1 guide says
-non-silencer NFA items should upload a photo of the engravings here: plan on one markings photo per SBR. 10 files/line item, 3 MB each, 30 MB total.
+non-silencer NFA items should upload a photo of the engravings here. ATF's own eForm 1 guidance calls it optional
+("photo of firearm with markings"); forum reports: examiners sometimes email for one on unusual models, and a
+serial that doesn't match the engraving gets disapproved. Plan: one OPTIONAL markings photo per SBR (recommended). 10 files/line item, 3 MB each, 30 MB total.
 
 **Line-item grid** columns: Status, ID, Type, Manufacturer, **Manufacturer Address**, Product Type, Caliber, Model,
 Barrel Length, Overall Length, Serial Number. ATF supplies the maker's address from its licensee record: read it
