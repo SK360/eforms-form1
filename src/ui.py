@@ -661,8 +661,10 @@ def add_nfa_flow():
             ("mfr_country", "Manufacturer's country:", "UNITED STATES", need),
             ("model", "Model as engraved on the receiver (e.g. M4E1; none marked: the maker's model name, or N/A):", "", need),
             ("caliber", f"{unit.title()} (one only, e.g. 5.56 or 12):", "", _one_caliber),
-            ("barrel_length", "Barrel length (inches):", "", _inches),
-            ("overall_length", "Overall length (inches, stock extended):", "", _inches),
+            ("barrel_length", "Barrel length in inches (bolt closed: rod down the muzzle to the bolt face, mark at the muzzle; "
+                              "a pinned-and-welded muzzle device counts, a screw-on one does not):", "", _inches),
+            ("overall_length", "Overall length in inches (stock fully extended; muzzle end to the back of the stock, "
+                               "parallel to the bore):", "", _inches),
             ("description", "Description (optional, 120 characters max; e.g. RECEIVER MARKED MULTI):", "",
              lambda v: len(v.strip()) <= 120 or "120 characters max")]
     row = {"type": kind, "unit": unit, "status": ""}
