@@ -659,7 +659,7 @@ def add_nfa_flow():
             ("mfr_name", "Manufacturer's name as marked on the receiver (e.g. AERO PRECISION):", "", need),
             ("mfr_address", "Manufacturer's city and state as marked (e.g. TACOMA, WA):", "", need),
             ("mfr_country", "Manufacturer's country:", "UNITED STATES", need),
-            ("model", "Model (as engraved):", "", need),
+            ("model", "Model as engraved on the receiver (e.g. M4E1; none marked: the maker's model name, or N/A):", "", need),
             ("caliber", f"{unit.title()} (one only, e.g. 5.56 or 12):", "", _one_caliber),
             ("barrel_length", "Barrel length (inches):", "", _inches),
             ("overall_length", "Overall length (inches, stock extended):", "", _inches),
