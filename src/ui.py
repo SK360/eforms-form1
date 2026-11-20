@@ -876,7 +876,7 @@ STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
           "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
           "Washington", "West Virginia", "Wisconsin", "Wyoming"]
 DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
-RACES = ["American Indian or Alaska Native", "Asian", "Black or African American", "Native Hawaiian or Other Pacific Islander", "White"]
+RACES = ["American Indian or Alaskan Native", "Asian", "Black or African American", "Native Hawaiian or Other Pacific Islander", "White"]
 
 
 class Cancelled(Exception):
