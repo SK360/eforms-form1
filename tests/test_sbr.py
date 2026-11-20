@@ -77,7 +77,7 @@ def test_portal_steps_for_an_sbr(configured, tmp_path):
     steps = dry_steps(row)
     assert "{" not in steps
     for expected in ("pick_manufacturer code AP2", "select #country UNITED STATES", "select #productType SHORT BARRELED RIFLE",
-                     "check #descriptionNotListed", "fill #weaponModel M4E1", "fill #weaponCaliber 5.56",
+                     "pick_model M4E1 / 5.56",
                      "select #unitOfMeasure CALIBER", "fill #barrelLength 10.3", "fill #overallLength 30",
                      "fill #serialNumber XYZ123", "fill #description RECEIVER MARKED MULTI",
                      f"upload #file-upload {photo}", "fill #description PHOTO OF RECEIVER MARKINGS",
@@ -106,7 +106,7 @@ def test_suppressor_steps_are_unchanged(configured):
     atf.stamp_5320(row, TODAY)
     steps = dry_steps(row)
     for expected in ("pick_manufacturer code FMI", "select #productType SILENCER", "select #unitOfMeasure CALIBER",
-                     "expect #weaponType SILENCER", "fill #weaponModel N/A"):
+                     "expect #weaponType SILENCER", "pick_model N/A / 9"):
         assert expected in steps, expected
     assert "descriptionNotListed" not in steps and "barrelLength" not in steps
 
@@ -259,3 +259,65 @@ def test_name_search_takes_a_name_the_site_verifies_without_a_list(mfr_page, mon
         document.getElementById('manufacturerCodeFromName').value = v === 'AERO PRECISION LLC' ? 'AP2' : ''; }; }""")
     monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("eForms verified it; nothing to ask"))
     assert atf._pick_manufacturer(mfr_page, "", "AERO PRECISION LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+# eForms' firearm details for an SBR (mapped live 2026-11-19): Model an ng-select of ATF's list for the maker,
+# Caliber a select; "not in the list" swaps both for text inputs
+FAKE_MODEL = """<div id="f"><ng-select id="weaponModel"><div class="ng-value"></div><input type="text"></ng-select>
+<div id="panel"></div><select id="weaponCaliber"><option value="">Select</option><option>5.56</option>
+<option>300 BLACKOUT</option></select></div><input type="checkbox" id="descriptionNotListed">
+<script>
+const MODELS = ["17DM-15", "A15", "AC-9", "AERO PRECISION M4E1", "AP15", "AR15", "M4E1 PISTOL"];
+const sel = document.getElementById('weaponModel'), q = sel.querySelector('input'), panel = document.getElementById('panel');
+const show = () => { const hits = MODELS.filter(m => m.includes(q.value.toUpperCase()));
+  panel.innerHTML = '<div class="ng-dropdown-panel">' + (hits.length ? hits.map(m => '<div class="ng-option">' + m + '</div>').join('')
+    : '<div class="ng-option">No items found</div>') + '</div>'; };
+sel.addEventListener('click', show); q.addEventListener('input', show);
+panel.addEventListener('click', e => { const o = e.target.closest('.ng-option');
+  if (o) { sel.querySelector('.ng-value').textContent = o.innerText; window.picked = o.innerText; panel.innerHTML = ''; } });
+document.getElementById('descriptionNotListed').addEventListener('change', () => { document.getElementById('f').innerHTML =
+  '<input id="weaponModel"><input id="weaponCaliber">'; });
+</script>"""
+
+
+@pytest.fixture
+def model_page():
+    from playwright.sync_api import sync_playwright
+    pw = sync_playwright().start()
+    br = pw.chromium.launch(headless=True)
+    page = br.new_page()
+    page.set_default_timeout(3000)
+    page.set_content(FAKE_MODEL)
+    yield page
+    br.close()
+    pw.stop()
+
+
+def test_model_is_picked_from_the_list(model_page, monkeypatch):
+    # "M4E1" also hits "M4E1 PISTOL"; only "AERO PRECISION M4E1" is the engraved model
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("one entry matches; nothing to ask"))
+    assert atf._pick_model(model_page, "M4E1", "5.56", nfa=True) == "AERO PRECISION M4E1"
+    assert model_page.evaluate("window.picked") == "AERO PRECISION M4E1"
+    assert model_page.locator("#weaponCaliber").input_value() == "5.56"
+    assert not model_page.locator("#descriptionNotListed").is_checked()
+
+
+def test_model_not_in_the_list_asks_then_types_it(model_page, monkeypatch):
+    asked = []
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or "")
+    assert atf._pick_model(model_page, "X99", "5.56", nfa=True) == ""
+    assert "AP15" in asked[0]  # the whole list is shown
+    assert model_page.locator("#descriptionNotListed").is_checked()
+    assert model_page.locator("#weaponModel").input_value() == "X99"
+
+
+def test_model_chosen_by_number(model_page, monkeypatch):
+    monkeypatch.setattr(atf, "ask", lambda prompt: "6")  # AR15
+    assert atf._pick_model(model_page, "AR-15 LOWER", "5.56", nfa=True) == "AR15"
+    assert model_page.evaluate("window.picked") == "AR15"
+
+
+def test_model_with_a_caliber_not_listed_is_typed(model_page, monkeypatch):
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("nothing to ask"))
+    assert atf._pick_model(model_page, "M4E1", "6.5 GRENDEL", nfa=True) == ""
+    assert model_page.locator("#weaponCaliber").input_value() == "6.5 GRENDEL"

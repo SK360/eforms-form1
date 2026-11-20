@@ -151,12 +151,11 @@ portal:
     - {selector: "#productType", action: select, value: "{product_type}"}
     - {action: wait, value: "500"}          # form re-renders (SILENCER: caliber free text, barrel length hidden)
     # Other types with a real manufacturer: Model is an ng-select of ATF's list for that maker and Caliber a select.
-    # "My item description is not in the list" turns both into the same text inputs a silencer has, so the model is
-    # typed as engraved (live 2026-11-19). Barrel length only exists for these types.
-    - {selector: "#descriptionNotListed", action: check, if_set: nfa}
-    - {action: wait, value: "800", if_set: nfa}
-    - {selector: "#weaponModel", action: fill, value: "{model}"}
-    - {selector: "#weaponCaliber", action: fill, value: "{caliber}"}
+    # Picked from those lists (AP2 lists "AERO PRECISION M4E1" for a lower engraved M4E1): a model typed in through
+    # "My item description is not in the list" puts a "not listed in the ATF reference tables" warning on the certify
+    # page (live 2026-11-20). atf.py _pick_model; it ticks not-listed and types only if the lists lack it. A silencer
+    # (FMI) has plain text inputs: typed. Barrel length only exists for these types.
+    - {action: pick_model}
     - {selector: "#serialNumber", action: fill, value: "{serial_number}"}
     - {selector: "#unitOfMeasure", action: select, value: "{unit}"}   # CALIBER; GAUGE for a shotgun
     - {selector: "#barrelLength", action: fill, value: "{barrel_length}", if_set: nfa}

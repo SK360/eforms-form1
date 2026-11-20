@@ -3011,6 +3011,71 @@ def _pick_manufacturer(page, code, name, tries=3):
     return {"mfr_code": found, "mfr_atf_name": picked}
 
 
+def _model_matches(option, model):
+    """An eForms model entry for the engraved model: the same, or the maker's name before it ("AERO PRECISION M4E1")."""
+    o, m = _norm_name(option), _norm_name(model)
+    return bool(m) and (o == m or o.endswith(" " + m))
+
+
+def _pick_model(page, model, caliber, nfa):
+    """Firearm popup 2, model and caliber. A silencer (FMI): plain text inputs, typed. An SBR etc.: Model is an
+    ng-select of ATF's list for that maker, Caliber a select (mapped live 2026-11-19). The model is typed into the
+    ng-select's search and an entry for it picked (one match: picked; several or none: asked, the list shown); the
+    caliber is picked from its list. Not in the lists: tick "My item description is not in the list" and type both
+    (eForms then warns on the certify page that ATF must validate it). Returns the eForms model name picked, or ""."""
+    if not nfa:
+        _fill(page, page.locator("#weaponModel"), model, "#weaponModel")
+        _fill(page, page.locator("#weaponCaliber"), caliber, "#weaponCaliber")
+        return ""
+    picked = ""
+    sel_box = page.locator("ng-select#weaponModel")
+    if sel_box.count():
+        options = page.locator(".ng-dropdown-panel .ng-option")
+
+        def listed(q):
+            sel_box.click()
+            box = sel_box.locator("input")
+            box.fill("")
+            if q:
+                box.press_sequentially(q, delay=40)
+            page.wait_for_timeout(600)
+            return [t.strip() for t in options.all_inner_texts()
+                    if t.strip() and not re.match(r"(?i)no items found", t.strip())]
+
+        names = listed(model)
+        hits = [n for n in names if _model_matches(n, model)]
+        if len(hits) == 1:
+            picked = hits[0]
+        else:
+            shown = hits or listed("")
+            if shown:
+                listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(shown, 1))
+                ans = ask(f"eForms lists these models for this manufacturer; the receiver is engraved \"{model}\".\n"
+                          f"{listing}\nType the number of the matching one, or press Enter if none matches "
+                          "(it is then typed in as not listed, which ATF checks by hand): ").strip()
+                if ans.isdigit() and 1 <= int(ans) <= len(shown):
+                    picked = shown[int(ans) - 1]
+        if picked:
+            listed(model if picked in names else "")
+            options.filter(has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
+            try:
+                _pick(page.locator("select#weaponCaliber"), caliber, wait_ms=5000, grace_ms=1500)
+            except NoSuchOption as e:
+                emit("warn", f"    caliber {e}; typing model and caliber in as not listed")
+                picked = ""
+            else:
+                emit("step", f"    model: {picked} (from eForms' list), caliber {caliber}")
+        else:
+            page.keyboard.press("Escape")
+    if not picked:
+        _tick(page, "#descriptionNotListed")
+        page.wait_for_timeout(800)
+        _fill(page, page.locator("#weaponModel"), model, "#weaponModel")
+        _fill(page, page.locator("#weaponCaliber"), caliber, "#weaponCaliber")
+        emit("step", f"    model {model} typed in as not listed")
+    return picked
+
+
 _current_step = ""
 _recent_steps = []  # the last steps run (with their values), saved with a failing page
 
@@ -3051,6 +3116,12 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
                 found = _pick_manufacturer(page, code, str(ctx_vals.get("mfr_name") or ""))
                 if not code and isinstance(ctx_vals.get("_found"), dict):
                     ctx_vals["_found"].update(found)
+            continue
+        if act == "pick_model":  # from eForms' lists if there, else typed as not listed (see _pick_model)
+            emit("step", f"pick_model {ctx_vals.get('model', '')} / {ctx_vals.get('caliber', '')}")
+            if not dry:
+                _pick_model(page, str(ctx_vals.get("model") or ""), str(ctx_vals.get("caliber") or ""),
+                            bool(ctx_vals.get("nfa")))
             continue
         if s.get("tag") in skip_tags:
             emit("step", f"(skipping {s['tag']} step)")
