@@ -151,18 +151,23 @@ def queue_table(rows, only=None, title=None):
         idx = [i for i in idx if i not in hidden]
     for i in idx:
         r = rows[i]
-        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
+        kind = f" [magenta]{escape(atf.nfa_short(r['type'].upper()))}[/]" if atf.is_nfa_row(r) else ""
+        t.add_row(escape(r["serial_number"]) + kind, escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
                   escape(short(r["application_number"])))
     return t
 
 
 def summary(rows):
+    nfa_queue = [r for r in rows if atf.is_nfa_row(r)]
+    rows = [r for r in rows if not atf.is_nfa_row(r)]
     n = lambda *st: sum(1 for r in rows if r["status"] in st)  # noqa: E731
     built = sum(1 for r in rows if atf.is_built(r))
     parts = [f"[bold]{len(rows)}[/] suppressors", f"[green]{n('approved')} approved[/]"] + ([f"[green]{built} built[/]"] if built else []) + [
              f"[blue]{n(*IN_PROGRESS)} in progress[/]", f"[cyan]{n('')} queued[/]"] + ([f"[red]{n('disapproved')} disapproved[/]"] if n("disapproved") else [])
     sbrs = atf.load_sbrs()
-    return " · ".join(parts + ([f"[magenta]{escape(atf.nfa_counts(sbrs))}[/]"] if sbrs else []))
+    return " · ".join(parts + ([f"[magenta]{escape(atf.nfa_counts(sbrs))}[/]"] if sbrs else [])
+                      + ([f"[magenta]{len(nfa_queue)} other NFA item{'s' if len(nfa_queue) != 1 else ''} queued or in progress[/]"]
+                         if nfa_queue else []))
 
 
 INSTAGRAM = "https://www.instagram.com/sk360.3d2a/"
@@ -228,7 +233,8 @@ def inventory_table(rows, title):
     for r in sorted(rows, key=lambda r: atf.serial_key(r["serial_number"])):
         when = r["approved_date"] + (" [yellow]⚠ conditions[/]" if r["conditions"] else "") if r["status"] == "approved" else ""
         ident = short(r["application_number"]) or (f"eForm {short(r['eform_id'])}" if r["eform_id"] else "")
-        t.add_row(escape(r["serial_number"]), escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
+        kind = f" [magenta]{escape(atf.nfa_short(r['type'].upper()))}[/]" if atf.is_nfa_row(r) else ""
+        t.add_row(escape(r["serial_number"]) + kind, escape(r["caliber"]), escape(r["overall_length"]), STATUS.get(r["status"], escape(r["status"])),
                   escape(r["filed_date"]), when, days_cell(r), "[green]✔[/]" if atf.is_built(r) else "", escape(ident))
     return t
 
@@ -540,7 +546,8 @@ def pause():
 
 def _row_choice(rows, i, extra=""):
     r = rows[i]
-    return questionary.Choice(f"{r['serial_number']}  (caliber {r['caliber']}){extra}", value=i)
+    kind = f"{atf.nfa_short(r['type'].upper())}, " if atf.is_nfa_row(r) else ""
+    return questionary.Choice(f"{r['serial_number']}  ({kind}caliber {r['caliber']}){extra}", value=i)
 
 
 def next_serial(serial):
@@ -562,7 +569,15 @@ def serial_run(first, count):
 
 
 def add_flow():
-    """Add one suppressor, or a run of N with consecutive serials sharing a caliber and length."""
+    """Add one suppressor, or a run of N with consecutive serials sharing a caliber and length. Or an SBR etc."""
+    kind = questionary.select("What are you adding?", choices=[
+        questionary.Choice("Suppressors", "silencer"),
+        questionary.Choice("An SBR, SBS or AOW made from an existing receiver/firearm", "nfa"),
+        questionary.Choice("Back", "back")]).ask()
+    if kind in (None, "back"):
+        return
+    if kind == "nfa":
+        return add_nfa_flow()
     rows = atf.load_rows()
     while True:
         last = rows[-1] if rows else {"serial_number": "", "caliber": ""}
@@ -605,6 +620,87 @@ def add_flow():
         con.print(f"  [green]✔[/] Added {what}, caliber {escape(cal.strip())}, {escape(length.strip())}\"")
         if not questionary.confirm("Add more?", default=False).ask():
             return
+
+
+NFA_KINDS = ["SHORT BARRELED RIFLE", "SHORT BARRELED SHOTGUN", "ANY OTHER WEAPON"]
+
+
+def _one_caliber(v):
+    if not v.strip():
+        return "Required"
+    if re.search(r"\bMULTI\b", v, re.I):
+        return "One caliber: the one you'll build in. Put MULTI in the description"
+    return True
+
+
+def add_nfa_flow():
+    """Queue one SBR / SBS / AOW made from a receiver that already has a serial. Everything comes from the receiver's
+    markings (ATF: model and serial must match the engraving) and ATF's licensee list (the manufacturer's code)."""
+    if atf.server_settings():
+        con.print("  [yellow]Filing SBRs and other NFA items works with this computer's inventory only for now "
+                  "(Settings > Where your inventory lives).[/]")
+        return pause()
+    taken = {r["serial_number"].upper() for r in atf.load_rows()}
+    con.print(Panel(
+        "Have the receiver in front of you (or a clear photo of its markings). Everything comes from its markings:\n"
+        "• the manufacturer's name, city and state (the law requires them on the receiver)\n"
+        "• model and serial exactly as engraved; ONE caliber (a receiver marked MULTI: the caliber you'll build in)\n"
+        "• barrel length, and overall length with the stock EXTENDED\n"
+        "When you file, the script finds the manufacturer in eForms' list by name; if it isn't sure which one,\n"
+        "it shows you eForms' list in this window to pick from.",
+        title="Adding an SBR or other NFA item", border_style="cyan", expand=False))
+
+    def need(v):
+        return bool(v.strip()) or "Required"
+
+    def new_serial(v):
+        if not v.strip():
+            return "Required"
+        return v.strip().upper() not in taken or "That serial is already in the list"
+    kind = questionary.select("Type:", choices=[questionary.Choice(k.title(), k) for k in NFA_KINDS]).ask()
+    unit = "GAUGE" if kind == "SHORT BARRELED SHOTGUN" else "CALIBER"
+    asks = [("serial_number", "Serial number (exactly as engraved on the receiver):", "", new_serial),
+            ("mfr_name", "Manufacturer's name as marked on the receiver (e.g. AERO PRECISION):", "", need),
+            ("mfr_address", "Manufacturer's city and state as marked (e.g. TACOMA, WA):", "", need),
+            ("mfr_country", "Manufacturer's country:", "UNITED STATES", need),
+            ("model", "Model as engraved on the receiver (e.g. M4E1; none marked: the maker's model name, or N/A):", "", need),
+            ("caliber", f"{unit.title()} (one only, e.g. 5.56 or 12):", "", _one_caliber),
+            ("barrel_length", "Barrel length in inches (bolt closed: rod down the muzzle to the bolt face, mark at the muzzle; "
+                              "a pinned-and-welded muzzle device counts, a screw-on one does not):", "", _inches),
+            ("overall_length", "Overall length in inches (stock fully extended; muzzle end to the back of the stock, "
+                               "parallel to the bore):", "", _inches),
+            ("description", "Description (optional, 120 characters max). Receiver marked MULTI: type RECEIVER MARKED MULTI. "
+                            "Marked with one caliber: leave blank (Enter):", "",
+             lambda v: len(v.strip()) <= 120 or "120 characters max")]
+    row = {"type": kind, "unit": unit, "status": ""}
+    for key, prompt, default, check in ([] if kind is None else asks):
+        val = questionary.text(prompt, default=default, validate=check).ask()
+        if val is None:
+            return
+        row[key] = val.strip() if key in ("serial_number", "caliber", "barrel_length", "overall_length") else val.strip().upper()
+    if kind is None:
+        return
+    photo = questionary.text("Photo of the receiver's markings (optional, JPG/PDF up to 3 MB; drag it here, or Enter to skip):").ask()
+    if photo is None:
+        return
+    row["photo"] = _clean_path(photo) if photo.strip() else ""
+    probs = atf.nfa_row_problems(row)
+    if probs:
+        con.print("  [bold red]✖ " + escape("; ".join(probs)) + "[/]")
+        return pause()
+    con.print(Panel("\n".join(f"{k}: {escape(v)}" for k, v in (
+        ("Type", kind), ("Serial", row["serial_number"]),
+        ("Manufacturer", f"{row['mfr_name']}, {row['mfr_address']} ({row['mfr_country']})"),
+        ("Model", row["model"]), (unit.title(), row["caliber"]), ("Barrel", row["barrel_length"] + '"'),
+        ("Overall", row["overall_length"] + '" (stock extended)'), ("Description", row["description"] or "-"),
+        ("Markings photo", Path(row["photo"]).name if row["photo"] else "none (optional)")))
+        + "\n\nWhen you file, each 5320.23 gets this type, manufacturer and model in items 4a-4c.",
+        title="Check it against the receiver", border_style="cyan", expand=False))
+    if not questionary.confirm("Add it to the queue?", default=True).ask():
+        return
+    atf.add_queued([row])
+    con.print(f"  [green]✔[/] Added {escape(row['serial_number'])} ({escape(atf.nfa_short(kind))})")
+    pause()
 
 
 def _inches(s):
@@ -656,6 +752,10 @@ def file_flow(indices=None, force=False):
                                        validate=lambda a: bool(a) or "Pick at least one").ask()
         if not indices:
             return
+    nfa_probs = [p for i in indices for p in atf.nfa_row_problems(rows[i])]
+    if nfa_probs:
+        con.print(Panel("\n".join(f"• {escape(x)}" for x in nfa_probs), title="Not ready to file", border_style="red", expand=False))
+        return pause()
     settings = _settings()
     others = atf.other_rps(settings)
     whose = "your SSN" if not others else "the SSNs (yours and each other responsible person's)"
@@ -676,8 +776,14 @@ def file_flow(indices=None, force=False):
         con.print(f"  [green]✔[/] 5320.23s generated, dated {today}" + (f" ({1 + len(others)} per form)" if others else ""))
     cleo_made = _stamp_cleo(rows, [] if individual else indices, today)
     deflen = str((settings.get("firearm") or {}).get("overall_length") or "12")
-    lines = "\n".join(f"  • {escape(rows[i]['serial_number'])}  caliber {escape(rows[i]['caliber'])}, "
-                      f"{escape(rows[i]['overall_length'] or deflen)}\" overall" for i in indices)
+    def line(r):
+        if atf.is_nfa_row(r):  # an SBR etc.: what the read-back will check, from the receiver's markings
+            return (f"  • {escape(r['serial_number'])}  {escape(atf.nfa_short(r['type'].upper()))}, {escape(r['mfr_name'])} "
+                    f"{escape(r['model'])}, {escape(r['caliber'])}, {escape(r['barrel_length'])}\" barrel, "
+                    f"{escape(r['overall_length'])}\" overall" + (", markings photo attached" if r.get("photo") else ""))
+        return (f"  • {escape(r['serial_number'])}  caliber {escape(r['caliber'])}, "
+                f"{escape(r['overall_length'] or deflen)}\" overall")
+    lines = "\n".join(line(rows[i]) for i in indices)
     con.print(Panel(
         f"[bold]File {len(indices)} Form 1{'s' if len(indices) > 1 else ''}:[/]\n{lines}\n\n"
         f"Filing as: {'an individual (you)' if individual else 'your trust'}\n"
@@ -1920,7 +2026,7 @@ def menu():
         if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
             choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
-        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors", add_flow)]
+        choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors or an SBR", add_flow)]
         if any(r["status"] == "approved" and not atf.is_built(r) for r in rows):
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if any(r["status"] == "" for r in rows):

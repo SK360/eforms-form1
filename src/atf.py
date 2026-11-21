@@ -85,6 +85,43 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
 # status: "" queued | pending (Sign & Submit clicked, confirmation never read) | filed | approved | disapproved
 # built: "yes" once made ("" = not yet; only approved rows are ever marked built, see record_build).
 # design: what it is, free text (e.g. "PCC Short").
+# Other NFA items (an SBR made from an existing receiver, ...) queue in the same file so filing, pending and resolving
+# work the same; these columns stay empty for suppressors. type = the portal's #productType ("" = SILENCER).
+# mfr_* = the ORIGINAL manufacturer as ATF lists it (code verified in the portal; name + address go in 5320.23 item 4b),
+# model as engraved, barrel_length in inches, description (item 4h, 120 max), photo = optional markings photo.
+# Once approved they leave this file for data/sbrs.csv (record_sbrs). Filing them needs this computer's inventory.
+NFA_QUEUE_COLS = ["type", "mfr_code", "mfr_name", "mfr_address", "mfr_country", "model", "barrel_length", "unit",
+                  "description", "photo"]
+QUEUE_COLS = COLS + NFA_QUEUE_COLS
+
+
+def is_nfa_row(row):
+    """A queued row for something other than a suppressor (SBR, SBS, AOW...)."""
+    kind = (row.get("type") or "").strip().upper()
+    return bool(kind) and kind != "SILENCER"
+
+
+def nfa_row_problems(row):
+    """What a queued SBR (etc.) row still needs before it can be filed; [] = ready. Form 1 instruction K: one caliber
+    or gauge (another designation goes in the description), lengths with the stock extended, the existing serial."""
+    if not is_nfa_row(row):
+        return []
+    need = [("mfr_name", "the manufacturer's name (as marked)"),
+            ("mfr_address", "the manufacturer's city and state (as marked; 5320.23 item 4b)"), ("model", "the model as engraved"),
+            ("caliber", "the caliber or gauge"), ("barrel_length", "the barrel length"), ("overall_length", "the overall length")]
+    probs = [f"{row['serial_number']}: {what} is missing" for key, what in need if not (row.get(key) or "").strip()]
+    if re.search(r"\bMULTI\b", row.get("caliber", ""), re.I):
+        probs.append(f"{row['serial_number']}: caliber must be ONE caliber (put MULTI in the description)")
+    if len(row.get("description", "")) > 120:
+        probs.append(f"{row['serial_number']}: description is over 120 characters (the portal's limit)")
+    photo = (row.get("photo") or "").strip()
+    if photo and not Path(photo).is_file():
+        probs.append(f"{row['serial_number']}: markings photo not found ({Path(photo).name})")
+    elif photo and Path(photo).stat().st_size > 3 * 1024 * 1024:
+        probs.append(f"{row['serial_number']}: markings photo is over 3 MB (the portal's limit per file)")
+    if server_settings():
+        probs.append(f"{row['serial_number']}: SBRs can only be filed from this computer's inventory for now")
+    return probs
 
 
 def load_rows():
@@ -94,7 +131,7 @@ def load_rows():
         with SUPP.open(newline="", encoding="utf-8-sig") as f:  # -sig: tolerate a BOM (Excel on Windows)
             rows = list(csv.DictReader(f))
     for r in rows:
-        for c in COLS:  # older files have fewer columns
+        for c in QUEUE_COLS:  # older files have fewer columns
             r[c] = (r.get(c) or "").strip()
         r["status"] = r["status"].lower()
     return rows
@@ -156,7 +193,11 @@ def clear_build(serial):
 
 
 def add_queued(new_rows):
-    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new."""
+    """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new.
+    Other NFA items (is_nfa_row) carry NFA_QUEUE_COLS too and only work with this computer's inventory."""
+    if server_settings() and any(is_nfa_row(r) for r in new_rows):
+        raise ServerReadOnly("Filing SBRs and other NFA items works with this computer's inventory only for now "
+                             "(Settings > Where your inventory lives).")
     if server_settings():
         _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in ("serial_number", "caliber", "overall_length")}
                                            for r in new_rows]})
@@ -309,8 +350,9 @@ def save_rows(rows):
     if server_settings():
         raise ServerReadOnly(SERVER_READ_ONLY)
     tmp = SUPP.with_suffix(".csv.tmp")  # write-then-rename so a crash can't leave a half-written queue
+    cols = QUEUE_COLS if any(is_nfa_row(r) for r in rows) else COLS  # suppressor-only files keep their old header
     with tmp.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLS, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     tmp.replace(SUPP)
@@ -652,6 +694,9 @@ def move_to_server(try_only=False, progress=lambda text: None):
     request first (all of them in one request was too much for a small container), then the rows in one import that
     names them by checksum. progress(text) is told how far it got. Returns {suppressors, built, sbrs, pdfs, problems,
     moved, renamed}."""
+    if any(is_nfa_row(r) for r in _read_csv(SUPP)):
+        raise ServerReadOnly("Your queue has an SBR or other NFA item, which the server can't hold yet: "
+                             "file it (or remove it) first, then move.")
     import hashlib
     import remote
     if not server_settings():
@@ -833,6 +878,13 @@ def record_sbrs(records):
         _server_op("record_sbrs", {"rows": send})
     elif changed:
         save_sbrs(rows)
+    if not server_settings() and SUPP.exists():  # filed by this tool: done once its approval is in data/sbrs.csv
+        approved = {r["serial_number"].upper() for r in rows}
+        queue = load_rows()
+        keep = [r for r in queue if not (is_nfa_row(r) and r["status"] in ("filed", "pending")
+                                         and r["serial_number"].upper() in approved)]
+        if len(keep) != len(queue):
+            save_rows(keep)
     return added
 
 
@@ -1196,7 +1248,9 @@ def cmd_fields(args):
 
 
 def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
-    """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23.
+    """Stamp one row's caliber (4d), serial (4e), signature date and CLEO line onto your completed 5320.23. For an SBR or
+    other NFA item (is_nfa_row) also the type (4a), the ORIGINAL manufacturer's name and address (4b) and the model (4c),
+    which the template has as SILENCER / your trust / N/A.
     Old values are redacted (text removed), photo/signature untouched. Returns (path, keys not found after).
     person: another responsible person's settings entry: their template, and their CLEO line is left as they made it
     (item 5 is the CLEO where THEY live; the CLEO in your settings is yours).
@@ -1205,8 +1259,13 @@ def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
     out_dir = Path(out_dir or (_cleo_dir() if cleo else OUT))
     out_dir.mkdir(parents=True, exist_ok=True)
     # (page, key) -- located by searching the template, so layout changes are caught
-    targets = [(0, "4d")] + ([] if cleo else [(0, "4e")]) + [(1, "date")] + ([] if person else [(0, "cleo")])
+    nfa = is_nfa_row(row)
+    targets = ([(0, "4a"), (0, "4b"), (0, "4c")] if nfa else []) + [(0, "4d")] + ([] if cleo else [(0, "4e")]) \
+        + [(1, "date")] + ([] if person else [(0, "cleo")])
     new = {"4d": row["caliber"], "4e": row["serial_number"], "date": when}
+    if nfa:
+        new.update({"4a": row["type"].upper(), "4c": row.get("model") or "N/A",
+                    "4b": "\n".join(x for x in (row.get("mfr_name", ""), row.get("mfr_address", "")) if x.strip())})
     if not person:
         cl = load_trust()["cleo"]
         new["cleo"] = f"{cl['official']}, {cl['title']}"
@@ -1218,12 +1277,17 @@ def stamp_5320(row, when, out_dir=None, person=None, cleo=False):
     for pg in (0, 1):
         doc[pg].apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
     for pg, k in targets:
-        x0, _, _, y1 = boxes[k]
+        x0, y0, _, y1 = boxes[k]
+        if k == "4b":  # one line each, starting where the first typed line was
+            for n, line in enumerate(str(new[k]).splitlines()):
+                doc[pg].insert_text((x0, y0 + 8.5 + 9 * n), line, fontname="helv", fontsize=8)
+            continue
         doc[pg].insert_text((x0, y1 - 2.5), str(new[k]), fontname="helv", fontsize=8)
     dest = out_dir / (f"5320.23_{row['serial_number']}" + (f".{_rp_tag(person)}" if person else "") + (".cleo" if cleo else "") + ".pdf")
     doc.save(dest)
     chk = pymupdf.open(dest)  # re-read: each new value must be in the text layer where it was stamped
-    missing = [k for pg, k in targets if not chk[pg].search_for(str(new[k]), clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
+    missing = [k for pg, k in targets
+               if not chk[pg].search_for(str(new[k]).splitlines()[0] if new[k] else "", clip=pymupdf.Rect(boxes[k]) + (-2, -6, 250, 6))]
     return dest, missing
 
 
@@ -1298,7 +1362,15 @@ def _find_value_box(page, key):
             return official[0]["bbox"]
         sys.exit("Could not find the CLEO official's name/title (item 5) on forms/5320.23.pdf. "
                  "Was it made with the 5320.23 generator?")
-    word = {"4d": "Caliber", "4e": "Serial Number", "date": "Date"}[key]
+    if key == "4b":  # maker name + address: up to 3 typed lines under its label, returned as one box
+        lab = page.search_for("Name and Address of Maker")
+        if not lab:
+            sys.exit("label for 4b not found")
+        lines = [sp["bbox"] for sp in _near(page, "Name and Address of Maker", (-40, 40), (0, 45))]
+        if not lines:
+            sys.exit("could not locate existing value for 4b")
+        return (min(b[0] for b in lines), min(b[1] for b in lines), max(b[2] for b in lines), max(b[3] for b in lines))
+    word = {"4a": "Type of Firearm", "4c": "Firearm Model", "4d": "Caliber", "4e": "Serial Number", "date": "Date"}[key]
     hits = page.search_for(word)
     if not hits:
         sys.exit(f"label for {key} not found")
@@ -3094,6 +3166,14 @@ def _row_context(trust, item):
            "trust_doc_file": json.dumps(Path(f.get("trust_document") or "").name),
            "docs": [{"doc_path": d["path"], "doc_desc": d["description"], "doc_file": json.dumps(Path(d["path"]).name)}
                     for d in trust.get("docs") or []]}
+    if is_nfa_row(item):  # an SBR etc.: the receiver's own maker/model, typed as "not in the list" (see mapping.yaml)
+        photo = item.get("photo", "").strip()
+        ctx.update({"model": item["model"] or "N/A", "description": item.get("description", ""),
+                    "docs": ctx["docs"] + ([{"doc_path": photo, "doc_desc": "PHOTO OF RECEIVER MARKINGS",
+                                             "doc_file": json.dumps(Path(photo).name)}] if photo else [])})
+    ctx.update({"nfa": "yes" if is_nfa_row(item) else "", "product_type": (item.get("type") or "SILENCER").upper(),
+                "mfr_code": item.get("mfr_code") or ("" if is_nfa_row(item) else "FMI"), "_found": {}, "mfr_country": item.get("mfr_country") or "UNITED STATES",
+                "unit": item.get("unit") or "CALIBER", "barrel_length": item.get("barrel_length", "")})
     others = [_other_rp_context(p, n, item) for n, p in enumerate(other_rps(trust), 2)]
     ctx.update({"other_rps": others, "has_other_rps": "yes" if others else "", "rp_count": str(1 + len(others))})
     return ctx
@@ -3113,6 +3193,174 @@ def _other_rp_context(person, n, item):
             "rp_birth_state": person["place_of_birth"]["state"].upper(),
             "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
             "photo_path": person["photo"], "eft_path": person["eft"]}
+
+
+def _norm_name(text):
+    return re.sub(r"[^A-Z0-9 ]", "", re.sub(r"\s+", " ", (text or "").upper())).strip()
+
+
+_MFR_WAIT_MS = 8000  # how long eForms' name search may take to list anything
+
+
+def _pick_manufacturer(page, code, name, tries=3):
+    """Firearm popup 1. With a code (FMI for a suppressor, or one saved earlier): By Manufacturer Code. Without one (an
+    SBR etc.): eForms' own name search, the way a person does it (mapped live 2026-11-19): type the name into the
+    PrimeNG autocomplete `p-autocomplete#manufacturerName input` (real keystrokes; it matches any part of a name),
+    read `.ui-autocomplete-panel li` (no hits for the full name: shorter, a word at a time). An exact match (ignoring case/punctuation) is picked;
+    otherwise you choose from the list in the terminal, type another spelling, or pick + verify it in the browser
+    yourself and press Enter (the code is then read from the page).
+    Then Verify Manufacturer; the code is read from #manufacturerCodeFromName. Returns {mfr_code, mfr_atf_name}."""
+    if code:
+        _tick(page, "#byCode")
+        page.locator("#manufacturerCode").fill(code)
+        page.locator("#verifyManufacturer").click()
+        page.wait_for_timeout(1500)
+        return {"mfr_code": code}
+    _tick(page, "#byName")
+    box = page.locator("#manufacturerName input")
+    items = page.locator(".ui-autocomplete-panel li")
+
+    def verified_by_hand():  # eForms shows a verified code (it took the name, or the user picked it by hand)
+        try:
+            found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
+            shown = (box.input_value() or "").strip()
+        except Exception:
+            return None
+        if found:
+            emit("step", f"    manufacturer verified: {shown} (code {found})")
+            return {"mfr_code": found, "mfr_atf_name": shown}
+        return None
+
+    def search(q):
+        box.fill("")
+        box.press_sequentially(q, delay=60)
+        try:
+            items.first.wait_for(timeout=_MFR_WAIT_MS)
+        except Exception:
+            pass
+        page.wait_for_timeout(500)  # the list can grow as more results arrive
+        return [t.strip() for t in items.all_inner_texts() if t.strip()]
+
+    # the full name first, then shorter (drop a word at a time): "AERO PRECISION LLC" -> "AERO PRECISION" -> "AERO"
+    words = name.split()
+    queries = [" ".join(words[:n]) for n in range(len(words), 0, -1)] or [name]
+    query, picked, names = queries[0], None, []
+    for _ in range(tries):
+        for query in queries:
+            names = search(query)
+            if names:
+                break
+        exact = [n for n in names if _norm_name(n) == _norm_name(name)]
+        if len(exact) == 1:
+            picked = exact[0]
+            emit("step", f"    manufacturer: {picked} (exact match)")
+            break
+        if not names:  # no list reached us; the site may still take the typed name as is (2026-11-19: it showed AP2)
+            box.fill("")
+            box.press_sequentially(name, delay=60)
+            page.wait_for_timeout(1000)
+            page.keyboard.press("Escape")
+            page.locator("#verifyManufacturer").click()
+            page.wait_for_timeout(1500)
+        done = verified_by_hand()  # the page already shows a verified code: nothing to ask
+        if done:
+            return done
+        hint = ("Or pick it in the browser, click Verify Manufacturer, then press Enter here. q stops: ")
+        if names:
+            listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(names, 1))
+            ans = ask(f"eForms lists these manufacturers for \"{query}\". Which one is marked on the receiver?\n{listing}\n"
+                      "Type its number, or another spelling to search again. " + hint).strip()
+        else:
+            ans = ask(f"eForms shows no manufacturer for \"{name}\" (also tried shorter). Type another spelling. "
+                      + hint).strip()
+        if ans.lower() == "q":
+            raise RuntimeError("manufacturer not chosen")
+        if not ans:  # Enter: the user chose it in the browser
+            done = verified_by_hand()
+            if done:
+                return done
+            continue  # nothing verified there: search again
+        if ans.isdigit() and names and 1 <= int(ans) <= len(names):
+            picked = names[int(ans) - 1]
+            break
+        queries = [ans]
+    if picked is None:
+        raise RuntimeError(f"no eForms manufacturer chosen for {name!r}")
+    # exact text: "PALMETTO STATE ARMORY" must not hit "PALMETTO STATE ARMORY LLC"
+    page.locator(".ui-autocomplete-panel li",
+                 has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
+    page.locator("#verifyManufacturer").click()
+    page.wait_for_timeout(1500)
+    found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
+    if not found:
+        raise RuntimeError(f"eForms did not verify {picked!r} (no manufacturer code shown)")
+    emit("step", f"    manufacturer code: {found}")
+    return {"mfr_code": found, "mfr_atf_name": picked}
+
+
+def _model_matches(option, model):
+    """An eForms model entry for the engraved model: the same, or the maker's name before it ("AERO PRECISION M4E1")."""
+    o, m = _norm_name(option), _norm_name(model)
+    return bool(m) and (o == m or o.endswith(" " + m))
+
+
+def _pick_model(page, model, caliber, nfa):
+    """Firearm popup 2, model and caliber. A silencer (FMI): plain text inputs, typed. An SBR etc.: Model is an
+    ng-select of ATF's list for that maker, Caliber a select (mapped live 2026-11-19). The model is typed into the
+    ng-select's search and an entry for it picked (one match: picked; several or none: asked, the list shown); the
+    caliber is picked from its list. Not in the lists: tick "My item description is not in the list" and type both
+    (eForms then warns on the certify page that ATF must validate it). Returns the eForms model name picked, or ""."""
+    if not nfa:
+        _fill(page, page.locator("#weaponModel"), model, "#weaponModel")
+        _fill(page, page.locator("#weaponCaliber"), caliber, "#weaponCaliber")
+        return ""
+    picked = ""
+    sel_box = page.locator("ng-select#weaponModel")
+    if sel_box.count():
+        options = page.locator(".ng-dropdown-panel .ng-option")
+
+        def listed(q):
+            sel_box.click()
+            box = sel_box.locator("input")
+            box.fill("")
+            if q:
+                box.press_sequentially(q, delay=40)
+            page.wait_for_timeout(600)
+            return [t.strip() for t in options.all_inner_texts()
+                    if t.strip() and not re.match(r"(?i)no items found", t.strip())]
+
+        names = listed(model)
+        hits = [n for n in names if _model_matches(n, model)]
+        if len(hits) == 1:
+            picked = hits[0]
+        else:
+            shown = hits or listed("")
+            if shown:
+                listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(shown, 1))
+                ans = ask(f"eForms lists these models for this manufacturer; the receiver is engraved \"{model}\".\n"
+                          f"{listing}\nType the number of the matching one, or press Enter if none matches "
+                          "(it is then typed in as not listed, which ATF checks by hand): ").strip()
+                if ans.isdigit() and 1 <= int(ans) <= len(shown):
+                    picked = shown[int(ans) - 1]
+        if picked:
+            listed(model if picked in names else "")
+            options.filter(has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
+            try:
+                _pick(page.locator("select#weaponCaliber"), caliber, wait_ms=5000, grace_ms=1500)
+            except NoSuchOption as e:
+                emit("warn", f"    caliber {e}; typing model and caliber in as not listed")
+                picked = ""
+            else:
+                emit("step", f"    model: {picked} (from eForms' list), caliber {caliber}")
+        else:
+            page.keyboard.press("Escape")
+    if not picked:
+        _tick(page, "#descriptionNotListed")
+        page.wait_for_timeout(800)
+        _fill(page, page.locator("#weaponModel"), model, "#weaponModel")
+        _fill(page, page.locator("#weaponCaliber"), caliber, "#weaponCaliber")
+        emit("step", f"    model {model} typed in as not listed")
+    return picked
 
 
 _current_step = ""
@@ -3147,6 +3395,20 @@ def _run_steps(page, steps, ctx_vals, dry, bad, skip_tags=()):
             continue
         _current_step = sel or act
         if s.get("if_set") and not str(ctx_vals.get(s["if_set"]) or "").strip():  # e.g. a UPIN only if you have one
+            continue
+        if act == "pick_manufacturer":  # by code if known, else eForms' own name search (see _pick_manufacturer)
+            code = str(ctx_vals.get("mfr_code") or "").strip()
+            emit("step", f"pick_manufacturer {'code ' + code if code else 'by name ' + str(ctx_vals.get('mfr_name', ''))}")
+            if not dry:
+                found = _pick_manufacturer(page, code, str(ctx_vals.get("mfr_name") or ""))
+                if not code and isinstance(ctx_vals.get("_found"), dict):
+                    ctx_vals["_found"].update(found)
+            continue
+        if act == "pick_model":  # from eForms' lists if there, else typed as not listed (see _pick_model)
+            emit("step", f"pick_model {ctx_vals.get('model', '')} / {ctx_vals.get('caliber', '')}")
+            if not dry:
+                _pick_model(page, str(ctx_vals.get("model") or ""), str(ctx_vals.get("caliber") or ""),
+                            bool(ctx_vals.get("nfa")))
             continue
         if s.get("tag") in skip_tags:
             emit("step", f"(skipping {s['tag']} step)")
@@ -3375,6 +3637,11 @@ def _file_one(page, args, trust, steps, rows, idx):
             _save_failure(page)
         ask("Browser left open on the failing page. Look at it, then press Enter to log out and close... ")
         sys.exit(1)
+    found = ctx_vals.get("_found") or {}
+    if found.get("mfr_code") and not item.get("mfr_code"):  # looked up by name: keep it, so a re-file uses the code
+        item.update(mfr_code=found["mfr_code"])
+        if not server_settings():
+            save_rows(rows)
     if bad:
         emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")
     if args.submit:
@@ -3433,6 +3700,9 @@ def file_rows(rows, todo, args):
         sys.exit("Settings incomplete (./atf > Settings):\n  " + "\n  ".join(probs))
     # Check every row's inputs BEFORE opening the browser (an exit after login would skip the logout).
     today, probs = datetime.now().strftime("%m/%d/%Y"), []
+    nfa_probs = [p for i in todo for p in nfa_row_problems(rows[i])]
+    if nfa_probs:
+        sys.exit("Not ready to file:\n  " + "\n  ".join(nfa_probs))
     for i in todo:
         _row_context(trust, rows[i])
         if applicant_type(trust) == "trust":
