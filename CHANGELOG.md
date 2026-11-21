@@ -7,6 +7,31 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.6.0 (2026-11-20)
+
+Form 1s filed by hand show up before they're approved.
+
+### Fixed
+- **Check approvals now finds Form 1s still in process, not only approved ones.** Before, a suppressor you filed
+  yourself on eForms (outside this helper) wasn't seen until ATF approved it. Check approvals now also looks at
+  eForms' "Submitted/In Process" list. Any suppressor there that your records don't have as filed is shown and can be
+  recorded as **filed**, with the filed date and eForm ID taken from the form (eForms doesn't list the application
+  number). It then waits for approval like any other filing.
+- **No more filing a suppressor twice by accident.** If a serial is already in process on eForms but queued in the
+  helper (say you added it to have it in your inventory), Check approvals warns that filing it would file it twice
+  and offers to record it as filed. A pending row that eForms shows in process gets a reminder to resolve it as filed,
+  and a serial on more than one in-process form gets a warning.
+- Only the first page of each in-process form is kept (`out/in-process/`), and each form is opened only once.
+  The page is removed once the form leaves the list. Forms this helper filed itself aren't opened again.
+
+### Inventory server
+- Server API 4 (new operation `record_in_process`). If your inventory lives on the server, update the server too.
+  Until you do, the helper says so instead of recording these forms.
+
+### Tested
+- Tested against a fake eForms dashboard and the real server in a temp folder. Not yet run against live eForms: it
+  uses the same search and View PDF steps as the CLEO-copy fetch, which has worked live on submitted forms.
+
 ## 1.5.2 (2026-11-20)
 
 Race/ethnicity matches eForms' list.

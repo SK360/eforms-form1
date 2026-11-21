@@ -1607,23 +1607,64 @@ def _not_approved_lines(nrep, marked):
             con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: {what}[/]")
 
 
+def _in_process_lines(irep):
+    """Check approvals: suppressors submitted/in process on eForms that your records don't have as filed
+    (atf.in_process_report), e.g. filed by hand; offers to record them as filed. Returns the serials recorded."""
+    todo = irep["unknown"] + [rec for _row, rec in irep["queued"]]
+    if todo:
+        t = Table(box=box.ROUNDED, header_style="bold", title_justify="left", border_style="cyan",
+                  title=f"[bold]In process on eForms, not filed in your records ({len(todo)})[/]")
+        for col in ("Serial", "Caliber", "Length", "Filed", "Here"):
+            t.add_column(col)
+        for rec in irep["unknown"]:
+            f = atf._in_process_fields(rec)
+            t.add_row(escape(rec["serial"]), escape(f["caliber"]), escape(f["overall_length"]), escape(f["filed_date"]), "not in your records")
+        for row, rec in irep["queued"]:
+            f = atf._in_process_fields(rec)
+            t.add_row(escape(rec["serial"]), escape(f["caliber"]), escape(f["overall_length"]), escape(f["filed_date"]),
+                      "[bold red]queued: filing it would file it twice[/]" if row["status"] == "" else "[red]disapproved[/]")
+        con.print(t)
+    for row, _rec in irep["pending"]:
+        con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: pending here and in process on eForms, so it was submitted:\n"
+                  "    Resolve a pending row > It was filed.[/]")
+    if irep["other"]:
+        con.print(f"  [dim]{len(irep['other'])} other NFA item(s) in process: listed once approved.[/]")
+    if not todo:
+        return []
+    serials = [r["serial"] for r in todo]
+    names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
+    if not questionary.confirm(f"Record the {len(todo)} suppressor(s) already submitted on eForms ({names}) as filed?",
+                               default=True).ask():
+        if irep["queued"]:
+            con.print("  [yellow]⚠ Not recorded. The queued ones are still queued: remove them (Edit or remove a queued\n"
+                      "    suppressor) or File would submit them again.[/]")
+        return []
+    try:
+        return atf.record_in_process(todo)
+    except Exception as e:
+        con.print(f"  [red]✖ Couldn't record them: {escape(str(e).splitlines()[0])}[/]")
+        return []
+
+
 def approvals_flow():
     con.print(Panel("Reads your [bold]approved[/] Form 1s on eForms. Read-only: it only clicks Search, View Form, View PDF\n"
                     "and Go Home. Each PDF is saved to out/approved/, and suppressors are checked against your records by\n"
                     "serial (caliber, overall length). SBRs, SBSs and other types go in their own list. The first run fetches every\n"
-                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals. While forms are waiting,\n"
-                    "it also looks for disapproved and returned ones, so you can file those again.",
+                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals. It also looks at forms\n"
+                    "still in process (so ones you filed by hand can be recorded as filed) and, while forms are waiting, for\n"
+                    "disapproved and returned ones, so you can file those again.",
                     title="Check approvals", border_style="cyan", expand=False))
     if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
         return
-    others = []
+    others, in_process = [], []
     try:
-        found, problems = atf.fetch_approved(others)
+        found, problems = atf.fetch_approved(others, in_process)
     finally:
         P.finish()
     records, more = atf.read_approved(found)
     rejected, more_rejected = atf.read_approved(others)
-    more += more_rejected
+    submitted, more_submitted = atf.read_approved(in_process)
+    more += more_rejected + more_submitted
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
     nfa = [{"type": " ".join(r["type"].upper().split())} for r in records if atf.is_other_nfa(r)]
@@ -1641,9 +1682,14 @@ def approvals_flow():
     nrep = atf.not_approved_report(rejected, atf.load_rows())
     marked = atf.record_disapprovals([row["serial_number"] for row, _ in nrep["disapproved"]])
     _not_approved_lines(nrep, marked)
-    waiting = [r["serial_number"] for r in rep["waiting"] if r["serial_number"] not in marked]
+    irep = atf.in_process_report(submitted, atf.load_rows())
+    recorded = _in_process_lines(irep)
+    waiting = [r["serial_number"] for r in atf.approval_report(records, atf.load_rows(), atf.load_trust())["waiting"]
+               if r["serial_number"] not in marked]
     con.print(f"  Filed, not approved yet: [bold]{len(waiting)}[/]" + (f"  ({escape(', '.join(waiting[:12]))}{', …' if len(waiting) > 12 else ''})" if waiting else ""))
-    alerts = [f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]] + problems + more
+    alerts = ([f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]]
+              + [f"serial {s} is on more than one submitted/in process Form 1 (filed twice? see eForms)" for s in irep["duplicates"]]
+              + problems + more)
     if alerts:
         con.print(Panel("\n".join(f"• {escape(a)}" for a in alerts), title="Look at these", border_style="red", expand=False))
     if rep["unknown"]:
@@ -1661,6 +1707,8 @@ def approvals_flow():
             con.print(f"  [green]✔[/] {sent} approval PDF(s) saved on your server.")
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
+    if recorded:
+        con.print(f"  [green]✔[/] {len(recorded)} suppressor(s) in process on eForms recorded as filed: they wait for approval here.")
     if new_nfa:
         label = atf.nfa_label(atf.load_sbrs())
         con.print(f"  [green]✔[/] {label}: {new_nfa} added (Inventory > Show another view > {label}).")

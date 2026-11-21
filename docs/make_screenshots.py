@@ -381,8 +381,9 @@ def shot_approvals():
     records += [rec("A107", "9", "12"), rec("A108", "9", "12.5")]
     records += [dict(rec("R2001", "5.56", "26.5", "SHORT BARRELED RIFLE"), barrel_length="10.5"),
                 dict(rec("R2002", "9", "24", "SHORT BARRELED RIFLE"), barrel_length="8")]
-    atf.fetch_approved = lambda others=None: ([], [])
-    atf.read_approved = lambda found=None: (records, [])
+    atf.fetch_approved = lambda others=None, in_process=None: ([], [])
+    reads = iter([(records, [])])  # the approvals; then nothing disapproved or in process
+    atf.read_approved = lambda found=None: next(reads, ([], []))
     answered("What next?", "Check approvals on eForms")
     script(True)
     ui.pause = lambda: None

@@ -300,7 +300,8 @@ def test_check_approvals_says_when_the_server_needs_updating(fake, configured, a
     fake["api"] = 1
     suppressor = dict(SHOTGUN, type="SILENCER", serial="A136", eform_id="1000136", barrel_length="")
     monkeypatch.setattr(atf, "fetch_approved", lambda *a, **k: ([], []))
-    monkeypatch.setattr(atf, "read_approved", lambda found: ([suppressor, SHOTGUN], []))
+    reads = iter([([suppressor, SHOTGUN], [])])                       # the approvals; nothing disapproved or in process
+    monkeypatch.setattr(atf, "read_approved", lambda found: next(reads, ([], [])))
     answers(pick("Check approvals"), True, QUIT)
     ui.menu()
     assert "Your inventory server needs updating" in " ".join(screen.getvalue().split())

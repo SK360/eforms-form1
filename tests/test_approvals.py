@@ -625,3 +625,109 @@ def test_menu_reports_disapprovals_and_refiles_them(configured, dashboard, answe
     assert "ATF disapproved or returned T302" in out and answers.kw["File it again?"]["auto_enter"] is False
     rows = atf.load_rows()
     assert calls == [([next(i for i, r in enumerate(rows) if r["serial_number"] == "T302")], True)]
+
+
+def in_process_pdf(serial, caliber="22", length="12", signed="11/03/2026", type_="SILENCER"):
+    """A submitted form's "View PDF" (made-up): the ATF copy's page 1 (item 4, item 9 signed, nothing ticked) + 2 more pages."""
+    doc = pymupdf.open(stream=approved_pdf(type_, serial, caliber, length, approved=False, date="", signed=signed))
+    for t in ("ATF Form 5320.1 (Form 1) instructions", "CLEO Copy"):
+        doc.new_page(width=612, height=792).insert_text((40, 80), t, fontname="tiro", fontsize=9)
+    return doc.tobytes()
+
+
+IN_PROCESS = [  # (eForm ID, finalized, PDF, submitted): what eForms lists as SUBMITTED/IN PROCESS
+    ("4000001", "", in_process_pdf("T401"), "11/3/2026"),               # filed with this tool (its CLEO copy was saved)
+    ("4000002", "", in_process_pdf("T402", length='12"'), "11/3/2026"),  # filed by hand, but queued here: would be filed twice
+    ("4000003", "", in_process_pdf("T403"), "11/3/2026"),               # pending here
+    ("4000004", "", in_process_pdf("HAND1", "9", signed=""), "11/4/2026"),   # filed by hand, not in the records; no item 9
+    ("4000005", "", in_process_pdf("R9", "5.56", "26", type_="SHORT BARRELED RIFLE"), "11/4/2026"),
+    ("4000006", "", in_process_pdf("DUP1"), "11/4/2026"), ("4000007", "", in_process_pdf("DUP1"), "11/5/2026"),
+]
+
+
+def hand_filed_setup():
+    filed(("T401", "filed", "11/03/2026"), ("T402", "", ""), ("T403", "pending", "11/03/2026"), ("T404", "", ""))
+    (atf.OUT / "cleo").mkdir(parents=True, exist_ok=True)
+    atf._save_form1_index({"4000001": "T401"})
+
+
+def test_forms_filed_by_hand_are_found_in_process_and_recorded_as_filed(configured, dashboard):
+    hand_filed_setup()
+    state = dashboard(FORMS[:1], others={atf.SUBMITTED: IN_PROCESS})
+    in_process = []
+    found, problems = atf.fetch_approved(None, in_process)
+    assert problems == [] and state["bad_clicks"] == [] and state["logged_out"]                  # read-only, logged out
+    assert list(dict.fromkeys(state["searches"])) == ["APPROVED", atf.SUBMITTED] and len(found) == 1
+    assert state["pdf_hits"] == 1 + 6                                                             # T401 is never opened
+    folder = atf.OUT / "in-process"
+    assert sorted(f.name for f in folder.glob("*.pdf")) == ["DUP1.pdf", "DUP1_2.pdf", "HAND1.pdf", "R9.pdf", "T402.pdf", "T403.pdf"]
+    assert all(pymupdf.open(f).page_count == 1 for f in folder.glob("*.pdf"))                     # only page 1 is kept
+    assert not (atf.OUT / "approved" / "T402.pdf").exists()
+
+    records, more = atf.read_approved(in_process)
+    rep = atf.in_process_report(records, atf.load_rows())
+    assert more == [] and rep["duplicates"] == ["DUP1"] and [r["serial"] for r in rep["other"]] == ["R9"]
+    assert [r["serial"] for r in rep["unknown"]] == ["HAND1"]
+    assert [row["serial_number"] for row, _ in rep["queued"]] == ["T402"]
+    assert [row["serial_number"] for row, _ in rep["pending"]] == ["T403"]
+    assert atf.record_in_process(rep["unknown"] + [rec for _, rec in rep["queued"]]) == ["HAND1", "T402"]
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert [r["serial_number"] for r in atf.load_rows()] == ["HAND1", "T401", "T402", "T403", "T404"]   # serial order
+    assert {k: rows["HAND1"][k] for k in ("status", "caliber", "overall_length", "filed_date", "eform_id", "application_number")} == {
+        "status": "filed", "caliber": "9", "overall_length": "12", "filed_date": "11/04/2026", "eform_id": "4000004",
+        "application_number": ""}                                                                 # no item 9: the submitted date
+    assert (rows["T402"]["status"], rows["T402"]["filed_date"], rows["T402"]["eform_id"]) == ("filed", "11/03/2026", "4000002")
+    assert rows["T403"]["status"] == "pending" and rows["T404"]["status"] == ""                  # left alone
+    assert "T402" not in [r["serial_number"] for r in atf.load_rows() if r["status"] not in atf.SKIP]   # File won't file it again
+    assert atf.record_in_process(rep["unknown"]) == []                                            # filed now: nothing to do
+
+    # the next run opens nothing again: recorded forms are skipped, the others are read from out/in-process/
+    state["pdf_hits"] = 0
+    in_process = []
+    atf.fetch_approved(None, in_process)
+    assert state["pdf_hits"] == 0 and sorted(r["eform_id"] for r in in_process) == ["4000003", "4000005", "4000006", "4000007"]
+
+
+def test_forms_no_longer_in_process_are_removed_from_the_folder(configured, dashboard):
+    hand_filed_setup()
+    dashboard(FORMS[:1], others={atf.SUBMITTED: IN_PROCESS})
+    atf.fetch_approved(None, [])
+    dashboard(FORMS[:1], others={atf.SUBMITTED: IN_PROCESS[:3]})                                   # the rest were approved since
+    atf.fetch_approved(None, [])
+    folder = atf.OUT / "in-process"
+    assert sorted(f.name for f in folder.glob("*.pdf")) == ["T402.pdf", "T403.pdf"]
+    assert sorted(atf._approved_index(folder)) == ["4000002", "4000003"]
+
+
+def test_a_failed_in_process_search_keeps_the_approvals(configured, dashboard, monkeypatch):
+    hand_filed_setup()
+    dashboard(FORMS[:1], others={atf.SUBMITTED: IN_PROCESS})
+    real = atf._approved_results
+
+    def broken(page, page_no=1, search=True, status="APPROVED", wait=30):
+        if status == atf.SUBMITTED:
+            raise RuntimeError("the page layout changed")
+        return real(page, page_no, search, status, wait)
+    monkeypatch.setattr(atf, "_approved_results", broken)
+    in_process = []
+    found, problems = atf.fetch_approved(None, in_process)
+    assert len(found) == 1 and in_process == []
+    assert problems == ["couldn't search submitted/in process Form 1s: the page layout changed"]
+
+
+def test_menu_records_forms_filed_by_hand(configured, dashboard, answers, screen):
+    hand_filed_setup()
+    dashboard(FORMS[:1], others={atf.SUBMITTED: IN_PROCESS})
+    answers(pick("Check approvals"), True, True, False, QUIT)        # open the browser; record them as filed; don't add T201
+    ui.menu()
+    out = screen.getvalue()
+    for shown in ("In process on eForms, not filed in your records (2)", "queued: filing it would file it twice", "not in your records",
+                  "T403: pending here and in process on eForms", "1 other NFA item(s) in process",
+                  "serial DUP1 is on more than one submitted/in process Form 1", "2 suppressor(s) in process on eForms recorded as filed"):
+        assert shown in out, shown
+    assert "4000004" not in out                                                                   # no eForm IDs on screen
+    q = next(k for k in answers.kw if k.startswith("Record the 2 suppressor(s)"))
+    assert "HAND1, T402" in q
+    status = {r["serial_number"]: r["status"] for r in atf.load_rows()}
+    assert status == {"HAND1": "filed", "T401": "filed", "T402": "filed", "T403": "pending", "T404": ""}
+    assert "Filed, not approved yet: 4" in out                                                    # HAND1 and T402 now count too

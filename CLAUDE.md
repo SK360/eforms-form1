@@ -346,6 +346,21 @@ plain CLI, kept for debugging/scripting:
   line "N Form 1s disapproved", Advanced > Re-file lists disapproved rows first ("File it again?", reminder to fix
   the cause: the re-file uses the settings/template as they are now). Not yet seen live: a real disapproved form's
   View PDF (assumed to have item 4 like an approved one).
+  **In process / filed by hand** (added 2026-11-20, after a user reported that Form 1s they filed by hand outside the tool
+  showed up only once approved; before this, Check approvals never searched SUBMITTED, and a hand-filed serial added
+  via Add suppressors was QUEUED, so File would have submitted it a second time): `fetch_approved(others, in_process)` (menu
+  and CLI pass a list) runs `_fetch_in_process` after APPROVED, ALWAYS (not only while something is waiting; wait 30 s
+  if a row is filed/pending, else NOT_APPROVED_WAIT): `_fetch_status(SUBMITTED, skip=_tracked_eform_ids(),
+  first_page=True)` saves page 1 only (`_keep_first_page`) to `out/in-process/<serial>.pdf` + index.csv. Skipped (never
+  opened): eForm IDs already in suppressors.csv and form1_index.csv eForms whose serial is filed/pending/approved here.
+  Once every results page was read, files of forms no longer listed are deleted. `in_process_report(records, rows)`:
+  unknown (not in records), queued (status "" or disapproved here = would be filed twice), pending (hint: Resolve as
+  filed; never changed automatically), duplicates (serial on 2+ in-process forms; left out of the rest), other NFA
+  types (ignored until approved). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
+  submitted date, eform_id, no application number, caliber/length only fill gaps; new rows re-sorted. Server: op
+  `record_in_process` (API 4; app checks /api/hello api >= 4, else ServerReadOnly "too old"; queued/disapproved only,
+  all or nothing, `_loose_inches`). Menu `_in_process_lines` (asks before recording; declining warns that queued ones
+  would be filed again); CLI records them only with `--import-unknown`. Not yet live.
 - **CLEO notification copies** (added 2026-11-06; optional; files in `out/cleo/`, path via `_cleo_dir()`). The CLEO
   gets the Form 1 and each RP's 5320.23, and **neither shows the serial** (ATF leaves it off the CLEO's copies; so must
   everything made for the CLEO, the packet's cover included). 5320.23: the generator's CLEO copy = ATF's CLEO-copy
