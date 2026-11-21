@@ -70,9 +70,13 @@ portal:
     - {selector: "#birthState", action: select, value: "{rp_birth_state}"}
     - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
     - {selector: "#sex", action: select, value: "{rp_sex}"}
-    # race/ethnicity: PrimeNG multiselect, option panel is an overlay (your race setting must match the option text)
+    # race/ethnicity: PrimeNG multiselect, option panel is an overlay (each race in your settings must match an option's
+    # text; atf.RACES). The panel stays open while options are ticked, so one click each.
     - {selector: "#raceEthnicity .ui-multiselect", action: click}
-    - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
+    - action: repeat
+      over: rp_races
+      steps:
+        - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
     - {action: press, value: "Escape"}
     - {selector: "#finishButton", action: click}
     # --- other responsible persons in the trust (Settings), each with "Add Responsible Person" ---
@@ -111,7 +115,10 @@ portal:
         - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
         - {selector: "#sex", action: select, value: "{rp_sex}"}
         - {selector: "#raceEthnicity .ui-multiselect", action: click}
-        - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
+        - action: repeat
+          over: rp_races
+          steps:
+            - {selector: ".ui-multiselect-panel li.ui-multiselect-item:has-text('{rp_race}')", action: click}
         - {action: press, value: "Escape"}
         - {selector: "#finishButton", action: click}
         # read back: the list now has their row (row n-1; yours is 0) with their last name

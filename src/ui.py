@@ -876,7 +876,16 @@ STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
           "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
           "Washington", "West Virginia", "Wisconsin", "Wyoming"]
 DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
-RACES = ["American Indian or Alaskan Native", "Asian", "Black or African American", "Native Hawaiian or Other Pacific Islander", "White"]
+
+
+def _race(current):
+    """Race/ethnicity as eForms lists it: tick one or more. Returns a string for one (as settings always were), a list
+    for several."""
+    have = atf.races({"race": current})
+    picked = _a(questionary.checkbox("Race/ethnicity, as eForms lists it (space to tick one or more, Enter to continue):",
+                                     choices=[questionary.Choice(r, r, checked=r in have) for r in atf.RACES],
+                                     validate=lambda a: bool(a) or "Tick at least one"))
+    return picked[0] if len(picked) == 1 else picked
 
 
 class Cancelled(Exception):
@@ -993,8 +1002,7 @@ def _other_rp(p, others):
     p["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("dob"), validate=_date))
     p["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                      default=str(get("sex", "Male")).title()))
-    race = get("race")
-    p["race"] = _a(questionary.select("Race (as eForms lists it):", choices=RACES, default=race if race in RACES else None))
+    p["race"] = _race(get("race"))
     p["place_of_birth"] = {**(p.get("place_of_birth") or {}), "country": "United States of America",
                            "state": _state("State of birth:", get("place_of_birth.state"))}
     addr = dict(p.get("home_address") or {})
@@ -1097,8 +1105,7 @@ def settings_flow(first=False):
         rp["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("responsible_persons.0.dob"), validate=_date))
         rp["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                           default=get("responsible_persons.0.sex", "Male").title()))
-        race = get("responsible_persons.0.race")
-        rp["race"] = _a(questionary.select("Race (as eForms lists it):", choices=RACES, default=race if race in RACES else None))
+        rp["race"] = _race(get("responsible_persons.0.race"))
         rp["place_of_birth"] = {**(rp.get("place_of_birth") or {}), "country": "United States of America",
                                 "state": _state("State of birth:", get("responsible_persons.0.place_of_birth.state"))}
         rp["home_address"] = {**(rp.get("home_address") or {}),

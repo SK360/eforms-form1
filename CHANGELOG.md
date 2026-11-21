@@ -7,6 +7,24 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.5.2 (2026-11-20)
+
+Race/ethnicity matches eForms' list.
+
+### Fixed
+- **"American Indian or Alaskan Native" is now spelled the way eForms spells it.** Thanks to @ruinz89 for finding and
+  fixing it (#4). Before, filing stopped at the race step for anyone who had picked it. Settings saved with the old spelling
+  are corrected automatically; nothing to redo.
+
+### New
+- **All of eForms' race/ethnicity options, and more than one at a time.** Settings now lists the eight options eForms
+  shows (Hispanic or Latino, Middle Eastern/North African and Unknown were missing) as a checklist, the same for
+  every responsible person. Each ticked one is ticked on eForms. Settings with one race are unchanged.
+
+### Tested
+- With a fake eForms popup. The option names come from eForms' own list (seen 2026-11-20); not yet filed live with
+  more than one race or with the new options.
+
 ## 1.5.1 (2026-11-19)
 
 Disapproved forms can be filed again.

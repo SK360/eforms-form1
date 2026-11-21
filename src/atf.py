@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.5.1"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.5.2"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -2581,6 +2581,24 @@ QUESTIONS_11 = [  # ATF's wording on the eForms applicant page (captured 2026-10
 ]
 # 11.M.2 ("If 'Yes', do you fall within any of the exceptions...") only offers N/A once 11.M.1 is No.
 
+# Race/ethnicity: eForms' checkbox list (seen live 2026-11-20); more than one may be ticked. Settings keep one as a
+# string (as before) or several as a list. The old "Alaska Native" spelling (before 1.5.2) never matched eForms.
+RACES = ["American Indian or Alaskan Native", "Asian", "Black or African American", "Hispanic or Latino",
+         "Middle Eastern/North African", "Native Hawaiian or Other Pacific Islander", "White", "Unknown"]
+
+
+def races(person):
+    """A person's race setting as a list of eForms options (a string or a list in trust.yaml; old spelling fixed)."""
+    val = (person or {}).get("race") or []
+    out = []
+    for r in ([val] if isinstance(val, str) else val):
+        r = re.sub(r"(?i)\balaska native\b", "Alaskan Native", str(r).strip())
+        known = next((k for k in RACES if k.lower() == r.lower()), r)
+        if known and known not in out:
+            out.append(known)
+    return out
+
+
 COMMON_REQUIRED = [
     ("responsible_persons.0.dob", "date of birth"), ("responsible_persons.0.sex", "sex"),
     ("responsible_persons.0.race", "race"), ("responsible_persons.0.place_of_birth.state", "state of birth"),
@@ -2889,7 +2907,7 @@ def _row_context(trust, item):
            "answers": [{"q_id": q, "q_answer": a} for q, a in ans.items()] + [{"q_id": "11.M.2", "q_answer": "N/A"}],
            "upin": upin(trust),
            "icn": item["serial_number"] if icn_is_serial(trust) else "",
-           "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": rp["race"],
+           "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": ", ".join(races(rp)), "rp_races": [{"rp_race": r} for r in races(rp)],
            "rp_birth_state": rp["place_of_birth"]["state"].upper(),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),
            "cleo_department": cl["department"], "cleo_official": cl["official"], "cleo_title": cl["title"],
@@ -2920,7 +2938,7 @@ def _other_rp_context(person, n, item):
             "rp_email": str(person.get("email") or ""), "rp_street": addr["street"], "rp_zip": str(addr["zip"]),
             # dropdowns: the portal lists these uppercased
             "rp_city": addr["city"].upper(), "rp_state": addr["state"].upper(), "rp_residence_state": addr["state"].upper(),
-            "rp_dob": person["dob"], "rp_race": person["race"], "rp_sex": person["sex"].upper(),
+            "rp_dob": person["dob"], "rp_race": ", ".join(races(person)), "rp_races": [{"rp_race": r} for r in races(person)], "rp_sex": person["sex"].upper(),
             "rp_birth_state": person["place_of_birth"]["state"].upper(),
             "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
             "photo_path": person["photo"], "eft_path": person["eft"]}

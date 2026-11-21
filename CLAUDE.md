@@ -460,8 +460,11 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   fixed 1.5 s; 10 real filings faster).
 - **Locked/prefilled fields** hang `select`/`fill` for 30s: use `skip_if_disabled: true` (done for the firearm popup
   country); the CLEO country is locked so its step was removed. Applicant address/phone/email are prefilled.
-- **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay). Only the
-  "White" option text has been verified live; other races in the wizard list are the standard category names.
+- **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay, stays open
+  while ticking). `atf.RACES` = eForms' 8 options (uppercase there; list seen in a user's screenshot 2026-11-20).
+  Settings `race` = a string (one) or a list (several; wizard `ui._race` checklist); `atf.races(person)` reads either
+  and fixes the pre-1.5.2 "Alaska Native" spelling (PR #4: it never matched "ALASKAN NATIVE"). The mapping repeats
+  over `rp_races`; `rp_race` = them joined. Only "White" has been filed live.
 - **Photo:** eForms requires a photo for the responsible person (`#photoFile`); the 5320.23 PDF itself doesn't need one.
 - **Fingerprint popup:** attaching the EFT opens an info dialog ("Valid EBTS Package", Ok); the `dismiss_dialog` step
   WAITS (up to 60 s, `value`) for a dialog matching `require`, prints it and clicks Ok. It used to wait a fixed 1.5 s:

@@ -7,7 +7,7 @@ responsible_persons:                      # you first (name/address come from yo
   - title: "Settlor"                      # your title in the trust (typed into eForms as "title of the submitter")
     dob: "MM/DD/YYYY"
     sex: "Male"                           # as the eForms dropdown lists it: Male / Female
-    race: "White"                         # must match the eForms race option text
+    race: "White"                         # an eForms option (Settings lists them); several: ["Hispanic or Latino", "White"]
     place_of_birth: {country: "United States of America", state: "Texas"}
     home_address: {state: "Texas"}        # state of residence
   # other responsible persons in the trust (trust only; Settings > Other responsible persons in the trust), each typed into eForms'
