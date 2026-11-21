@@ -360,7 +360,7 @@ plain CLI, kept for debugging/scripting:
   submitted date, eform_id, no application number, caliber/length only fill gaps; new rows re-sorted. Server: op
   `record_in_process` (API 4; app checks /api/hello api >= 4, else ServerReadOnly "too old"; queued/disapproved only,
   all or nothing, `_loose_inches`). Menu `_in_process_lines` (asks before recording; declining warns that queued ones
-  would be filed again); CLI records them only with `--import-unknown`. Not yet live.
+  would be filed again); CLI records them only with `--import-unknown`. Live 2026-11-21 (a user's first run, 84 in process: imported fine); it printed one "MuPDF error: cannot find object in xref" line per object while trimming (`_keep_first_page` ran before anything switched MuPDF's messages off; 1.6.1: switched off there, page 1 copied with insert_pdf since select() is undone by MuPDF's repair, whole PDF kept if trimming fails).
 - **CLEO notification copies** (added 2026-11-06; optional; files in `out/cleo/`, path via `_cleo_dir()`). The CLEO
   gets the Form 1 and each RP's 5320.23, and **neither shows the serial** (ATF leaves it off the CLEO's copies; so must
   everything made for the CLEO, the packet's cover included). 5320.23: the generator's CLEO copy = ATF's CLEO-copy

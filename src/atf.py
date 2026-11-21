@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.6.0"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.6.1"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -2289,14 +2289,26 @@ def _in_process_dir():
 
 
 def _keep_first_page(pdf):
-    """Cut a downloaded form down to its first page: all that's read from it (item 4, item 9)."""
+    """Cut a downloaded form down to its first page: all that's read from it (item 4, item 9). eForms' submitted
+    PDFs have dangling refs, so MuPDF's messages are switched off here (first live run, 2026-11-21: one "cannot find
+    object in xref" line per object filled the screen; read_approved_pdf switches them off too, but runs after this).
+    If trimming fails or gives no readable page, the whole PDF is kept: a bigger file, nothing lost."""
     import pymupdf
-    doc = pymupdf.open(pdf)
-    if doc.page_count > 1:
-        doc.select([0])
-        data = doc.tobytes(garbage=3, deflate=True)
-        doc.close()
-        Path(pdf).write_bytes(data)
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    try:
+        src = pymupdf.open(pdf)
+        if src.page_count <= 1:
+            return
+        out = pymupdf.open()
+        out.insert_pdf(src, from_page=0, to_page=0)  # not select(): a broken xref makes MuPDF repair, undoing it
+        data = out.tobytes(garbage=3, deflate=True)
+        src.close()
+        check = pymupdf.open("pdf", data)
+        if check.page_count != 1 or not check[0].get_text().strip():
+            return
+    except Exception:
+        return
+    Path(pdf).write_bytes(data)
 
 
 def _tracked_eform_ids():

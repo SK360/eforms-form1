@@ -7,6 +7,18 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.6.1 (2026-11-21)
+
+### Fixed
+- **No more screen full of "MuPDF error: format error: cannot find object in xref" lines** while Check approvals
+  reads Form 1s still in process. They were harmless messages about the PDFs eForms sends, printed while each one was
+  cut down to its first page. They're switched off now, the page is copied in a way that works on those PDFs, and if
+  a PDF can't be cut down it's kept whole.
+
+### Tested
+- Check approvals' in-process search (1.6.0) worked live: a user's forms filed by hand were found and recorded as
+  filed. The fix above is tested on a PDF with the same kind of broken references.
+
 ## 1.6.0 (2026-11-20)
 
 Form 1s filed by hand show up before they're approved.

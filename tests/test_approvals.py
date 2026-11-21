@@ -731,3 +731,39 @@ def test_menu_records_forms_filed_by_hand(configured, dashboard, answers, screen
     status = {r["serial_number"]: r["status"] for r in atf.load_rows()}
     assert status == {"HAND1": "filed", "T401": "filed", "T402": "filed", "T403": "pending", "T404": ""}
     assert "Filed, not approved yet: 4" in out                                                    # HAND1 and T402 now count too
+
+
+def broken_pdf(path, pages=3):
+    """A PDF like eForms' submitted ones: its xref lists objects that aren't there ("cannot find object in xref")."""
+    doc = pymupdf.open()
+    for i in range(pages):
+        doc.new_page().insert_text((72, 72), f"page {i + 1}")
+    spares = [doc.get_new_xref() for _ in range(5)]
+    for x in spares:
+        doc.update_object(x, "<< /Kind /Spare >>")
+    doc.xref_set_key(doc.pdf_catalog(), "Spares", "[" + " ".join(f"{x} 0 R" for x in spares) + "]")
+    raw = doc.tobytes()
+    for x in spares:
+        raw = raw.replace(f"\n{x} 0 obj".encode(), f"\n{x} 0 xbj".encode())
+    path.write_bytes(raw)
+    return path
+
+
+def test_trimming_a_broken_pdf_prints_nothing_and_keeps_page_one(tmp_path, capfd):
+    """First live run (2026-11-21): one "MuPDF error: ... cannot find object in xref" line per object filled the
+    screen while in-process forms were trimmed, and select() could leave all pages after MuPDF's repair."""
+    pymupdf.TOOLS.mupdf_display_errors(True)
+    pdf = broken_pdf(tmp_path / "f.pdf")
+    capfd.readouterr()
+    atf._keep_first_page(pdf)
+    out, err = capfd.readouterr()
+    assert "MuPDF" not in out + err
+    doc = pymupdf.open(pdf)
+    assert doc.page_count == 1 and doc[0].get_text().strip() == "page 1"
+
+
+def test_a_pdf_that_cant_be_trimmed_is_kept_whole(tmp_path):
+    pdf = tmp_path / "f.pdf"
+    pdf.write_bytes(b"%PDF-1.4 not really a pdf")
+    atf._keep_first_page(pdf)
+    assert pdf.read_bytes() == b"%PDF-1.4 not really a pdf"
