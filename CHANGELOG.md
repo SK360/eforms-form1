@@ -7,6 +7,36 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.6.2 (2026-11-21)
+
+### Fixed
+- **Born outside the United States? Setup now asks.** Setup used to assume everyone was born in the US and insisted on
+  a state of birth, which blocked anyone born abroad (on a military base overseas, say). It now asks **Born in the
+  United States?** first. Answer No and it asks for the country of birth instead, picks it in eForms' Birth Country
+  list, and leaves Birth State empty, as eForms allows. This works for you and for each other responsible person
+  in a trust. Type the country as eForms spells it (e.g. GERMANY); if eForms has no such choice, filing stops at that
+  field and names the closest spellings it offers. A 5320.23 template that names a foreign country of birth fills
+  this in for you. Settings saved before this version count as born in the US, as they always did. Thanks to
+  Slingshot1808 for reporting it (#6).
+- **The firearm description is now 100 characters at most.** The Form 1 PDF that eForms has made since about
+  October 2026 prints only the first 100 characters of the description, even though the box on the firearm page
+  takes more. The old default description was 102 characters, so it came out on the form as
+  "...UNTIL A FORM 1 IS APPROV". The new default is 99 characters:
+  "I POSSESS NO PARTS OR PLANS AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL FORM 1 IS APPROVED".
+  Setup won't take a longer one, and filing stops with "Fix these in Settings first" until a longer saved one is
+  shortened. **If you kept the old default, shorten it in Settings > All settings before your next filing** (accept
+  everything else as it is; at the description, type the new one or your own of up to 100 characters). Forms
+  already filed were approved with the cut description. Thanks to An-8pound-Oreck for reporting it (#7).
+- **The description is read back right after it's typed in**, like the serial and length on the verify page. If
+  the box kept anything other than the whole description, nothing is submitted.
+
+### Tested
+- Not yet live: filing with a foreign country of birth (tested on a fake portal page only), and the description
+  read-back on the real firearm page.
+- The cut-off description was traced through approved and in-process Form 1 PDFs: forms filed before eForms changed
+  its PDFs show the full text, and every one since stops at 100 characters. The helper itself types the whole text
+  (checked in the browser it uses).
+
 ## 1.6.1 (2026-11-21)
 
 ### Fixed

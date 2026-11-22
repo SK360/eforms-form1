@@ -164,7 +164,7 @@ person is added to each Form 1 with eForms' "Add Responsible Person", and each o
 1. Each of them makes **their own** template in the generator, the same way as yours (step list above) but with
    **their** details and the **CLEO where they live**, caliber `00`, serial `TEMPLATE`, signed by them.
 2. In `./atf`, **Settings > Other responsible persons in the trust**, choose **Add a responsible person** and drag in
-   their template. Their name, address, email, date of birth and state of birth are read from it (never the SSN);
+   their template. Their name, address, email, date of birth and place of birth are read from it (never the SSN);
    add their title in the trust, fingerprint file and photo. Change or remove them there too.
 3. For each suppressor, their template gets the serial, caliber and filing date stamped like yours (their CLEO line
    is left as they made it). Make sure they agree to that, as you do for your own.

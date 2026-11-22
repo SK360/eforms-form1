@@ -875,7 +875,9 @@ STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
           "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
           "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
           "Washington", "West Virginia", "Wisconsin", "Wyoming"]
-DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
+# 99 characters: the Form 1 PDF eForms makes prints only the first 100 (atf.DESCRIPTION_MAX; the old default
+# was 102 and came out "...UNTIL A FORM 1 IS APPROV", issue #7)
+DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL FORM 1 IS APPROVED"
 
 
 def _race(current):
@@ -936,6 +938,33 @@ def _state(msg, cur):
     v = _a(questionary.autocomplete(msg, choices=STATES, default=upper.get(str(cur or "").upper(), str(cur or "")),
                                     validate=lambda s: s.strip().upper() in upper or "Pick a state from the list"))
     return cur if str(cur or "").upper() == v.strip().upper() else upper[v.strip().upper()]  # unchanged: keep as saved
+
+
+def _birthplace(saved, country, state):
+    """Place of birth: the country (the US, or another for someone born abroad, e.g. on a military base), then the
+    state only for the US (eForms leaves Birth State empty otherwise; issue #6). `country`/`state` = current values."""
+    us = _a(questionary.confirm("Born in the United States?", default=atf.born_in_us({"place_of_birth": {"country": country}})))
+    if us:
+        return {**(saved or {}), "country": "United States of America", "state": _state("State of birth:", state)}
+    cur = "" if atf.born_in_us({"place_of_birth": {"country": country}}) else str(country or "").upper()
+    def ok(s):
+        s = s.strip().upper()
+        if not s:
+            return "Type the country"
+        return ("That's the United States: answer Yes to the question before" if atf.born_in_us({"place_of_birth": {"country": s}})
+                else True)
+    c = _a(questionary.text("Country of birth, as eForms spells it (e.g. GERMANY, KOREA, SOUTH, PHILIPPINES):",
+                            default=cur, validate=ok)).strip().upper()
+    return {**(saved or {}), "country": c, "state": ""}
+
+
+def _description(cur):
+    def ok(s):
+        n = len(s.strip())
+        return (True if 0 < n <= atf.DESCRIPTION_MAX else "Type a description" if not n else
+                f"{n} characters: the Form 1 PDF eForms makes prints only the first {atf.DESCRIPTION_MAX}")
+    return _a(questionary.text(f"Firearm description (the description box on the firearm page, up to {atf.DESCRIPTION_MAX} "
+                               "characters; edit if you like):", default=cur, validate=ok)).strip()
 
 
 def _check_template(others=()):
@@ -1003,8 +1032,7 @@ def _other_rp(p, others):
     p["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                      default=str(get("sex", "Male")).title()))
     p["race"] = _race(get("race"))
-    p["place_of_birth"] = {**(p.get("place_of_birth") or {}), "country": "United States of America",
-                           "state": _state("State of birth:", get("place_of_birth.state"))}
+    p["place_of_birth"] = _birthplace(p.get("place_of_birth"), get("place_of_birth.country"), get("place_of_birth.state"))
     addr = dict(p.get("home_address") or {})
     addr["street"] = _a(questionary.text("Home street address:", default=get("home_address.street"), validate=_need))
     z = _a(questionary.text("Home ZIP:", default=str(get("home_address.zip")), validate=_need))
@@ -1106,8 +1134,8 @@ def settings_flow(first=False):
         rp["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                           default=get("responsible_persons.0.sex", "Male").title()))
         rp["race"] = _race(get("responsible_persons.0.race"))
-        rp["place_of_birth"] = {**(rp.get("place_of_birth") or {}), "country": "United States of America",
-                                "state": _state("State of birth:", get("responsible_persons.0.place_of_birth.state"))}
+        rp["place_of_birth"] = _birthplace(rp.get("place_of_birth"), get("responsible_persons.0.place_of_birth.country"),
+                                           get("responsible_persons.0.place_of_birth.state"))
         rp["home_address"] = {**(rp.get("home_address") or {}),
                               "state": _state("State you live in:", get("responsible_persons.0.home_address.state"))}
         ind = dict(t.get("individual") or {})
@@ -1135,8 +1163,7 @@ def settings_flow(first=False):
         fa["overall_length"] = _a(questionary.text("Default overall length for new suppressors (inches):", default=str(get("firearm.overall_length", "12")),
                                                    validate=lambda s: s.strip().replace(".", "", 1).isdigit() or "A number"))
         fa.pop("manufacturer_code", None)  # no longer a setting: always FMI for a Form 1 (config/mapping.yaml)
-        fa["description"] = _a(questionary.text("Firearm description (the description box on the firearm page; edit if you like):",
-                                                default=get("firearm.description", DEFAULT_DESCRIPTION), validate=_need))
+        fa["description"] = _description(get("firearm.description", DEFAULT_DESCRIPTION))
         con.rule("Files")
         files = dict(t.get("files") or {})
         files["eft"] = _clean_path(_a(questionary.path("Fingerprint file (.eft):", default=get("files.eft"), validate=_file(suffixes=(".eft",)))))

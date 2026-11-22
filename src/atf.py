@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.6.1"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.6.2"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -1327,6 +1327,43 @@ US_STATES = {"AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
              "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
              "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
              "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming"}
+# Place of birth: the portal's Birth Country dropdown spells the US "UNITED STATES OF AMERICA"; Birth State is asked
+# only for it (born abroad, e.g. on a military base: the state stays empty, as eForms allows; issue #6).
+US_COUNTRY = "UNITED STATES OF AMERICA"
+_US_SPELLINGS = {"", US_COUNTRY, "UNITED STATES", "USA", "U.S.A.", "US", "U.S.", "AMERICA"}
+
+
+def born_in_us(person):
+    """True unless the person's place_of_birth names another country (no country = the US: settings saved before
+    1.6.2 always meant it)."""
+    return str(((person or {}).get("place_of_birth") or {}).get("country") or "").strip().upper() in _US_SPELLINGS
+
+
+def birth_country(person):
+    """The Birth Country option to pick in the portal, uppercased as it lists them."""
+    return US_COUNTRY if born_in_us(person) else str(person["place_of_birth"]["country"]).strip().upper()
+
+
+def birth_state(person):
+    """The Birth State option ("" when born outside the US: the portal leaves it empty)."""
+    return str(((person or {}).get("place_of_birth") or {}).get("state") or "").strip().upper() if born_in_us(person) else ""
+
+
+# Firearm description (item 4h): at most 100 characters. The Form 1 PDF eForms has made since about October 2026 prints
+# only the first 100, though the portal's box takes more (the old default, 102 long, came out "...IS APPROV"; issue #7).
+DESCRIPTION_MAX = 100
+
+
+def description_problem(trust):
+    """Why the firearm description is too long, else ""."""
+    desc = str(((trust or {}).get("firearm") or {}).get("description") or "").strip()
+    if len(desc) <= DESCRIPTION_MAX:
+        return ""
+    end = " ".join(desc[:DESCRIPTION_MAX].split()[-4:])
+    return (f"the firearm description is {len(desc)} characters: the Form 1 PDF eForms makes prints only the first "
+            f"{DESCRIPTION_MAX} (it would end \"...{end}\"); shorten it in Settings")
+
+
 STREET_SUFFIXES = {"ST", "STREET", "RD", "ROAD", "AVE", "AVENUE", "AV", "DR", "DRIVE", "BLVD", "LN", "LANE", "WAY", "CT", "COURT",
                    "CIR", "CIRCLE", "PL", "PLACE", "HWY", "HIGHWAY", "PIKE", "PKWY", "PARKWAY", "TER", "TERRACE", "TRL",
                    "TRAIL", "SQ", "LOOP", "RUN", "ROW", "XING", "EXT"}
@@ -1386,6 +1423,10 @@ def read_template(path):
     out.update({f"cleo.address.{k}": v for k, v in addr.items()})
     birth = first(_near(p2, "State of Birth", (20, 250), (0, 15))).upper()
     out["responsible_persons.0.place_of_birth.state"] = next((v for v in US_STATES.values() if v.upper() == birth), "")
+    country = first(_near(p2, "Country of Birth", (20, 250), (0, 15))).upper()  # 9c
+    if country and country not in _US_SPELLINGS:  # born abroad: no state of birth
+        out["responsible_persons.0.place_of_birth.country"] = country
+        out.pop("responsible_persons.0.place_of_birth.state")
     return {k: v for k, v in out.items() if v and not re.search(r"\d{3}-?\d{2}-?\d{4}", v)}
 
 
@@ -2784,8 +2825,7 @@ def races(person):
 
 COMMON_REQUIRED = [
     ("responsible_persons.0.dob", "date of birth"), ("responsible_persons.0.sex", "sex"),
-    ("responsible_persons.0.race", "race"), ("responsible_persons.0.place_of_birth.state", "state of birth"),
-    ("responsible_persons.0.home_address.state", "state of residence"),
+    ("responsible_persons.0.race", "race"), ("responsible_persons.0.home_address.state", "state of residence"),
     ("cleo.department", "CLEO agency"), ("cleo.official", "CLEO official's name"), ("cleo.title", "CLEO official's title"),
     ("cleo.address.street", "CLEO street"), ("cleo.address.zip", "CLEO ZIP"), ("cleo.address.city", "CLEO city"),
     ("cleo.address.county", "CLEO county"), ("cleo.address.state", "CLEO state"),
@@ -2799,7 +2839,7 @@ REQUIRED = TRUST_REQUIRED + COMMON_REQUIRED  # (trust filing; kept for callers t
 # name and address are typed into the portal's "Add Responsible Person" popup. middle_name, suffix, email are optional.
 OTHER_RP_REQUIRED = [
     ("title", "title in the trust"), ("first_name", "first name"), ("last_name", "last name"), ("dob", "date of birth"),
-    ("sex", "sex"), ("race", "race"), ("place_of_birth.state", "state of birth"), ("home_address.street", "street address"),
+    ("sex", "sex"), ("race", "race"), ("home_address.street", "street address"),
     ("home_address.zip", "ZIP"), ("home_address.city", "city"), ("home_address.state", "state of residence"),
     ("eft", "fingerprint file (.eft)"), ("photo", "photo"), ("template", "signed 5320.23 template"),
 ]
@@ -2839,6 +2879,10 @@ def settings_problems(trust=None):
     kind = applicant_type(trust)
     need = COMMON_REQUIRED + (TRUST_REQUIRED if kind == "trust" else [])
     probs = [f"missing {desc} ({path})" for path, desc in need if not str(_get(trust, path) or "").strip()]
+    you = (trust.get("responsible_persons") or [{}])[0]
+    if born_in_us(you) and not birth_state(you):  # born abroad: no state (issue #6)
+        probs.append("missing state of birth (responsible_persons.0.place_of_birth.state)")
+    probs += [description_problem(trust)] if description_problem(trust) else []
     if kind == "individual":
         ans = answers_11(trust)
         blank = [q for q, a in ans.items() if a not in ("No", "Yes")]
@@ -2859,6 +2903,8 @@ def settings_problems(trust=None):
     for n, person in enumerate(other_rps(trust), 2):  # numbered, not named: these lines show on the menu's home screen
         probs += [f"responsible person {n}: missing {desc}" for path, desc in OTHER_RP_REQUIRED
                   if not str(_get(person, path) or "").strip()]
+        if born_in_us(person) and not birth_state(person):
+            probs.append(f"responsible person {n}: missing state of birth")
         for key, desc in (("eft", "fingerprint file"), ("photo", "photo")):
             if person.get(key) and not Path(person[key]).is_file():
                 probs.append(f"responsible person {n}: {desc} not found: {person[key]}")
@@ -3091,7 +3137,7 @@ def _row_context(trust, item):
            "upin": upin(trust),
            "icn": item["serial_number"] if icn_is_serial(trust) else "",
            "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": ", ".join(races(rp)), "rp_races": [{"rp_race": r} for r in races(rp)],
-           "rp_birth_state": rp["place_of_birth"]["state"].upper(),
+           "rp_birth_country": birth_country(rp), "rp_birth_state": birth_state(rp),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),
            "cleo_department": cl["department"], "cleo_official": cl["official"], "cleo_title": cl["title"],
            "cleo_street": cl["address"]["street"], "cleo_zip": str(cl["address"]["zip"]),
@@ -3122,7 +3168,7 @@ def _other_rp_context(person, n, item):
             # dropdowns: the portal lists these uppercased
             "rp_city": addr["city"].upper(), "rp_state": addr["state"].upper(), "rp_residence_state": addr["state"].upper(),
             "rp_dob": person["dob"], "rp_race": ", ".join(races(person)), "rp_races": [{"rp_race": r} for r in races(person)], "rp_sex": person["sex"].upper(),
-            "rp_birth_state": person["place_of_birth"]["state"].upper(),
+            "rp_birth_country": birth_country(person), "rp_birth_state": birth_state(person),
             "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
             "photo_path": person["photo"], "eft_path": person["eft"]}
 
@@ -3276,7 +3322,11 @@ def _pick(loc, val, wait_ms=30000, grace_ms=3000):
         if real and real_since is None:
             real_since = waited
         if waited >= wait_ms or (real_since is not None and waited - real_since >= grace_ms):
-            shown = ", ".join(real[:12]) + (f" and {len(real) - 12} more" if len(real) > 12 else "")
+            import difflib  # a long list (e.g. 250 countries): the nearest spellings say more than the first dozen
+            close = difflib.get_close_matches(val.strip().upper(), [t.upper() for t in real], n=5, cutoff=0.5)
+            close = [next(t for t in real if t.upper() == c) for c in close]
+            shown = (f"closest: {', '.join(close)}; {len(real)} choices in all" if len(real) > 12 and close else
+                     ", ".join(real[:12]) + (f" and {len(real) - 12} more" if len(real) > 12 else ""))
             raise NoSuchOption(f"{val!r} isn't one of the choices on the page"
                                + (f" ({shown})" if real else " (it shows none)"))
         loc.page.wait_for_timeout(250)

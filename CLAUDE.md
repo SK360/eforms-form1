@@ -118,7 +118,7 @@ plain CLI, kept for debugging/scripting:
   Mapping step options `only: trust|individual` (checked before placeholders are filled) and `if_set: <ctx key>`.
   The same RP popup carries the individual's photo, EFT, DOB, birthplace, sex, race (responsible_persons[0] settings).
 - **Other responsible persons** (trust only; `responsible_persons[1:]`, `atf.other_rps()`): each has title, first/middle/
-  last name, suffix (portal "Cadence"), email, dob, sex, race, place_of_birth.state, home_address {street, zip, city,
+  last name, suffix (portal "Cadence"), email, dob, sex, race, place_of_birth {country, state}, home_address {street, zip, city,
   state}, eft, photo, and `template` = their own signed 5320.23 copied to `forms/5320.23_<first-last>.pdf` (on save).
   `stamp_5320(row, when, person=p)` -> `out/5320.23_<serial>.<first-last>.pdf` (serial, caliber, date; NOT their CLEO
   line: item 5 is the CLEO where THEY live); `stamp_all()` = you + them (menu, practice, redate, fill-5320).
@@ -488,10 +488,24 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   are now ignored (only ones mentioning `about: EBTS` are shown) and the user is never asked to close the RP form.
   If no Valid message appears, submitting is refused (see `require`); look at it.
 - **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
-  barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
+  barrel length is hidden for silencers. Citizenship is fixed to US in the mapping. **Place of birth** (issue #6,
+  1.6.2): `place_of_birth: {country, state}`; `atf.born_in_us(person)` = no country or a US spelling (`_US_SPELLINGS`;
+  settings before 1.6.2 always said "United States of America"); `birth_country()` (US = `US_COUNTRY`, else the
+  setting uppercased) and `birth_state()` ("" abroad) feed `rp_birth_country`/`rp_birth_state`; the mapping picks the
+  country and skips `#birthState` (`if_set`) when born abroad, as the portal allows. State of birth is required in
+  `settings_problems` only when born in the US (no longer in COMMON_/OTHER_RP_REQUIRED). The wizard asks "Born in the
+  United States?" (`ui._birthplace`), then the state, else the country as free text (a US spelling is turned away).
+  The portal's country list isn't bundled (captures keep only the first 40 options): a spelling it doesn't offer fails
+  at that step, and `_pick` then names the closest options (difflib) when there are more than 12. `read_template`
+  reads 9c Country of Birth; a foreign one sets the country and drops the state.
 - **Manufacturer code is always `FMI`** for a Form 1 suppressor (fixed in config/mapping.yaml, not a setting).
-  The wizard's default firearm description is "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE
-  ANY PARTS UNTIL A FORM 1 IS APPROVED" (`DEFAULT_DESCRIPTION` in ui.py); users may edit it.
+  **Firearm description: at most `atf.DESCRIPTION_MAX` = 100 characters** (issue #7, 1.6.2). The portal's textarea
+  takes more, but the Form 1 PDF eForms has made since about Oct 2026 (pdf-lib; earlier ones were OpenPDF and printed
+  it whole) prints only the first 100: the old 102-character default came out "...IS APPROV" on every form from then
+  on. The wizard refuses longer ones (`ui._description`); `settings_problems` blocks filing on a longer saved one
+  (`description_problem`, names the last words that would print). The default is now 99 characters (`DEFAULT_DESCRIPTION`
+  in ui.py); users may edit it. The mapping reads `#description` back right after filling it (exact,
+  case-insensitive: the portal uppercases), so a box that kept less is a mismatch and nothing is submitted.
 - **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
   The county is never on the 5320.23, so the wizard's county question is the only empty one when a template is read.
   A value the dropdown doesn't offer = `NoSuchOption` after ~3 s naming the page's choices + the step's `fix` hint

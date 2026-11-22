@@ -185,7 +185,7 @@ RP_PAGE = """<table><tr><td>Settlor</td><td>DOE</td><td><input type="image" id="
     document.querySelector("select[name='city']").add(new Option('SPRINGFIELD')); }
   function saveRp() {
     const rp = {}; for (const id of ['citizenType', 'title', 'firstName', 'middleNameDetail', 'middleName', 'lastName', 'cadence',
-        'emailAddress', 'street', 'zipCode', 'state', 'dateOfBirth', 'birthState', 'stateOfResidence', 'sex']) rp[id] = v(id);
+        'emailAddress', 'street', 'zipCode', 'state', 'dateOfBirth', 'birthCountry', 'birthState', 'stateOfResidence', 'sex']) rp[id] = v(id);
     rp.city = document.querySelector("select[name='city']").value; rp.race = window.races.join(', '); window.races = [];
     rp.files = ['formFile', 'photoFile', 'eftFile'].map(id => document.getElementById(id).files.length);
     window.saved.push(rp);
@@ -225,7 +225,8 @@ def test_adds_another_responsible_person(configured):
     assert bad == [] and saved == [{
         "citizenType": "U.S.CITIZEN", "title": "Co-Trustee", "firstName": "Jane", "middleNameDetail": "INITIAL ONLY",
         "middleName": "Q", "lastName": "Roe", "cadence": "JR", "emailAddress": "jane@example.com", "street": "300 ELM ST",
-        "zipCode": "45503", "state": "OHIO", "city": "SPRINGFIELD", "dateOfBirth": "03/04/1985", "birthState": "OHIO",
+        "zipCode": "45503", "state": "OHIO", "city": "SPRINGFIELD", "dateOfBirth": "03/04/1985",
+        "birthCountry": "UNITED STATES OF AMERICA", "birthState": "OHIO",
         "stateOfResidence": "OHIO", "sex": "FEMALE", "race": "WHITE", "files": [1, 1, 1]}]
     assert [(r["label"], r["ok"], r["private"]) for r in reads] == [
         ("Responsible person 2 (list)", True, True), ("Responsible persons listed", True, False)]

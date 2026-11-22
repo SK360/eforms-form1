@@ -65,9 +65,9 @@ portal:
     - {action: dismiss_dialog, value: "60000", require: "Valid EBTS Package", about: "EBTS"}
     - {action: pause, tag: ssn, note: "Type your SSN into the SSN field yourself (script never enters it)"}
     - {selector: "#dateOfBirth", action: fill, value: "{rp_dob}"}
-    - {selector: "#birthCountry", action: select, value: "UNITED STATES OF AMERICA"}
+    - {selector: "#birthCountry", action: select, value: "{rp_birth_country}", fix: "Check the country of birth in Settings (as eForms spells it)"}
     - {action: wait, value: "800"}   # birthState is disabled until country is chosen
-    - {selector: "#birthState", action: select, value: "{rp_birth_state}"}
+    - {selector: "#birthState", action: select, value: "{rp_birth_state}", if_set: rp_birth_state}   # born abroad: left empty
     - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
     - {selector: "#sex", action: select, value: "{rp_sex}"}
     # race/ethnicity: PrimeNG multiselect, option panel is an overlay (each race in your settings must match an option's
@@ -109,9 +109,9 @@ portal:
         - {selector: "#state", action: select, value: "{rp_state}"}
         - {selector: "select[name='city']", action: select, value: "{rp_city}"}
         - {selector: "#dateOfBirth", action: fill, value: "{rp_dob}"}
-        - {selector: "#birthCountry", action: select, value: "UNITED STATES OF AMERICA"}
+        - {selector: "#birthCountry", action: select, value: "{rp_birth_country}", fix: "Check the country of birth in Settings (as eForms spells it)"}
         - {action: wait, value: "800"}   # birthState is disabled until country is chosen
-        - {selector: "#birthState", action: select, value: "{rp_birth_state}"}
+        - {selector: "#birthState", action: select, value: "{rp_birth_state}", if_set: rp_birth_state}   # born abroad: left empty
         - {selector: "#stateOfResidence", action: select, value: "{rp_residence_state}"}
         - {selector: "#sex", action: select, value: "{rp_sex}"}
         - {selector: "#raceEthnicity .ui-multiselect", action: click}
@@ -161,6 +161,8 @@ portal:
     - {selector: "#unitOfMeasure", action: select, value: "CALIBER"}
     - {selector: "#overallLength", action: fill, value: "{overall_length}"}
     - {selector: "#description", action: fill, value: "{description}"}
+    # read back: what the box kept is what the form says (issue #7: a description cut short went unnoticed)
+    - {selector: "#description", action: expect, label: "Description", value: "{description}", exact: true}
     # #descriptionNotListed stays unchecked
     - {selector: "#nextButton", action: click}
     # --- firearm popup 3: supporting documentation (each entry under docs: in your settings) ---
