@@ -43,12 +43,13 @@ import os
 import re
 from datetime import date, datetime
 import sys
+import time
 from pathlib import Path
 
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.5.0"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.6.3"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -794,10 +795,23 @@ NFA_TYPES = {"SHORT BARRELED RIFLE": ("SBR", "SBRs"), "SHORT BARRELED SHOTGUN": 
 NFA_DEFAULT_TYPE = "SHORT BARRELED RIFLE"
 
 
+def _loose(text):
+    """Letters only, upper case: "Short-barreled rifle" -> "SHORTBARRELEDRIFLE"."""
+    return re.sub(r"[^A-Z]", "", (text or "").upper())
+
+
+def _known_type(text):
+    """The type name (loose form) that `text` contains: SILENCER or one of NFA_TYPES; "" for none."""
+    loose = _loose(text)
+    return next((k for k in ["SILENCER"] + [_loose(t) for t in NFA_TYPES] if k in loose), "")
+
+
 def is_other_nfa(record):
-    """An approved Form 1 for anything but a suppressor. A type that couldn't be read is neither: it gets reported."""
-    kind = (record.get("type") or "").strip().upper()
-    return bool(kind) and "SILENCER" not in kind
+    """An approved Form 1 for anything but a suppressor (a type this tool doesn't know is kept as printed). A type that
+    couldn't be read is neither: it gets reported. Nor is a printed hint in brackets: an older PDF was once read as
+    "(SPECIFY)" and 6 suppressors were saved as other NFA items (2026-11-22)."""
+    kind = " ".join((record.get("type") or "").upper().split())
+    return bool(_loose(kind)) and _known_type(kind) != "SILENCER" and not re.fullmatch(r"\(.*\)", kind)
 
 
 def nfa_short(kind):
@@ -886,6 +900,20 @@ def record_sbrs(records):
         if len(keep) != len(queue):
             save_rows(keep)
     return added
+
+
+def drop_misread_nfa(records):
+    """Take out of data/sbrs.csv the rows whose eForm ID is now read as a SUPPRESSOR: older approvals once read with the
+    type "(SPECIFY)" were saved there (a user's 6, 2026-11-22). Local inventory only (the server has no remove; its
+    rows stay). Returns how many were removed."""
+    if server_settings():
+        return 0
+    sup = {r["eform_id"] for r in records if _known_type(r.get("type")) == "SILENCER" and r.get("eform_id")}
+    rows = load_sbrs()
+    keep = [r for r in rows if not (r.get("eform_id") and r["eform_id"] in sup)]
+    if len(keep) != len(rows):
+        save_sbrs(keep)
+    return len(rows) - len(keep)
 
 
 def approved_pdf_for(row):
@@ -1399,6 +1427,43 @@ US_STATES = {"AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
              "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
              "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
              "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming"}
+# Place of birth: the portal's Birth Country dropdown spells the US "UNITED STATES OF AMERICA"; Birth State is asked
+# only for it (born abroad, e.g. on a military base: the state stays empty, as eForms allows; issue #6).
+US_COUNTRY = "UNITED STATES OF AMERICA"
+_US_SPELLINGS = {"", US_COUNTRY, "UNITED STATES", "USA", "U.S.A.", "US", "U.S.", "AMERICA"}
+
+
+def born_in_us(person):
+    """True unless the person's place_of_birth names another country (no country = the US: settings saved before
+    1.6.2 always meant it)."""
+    return str(((person or {}).get("place_of_birth") or {}).get("country") or "").strip().upper() in _US_SPELLINGS
+
+
+def birth_country(person):
+    """The Birth Country option to pick in the portal, uppercased as it lists them."""
+    return US_COUNTRY if born_in_us(person) else str(person["place_of_birth"]["country"]).strip().upper()
+
+
+def birth_state(person):
+    """The Birth State option ("" when born outside the US: the portal leaves it empty)."""
+    return str(((person or {}).get("place_of_birth") or {}).get("state") or "").strip().upper() if born_in_us(person) else ""
+
+
+# Firearm description (item 4h): at most 100 characters. The Form 1 PDF eForms has made since about October 2026 prints
+# only the first 100, though the portal's box takes more (the old default, 102 long, came out "...IS APPROV"; issue #7).
+DESCRIPTION_MAX = 100
+
+
+def description_problem(trust):
+    """Why the firearm description is too long, else ""."""
+    desc = str(((trust or {}).get("firearm") or {}).get("description") or "").strip()
+    if len(desc) <= DESCRIPTION_MAX:
+        return ""
+    end = " ".join(desc[:DESCRIPTION_MAX].split()[-4:])
+    return (f"the firearm description is {len(desc)} characters: the Form 1 PDF eForms makes prints only the first "
+            f"{DESCRIPTION_MAX} (it would end \"...{end}\"); shorten it in Settings")
+
+
 STREET_SUFFIXES = {"ST", "STREET", "RD", "ROAD", "AVE", "AVENUE", "AV", "DR", "DRIVE", "BLVD", "LN", "LANE", "WAY", "CT", "COURT",
                    "CIR", "CIRCLE", "PL", "PLACE", "HWY", "HIGHWAY", "PIKE", "PKWY", "PARKWAY", "TER", "TERRACE", "TRL",
                    "TRAIL", "SQ", "LOOP", "RUN", "ROW", "XING", "EXT"}
@@ -1458,6 +1523,10 @@ def read_template(path):
     out.update({f"cleo.address.{k}": v for k, v in addr.items()})
     birth = first(_near(p2, "State of Birth", (20, 250), (0, 15))).upper()
     out["responsible_persons.0.place_of_birth.state"] = next((v for v in US_STATES.values() if v.upper() == birth), "")
+    country = first(_near(p2, "Country of Birth", (20, 250), (0, 15))).upper()  # 9c
+    if country and country not in _US_SPELLINGS:  # born abroad: no state of birth
+        out["responsible_persons.0.place_of_birth.country"] = country
+        out.pop("responsible_persons.0.place_of_birth.state")
     return {k: v for k, v in out.items() if v and not re.search(r"\d{3}-?\d{2}-?\d{4}", v)}
 
 
@@ -1767,7 +1836,8 @@ def read_approved_pdf(path):
     ignored (in eForms' PDFs labels are TimesNewRomanPSMT; typed values are Helvetica, the serial "TimesNewRoman")."""
     import pymupdf
     pymupdf.TOOLS.mupdf_display_errors(False)  # newer eForms PDFs have dangling refs ("cannot find object in xref"): harmless
-    page = pymupdf.open(path)[0]
+    # Opened from bytes, so no file handle stays open (Windows can't rename or replace an open file).
+    page = pymupdf.open("pdf", Path(path).read_bytes())[0]
     spans = [sp for blk in page.get_text("dict")["blocks"] for ln in blk.get("lines", []) for sp in ln["spans"] if sp["text"].strip()]
     label_fonts = {sp["font"] for sp in spans if re.search(r"Serial number|Caliber or gauge|Overall length|Type of firearm", sp["text"])}
 
@@ -1777,6 +1847,7 @@ def read_approved_pdf(path):
             return ""
         lab = hits[0]
         vals = sorted((sp for sp in spans if sp["font"] not in label_fonts and "Zapf" not in sp["font"]
+                       and not re.fullmatch(r"\(.*\)", sp["text"].strip())  # printed hints like "(Specify)", never values
                        and dx[0] <= sp["bbox"][0] - lab.x0 <= dx[1] and dy[0] <= sp["bbox"][1] - lab.y0 <= dy[1]),
                       key=lambda sp: (sp["bbox"][1], sp["bbox"][0]))
         return " ".join(sp["text"].strip() for sp in vals)
@@ -1787,9 +1858,11 @@ def read_approved_pdf(path):
     line_y = dis[0].y0 if dis else None
     approved = [h for h in page.search_for("Approved") if line_y is not None and abs(h.y0 - line_y) < 4 and h.x0 < dis[0].x0 - 30]
 
-    def ticked(hits):  # ZapfDingbats check glyph just left of the label (only drawn when the box is ticked)
-        return bool(hits) and any("Zapf" in sp["font"] and 0 < hits[0].x0 - sp["bbox"][0] < 20 and abs(sp["bbox"][1] - hits[0].y0) < 8
-                                  for sp in spans)
+    def ticked(hits):  # a mark just left of the label, only drawn when the box is ticked: a ZapfDingbats check (newer
+        # approvals) or a bold "X" (the Sept 2007 form of older approvals: a user's, 2026-11-22, all read as not ticked)
+        return bool(hits) and any(("Zapf" in sp["font"] and 0 < hits[0].x0 - sp["bbox"][0] < 20
+                                   or sp["text"].strip() in ("X", "x") and 0 < hits[0].x0 - sp["bbox"][0] < 30)
+                                  and abs(sp["bbox"][1] - hits[0].y0) < 8 for sp in spans)
     below = (lambda h: h.y0 > line_y + 30) if line_y is not None else None
     # Item 9: "9. Date" right of the applicant's signature = the day it was signed, which in eForms is the day it was
     # submitted (checked on saved approvals 2026-11-05: the same day as the filing log for every one filed by this tool).
@@ -1800,12 +1873,23 @@ def read_approved_pdf(path):
         last = [ln.strip() for ln in page.parent[-1].get_text().splitlines() if ln.strip()]
         cut = next((i for i, ln in enumerate(last) if ln.lower() == "approval conditions"), len(last))
         conditions = " ".join(last[:cut]) or "see the last page of the PDF"
-    return {"type": value("Type of firearm", (-60, 120), (20, 40)), "serial": value("g. Serial number", (-10, 120), (5, 22)),
-            "caliber": value("c. Caliber or gauge", (-10, 75), (20, 40)), "model": value("d. Model", (-10, 60), (5, 20)),
-            "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)), "overall_length": value("Overall length", (-15, 50), (5, 22)),
+    kind = value("Type of firearm", (-60, 120), (20, 40))
+    if not _known_type(kind):
+        # Older approvals (a user's, 2026-11-22: 6-digit eForm IDs) lay item 4 out differently: the type came out as
+        # "(SPECIFY)", so 6 suppressors were listed as other NFA items. The typed type is the only span on page 1 that is
+        # exactly a type name in capitals; the printed text spells them in lower case.
+        kind = next((sp["text"].strip() for sp in spans if _known_type(sp["text"]) and sp["text"].strip().isupper()
+                     and _known_type(sp["text"]) == _loose(sp["text"])), kind)
+    return {"type": kind, "serial": value("g. Serial number", (-10, 120), (5, 22)),
+            # The Sept 2007 form (older approvals) labels these "c. Caliber, / Gauge or / Size", "e. Of Barrel:" and
+            # "f. Overall:"; its caliber sits ~58 pt below the label, under the printed "(Specify)", in a ~50 pt column.
+            "caliber": value("c. Caliber or gauge", (-10, 75), (20, 40)) or value("c. Caliber,", (-10, 45), (35, 78)),
+            "model": value("d. Model", (-10, 60), (5, 20)),
+            "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)) or value("e. Of Barrel:", (-10, 50), (5, 25)),
+            "overall_length": value("Overall length", (-15, 50), (5, 22)) or value("f. Overall:", (-10, 50), (5, 25)),
             "approved": ticked(approved) and not ticked(dis),
             "approval_date": _mmddyyyy(value("Date", (-5, 80), (2, 20), pick=below)), "conditions": conditions,
-            "filed_date": _us_date(value("Date", (-5, 80), (2, 20), pick=item9)),
+            "filed_date": _us_date(value("Date", (-12, 80), (2, 20), pick=item9)),  # 2007 form: "9. Date" is one label
             "pdf_control_number": next((m.group(1) for pg in page.parent for m in [re.search(r"Control\s*Number:\s*(\d{10,11})\b", pg.get_text())] if m), "")}
 
 
@@ -1830,22 +1914,30 @@ _READ_BLOB_JS = """async () => { const b = window.__atfLastBlob; window.__atfLas
   return btoa(s); }"""
 
 
-# Text of each result row, whatever the table markup: climb from each "View Form" button to the smallest ancestor that
-# holds exactly one "View Form" button and a 7+ digit number (the eForm ID). Each button is tagged data-atf-row=<i>
-# (in this browser only) so the click below hits exactly that row's button.
+# Each result row, whatever the table markup: climb from each "View Form" button to the smallest ancestor that holds
+# exactly one "View Form" button and is a table row, holds the row's eForm ID link (`eformId-link`) or a 7+ digit
+# number. Returns {text, id}: id = that link's text ("" without one). Each button is tagged data-atf-row=<i> (in this
+# browser only) so the click below hits exactly that row's button.
 _ROW_TEXTS_JS = """() => {
   const shown = e => e.getClientRects().length > 0;  // hidden elements still report their text, so check visibility
   const views = root => [...root.querySelectorAll('button')].filter(b => shown(b) && b.innerText.trim() === 'View Form');
+  const link = el => el.querySelector('[id="eformId-link"]');
   document.querySelectorAll('[data-atf-row]').forEach(b => b.removeAttribute('data-atf-row'));
   return views(document).map((b, i) => {
     b.setAttribute('data-atf-row', i); let el = b;
-    while (el.parentElement && !(/\\d{7}/.test(el.innerText) && views(el).length === 1)) el = el.parentElement;
-    return el.innerText; }); }"""
+    while (el.parentElement && !((el.tagName === 'TR' || link(el) || /\\d{7}/.test(el.innerText)) && views(el).length === 1))
+      el = el.parentElement;
+    const a = link(el);
+    return {text: el.innerText, id: a ? a.innerText.trim() : ''}; }); }"""
 
 
-def _parse_result_row(text):
-    """eForm ID (7-8 digits), Permit/Control number (10 digits on older forms, 11 on newer), finalized date (last of 3)."""
-    eid = re.search(r"(?<!\d)\d{7,8}(?!\d)", text)
+def _parse_result_row(row):
+    """eForm ID, Permit/Control number (10 digits on older forms, 11 on newer), finalized date (last of 3). `row` =
+    {text, id} from _ROW_TEXTS_JS (or plain text). The ID is the row's ID link, any length (older forms have 6 digits:
+    live 2026-11-22, only 7-8 were read); without a link, a 7-8 digit number in the text (not shorter: a serial in the
+    Internal Control Number column, e.g. TD261122, has 6 digits in a row)."""
+    text, link = (row.get("text") or "", row.get("id") or "") if isinstance(row, dict) else (row, "")
+    eid = re.fullmatch(r"\d{4,9}", link) or re.search(r"(?<!\d)\d{7,8}(?!\d)", text)
     if not eid:
         return None
     control = re.search(r"(?<!\d)\d{10,11}(?!\d)", text)
@@ -1854,29 +1946,48 @@ def _parse_result_row(text):
             "submitted": dates[1] if len(dates) > 1 else ""}
 
 
-def _approved_results(page, page_no=1, search=True, status="APPROVED"):
+RESULTS_PER_PAGE = 10  # the eForms results table's rows per page (its "10" box); fewer = the last page, or still drawing
+
+
+def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
     """Search Form 1 + APPROVED (or `status`; search=False: stay on the results page shown), go to results page `page_no`;
     returns (total rows, [{eform_id, control_number, finalized}]). Search only from a home page WITHOUT results: a
-    table still showing is read as the new results, and the search coming back then resets it to page 1."""
+    table still showing is read as the new results, and the search coming back then resets it to page 1. `wait`:
+    seconds to wait for result rows (an empty search looks the same as a slow one until then)."""
     def rows():
         return [r for r in (_parse_result_row(t) for t in page.evaluate(_ROW_TEXTS_JS)) if r]
+
+    def settle():
+        # A precaution, not seen live: if a slow PC drew the table row by row, a read at the first row would come up
+        # short (now a problem line). Read until a full page shows, or the rows are unchanged for 0.5 s. (A user's
+        # "7 approved Form 1(s) on 7 page(s)", 2026-11-22, was 6-digit eForm IDs, not this.)
+        nonlocal current
+        same = 0
+        for _ in range(40):
+            if not current or len(current) >= RESULTS_PER_PAGE or same >= 2:
+                break
+            page.wait_for_timeout(250)
+            now = rows()
+            same = same + 1 if [r["eform_id"] for r in now] == [r["eform_id"] for r in current] else 0
+            current = now
     current = rows()
     if search:
         page.locator("#form-type-search").select_option(label="ATF Form 1 (5320.1)")
         page.locator("#form-status-search").select_option(label=status)
         _safe_click(page.locator("#queryBtn"), "Search")
         # The home page already shows an empty table ("Total Rows: 0") before any search, and results arrive a moment
-        # after Search: wait for result rows rather than for the text (up to 30 s; then there really are none).
+        # after Search: wait for result rows rather than for the text (up to `wait` s; then there really are none).
         current = rows()
-        for _ in range(120):
+        for _ in range(int(wait * 4)):
             if current:
                 break
             page.wait_for_timeout(250)
             current = rows()
+        settle()
     total = int((re.search(r"Total Rows:\s*(\d+)", page.inner_text("body")) or [0, 0])[1])
     if total and not current:
         raise RuntimeError(f"eForms says {total} {status.lower()} form(s) but no result rows could be read; the page layout "
-                           "may have changed (use Advanced > Capture portal pages)")
+                           f"may have changed{_save_row_shapes(page, status)}")
     def click(loc, expected):
         nonlocal current
         first = current[0]["eform_id"] if current else ""
@@ -1886,6 +1997,7 @@ def _approved_results(page, page_no=1, search=True, status="APPROVED"):
             current = rows()
             if current and current[0]["eform_id"] != first:
                 break
+        settle()
 
     # The paginator shows only some page numbers (live 2026-10-19: "6" of 7 never showed up). Click the target when
     # shown; else the highest shown number below it; else the icon-only arrow right after the numbers (next).
@@ -1933,6 +2045,38 @@ _PAGER_JS = """() => {
   const off = nxt && /disabled/i.test((nxt.className || '') + ' ' + ((nxt.parentElement || {}).className || '') + (nxt.getAttribute('aria-disabled') || ''));
   if (nxt && !off) nxt.setAttribute('data-atf-next', '1');
   return {nums, current, next: !!(nxt && !off), html: box.outerHTML.slice(0, 20000)}; }"""
+
+
+# What each shown table row looks like, WITHOUT its values (users send these files): the ID link's length, the
+# lengths of its digit groups, its visible button labels. For results rows that couldn't be read.
+_ROW_SHAPES_JS = """() => {
+  const shown = e => e.getClientRects().length > 0;
+  return [...document.querySelectorAll('tr')].filter(shown).map(tr => {
+    const a = tr.querySelector('[id="eformId-link"]'), all = [...tr.querySelectorAll('button')];
+    const runs = (tr.innerText.match(/\\d+/g) || []).map(d => d.length);
+    const buttons = all.filter(shown).map(b => b.innerText.trim().replace(/\\d/g, '#').slice(0, 30));
+    const hidden = all.length - all.filter(shown).length;
+    return 'ID link: ' + (a ? a.innerText.trim().length + ' characters' : 'none') + '; digit groups (lengths): '
+      + (runs.join(' ') || 'none') + '; buttons: ' + (buttons.join(', ') || 'none') + (hidden ? ' (+' + hidden + ' hidden)' : '');
+  }).filter(s => !/^ID link: none; digit groups \\(lengths\\): none; buttons: none$/.test(s)); }"""
+
+
+def _save_row_shapes(page, status):
+    """Save _ROW_SHAPES_JS's lines for debugging; returns ' (... saved in ...)' or ''."""
+    try:
+        lines = page.evaluate(_ROW_SHAPES_JS)
+        f = OUT / f"results_rows_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        f.write_text(f"Check approvals, {status.lower()}: what each table row on the page looks like, without its values\n"
+                     "(lengths and button labels only; nothing personal).\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        return f" (what the rows look like, without their values, is saved in {f})"
+    except Exception:
+        return ""
+
+
+def _page_count(total, rows):
+    """Results pages for `total` forms. eForms shows RESULTS_PER_PAGE a page; page 1's rows count only when more (a
+    short read must not make more pages: live 2026-11-22, 1 of 7 rows read = "7 page(s)")."""
+    return -(-total // max(len(rows), RESULTS_PER_PAGE))
 
 
 def _save_pager(page):
@@ -2041,7 +2185,7 @@ def save_form1_cleo(pdf, eform_id, index):
     """Keep the CLEO-copy pages of a submitted form's PDF as out/cleo/Form1_<serial>.cleo.pdf. Returns the serial."""
     import pymupdf
     serial = (read_approved_pdf(pdf)["serial"] or "").strip()  # item 4g of the ATF copy (page 1; same layout)
-    doc = pymupdf.open(pdf)
+    doc = pymupdf.open("pdf", Path(pdf).read_bytes())  # no open file handle: the file is deleted next
     pages = _cleo_pages(doc)
     if not pages:
         raise RuntimeError("its PDF has no CLEO copy pages")
@@ -2075,7 +2219,7 @@ def _fetch_form1_cleo(page, ctx, wanted):
     dates = {_us_date(d) for s, d in wanted.items() if s.upper() in need}
     _go_home(page, reload=True)  # a home page without results: Search only from there
     total, rows = _approved_results(page, status=SUBMITTED)
-    pages = -(-total // max(len(rows), 1))
+    pages = _page_count(total, rows)
     for n in range(1, pages + 1):
         if not need:
             break
@@ -2260,6 +2404,19 @@ def _save_approved_index(folder, index):
         w.writerows(sorted(index.items(), key=lambda kv: serial_key(kv[1])))
 
 
+def _replace(src, dest, tries=6):
+    """src.replace(dest), retried for a few seconds on Windows' "Access is denied" (WinError 5: a virus scanner or a
+    PDF viewer holding a file for a moment; a user's run, 2026-11-22). The last failure is raised, naming the file."""
+    for i in range(tries):
+        try:
+            return src.replace(dest)
+        except PermissionError as e:
+            if i == tries - 1:
+                raise PermissionError(f"couldn't save {dest.name} in {dest.parent} (is it open in a PDF viewer? close it and "
+                                      f"run Check approvals again): {e.strerror or e}") from None
+            time.sleep(0.5 * (i + 1))
+
+
 def _file_by_serial(folder, index, eform_id, pdf):
     """Rename a downloaded approval PDF to <serial>.pdf (A101.pdf; A101_2.pdf if that serial already has another
     form; eForm-<id>.pdf if the serial can't be read) and record it in the index. Returns the new path."""
@@ -2274,7 +2431,7 @@ def _file_by_serial(folder, index, eform_id, pdf):
         name, n = f"{base}_{n}.pdf", n + 1
     dest = folder / name
     if Path(pdf) != dest:
-        Path(pdf).replace(dest)
+        _replace(Path(pdf), dest)
     index[eform_id] = name
     return dest
 
@@ -2291,54 +2448,187 @@ def _migrate_approved_names(folder):
     return index
 
 
-def fetch_approved():
+# Form 1s ATF didn't approve, by eForms' "Form Status" search. Disapproved and returned without action are finished:
+# the serial has to be filed again (a new application). Returned for correction is reported only.
+NOT_APPROVED = ("DISAPPROVED", "RETURNED WITHOUT ACTION", "RETURNED FOR CORRECTION")
+CORRECTION = "RETURNED FOR CORRECTION"
+# These searches usually find nothing, and an empty result can't be told from a slow one: wait less than for approvals.
+NOT_APPROVED_WAIT = 15
+
+
+def _not_approved_dir(status):
+    """out/not-approved/<status>/ (e.g. returned-without-action), resolved at call time."""
+    return OUT / "not-approved" / re.sub(r"[^a-z]+", "-", status.lower()).strip("-")
+
+
+def fetch_approved(others=None, in_process=None):
     """READ-ONLY: list approved Form 1s on eForms and save each one's PDF to out/approved/<serial>.pdf (already
-    saved ones are skipped). Returns (results rows found, problems). Logs out at the end, whatever happens."""
+    saved ones are skipped). Returns (results rows found, problems). Logs out at the end, whatever happens.
+    `in_process` (a list): also search SUBMITTED/IN PROCESS (forms filed by hand outside this tool are found only
+    there until they're approved; `_fetch_in_process`) and add those result rows to it.
+    `others` (a list): while any suppressor is filed or pending, also search each NOT_APPROVED status, save those
+    PDFs to out/not-approved/<status>/ and add their result rows (with "status") to it."""
     folder = OUT / "approved"
     folder.mkdir(parents=True, exist_ok=True)
-    index = _migrate_approved_names(folder)
     found, problems = [], []
     pw, ctx, page = _browser()
     try:
         page = _wait_for_login(page, "Log in (MFA included) and wait for the eForms home page, then press Enter. From here the script only reads... ")
-        emit("section", "--- Searching approved Form 1s ---", name="Searching approved Form 1s")
-        total, rows = _approved_results(page)
-        pages = -(-total // max(len(rows), 1))
-        emit("info", f"{total} approved Form 1(s) on {pages} page(s)")
-        for n in range(1, pages + 1):
+        _fetch_status(page, ctx, "APPROVED", folder, found, problems)
+        if in_process is not None:
+            before = len(problems)
             try:
-                if n > 1:
-                    emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
-                    _, rows = _results_page(page, n, search=False)  # on from page n-1, which is showing
-                _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems)
-            except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
-                msg = f"stopped at results page {n} of {pages}: {str(e).splitlines()[0]}"
-                problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
-                emit("error", msg)  # ✖ on the section instead of a later ✔
-                seen = {r["eform_id"] for r in found}
-                found += [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
-                          for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
-                          if eid not in seen and (folder / name).exists()]
-                break
+                _go_home(page, reload=True)  # never Search while results show
+                _fetch_in_process(page, ctx, in_process, problems)
+            except Exception as e:  # the approvals above are kept whatever happens here
+                if len(problems) == before:
+                    problems.append(f"couldn't search submitted/in process Form 1s: {str(e).splitlines()[0]}")
+                emit("error", "couldn't search submitted/in process Form 1s")
+        if others is not None and _anything_waiting():
+            for status in NOT_APPROVED:
+                before = len(problems)
+                try:
+                    _go_home(page, reload=True)  # never Search while results show
+                    sub = _not_approved_dir(status)
+                    sub.mkdir(parents=True, exist_ok=True)
+                    got = []
+                    _fetch_status(page, ctx, status, sub, got, problems, wait=NOT_APPROVED_WAIT)
+                    others += [{**r, "status": status} for r in got]
+                except Exception as e:  # the approvals above are kept whatever happens here
+                    if len(problems) == before:
+                        problems.append(f"couldn't search {status.lower()} Form 1s: {str(e).splitlines()[0]}")
+                    emit("error", f"couldn't search {status.lower()} Form 1s")
     finally:
         _shutdown(page, ctx, pw)
     return found, problems
 
 
-def _results_page(page, n, search=True, status="APPROVED"):
+def _anything_waiting():
+    """Is any suppressor filed or pending (the only ones a disapproval can be for)? False if the inventory can't be read."""
+    try:
+        return any(r["status"] in ("filed", "pending") for r in load_rows())
+    except Exception:
+        return False
+
+
+def _in_process_dir():
+    """out/in-process/: page 1 (the ATF copy's item 4 and item 9) of each submitted form opened, resolved at call time."""
+    return OUT / "in-process"
+
+
+def _keep_first_page(pdf):
+    """Cut a downloaded form down to its first page: all that's read from it (item 4, item 9). eForms' submitted
+    PDFs have dangling refs, so MuPDF's messages are switched off here (first live run, 2026-11-21: one "cannot find
+    object in xref" line per object filled the screen; read_approved_pdf switches them off too, but runs after this).
+    If trimming fails or gives no readable page, the whole PDF is kept: a bigger file, nothing lost."""
+    import pymupdf
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    try:
+        src = pymupdf.open("pdf", Path(pdf).read_bytes())  # no open file handle (Windows renames it next)
+        if src.page_count <= 1:
+            return
+        out = pymupdf.open()
+        out.insert_pdf(src, from_page=0, to_page=0)  # not select(): a broken xref makes MuPDF repair, undoing it
+        data = out.tobytes(garbage=3, deflate=True)
+        src.close()
+        check = pymupdf.open("pdf", data)
+        if check.page_count != 1 or not check[0].get_text().strip():
+            return
+    except Exception:
+        return
+    Path(pdf).write_bytes(data)
+
+
+def _tracked_eform_ids():
+    """eForm IDs of submitted forms already in your records, so they're not opened again: a row's own eForm ID (an
+    approval, or a form filed by hand and recorded from in process), and forms whose CLEO copy was saved
+    (out/cleo/form1_index.csv) for a serial that is filed, pending or approved here."""
+    try:
+        rows = load_rows()
+    except Exception:
+        return set()
+    status = {r["serial_number"].strip().upper(): r["status"] for r in rows}
+    ids = {r["eform_id"] for r in rows if r["eform_id"]}
+    return ids | {e for e, s in _form1_index().items() if status.get(s.strip().upper()) in ("filed", "pending", "approved")}
+
+
+def _fetch_in_process(page, ctx, in_process, problems):
+    """READ-ONLY: search SUBMITTED/IN PROCESS and save page 1 of each form not opened before and not already in your
+    records to out/in-process/<serial>.pdf (own index.csv), adding those result rows to `in_process`. Files of forms
+    no longer in process are removed once every results page was read (their approval is in out/approved/)."""
+    folder = _in_process_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    listed = set()
+    complete = _fetch_status(page, ctx, SUBMITTED, folder, in_process, problems, skip=_tracked_eform_ids(), first_page=True,
+                             seen=listed, wait=30 if _anything_waiting() else NOT_APPROVED_WAIT)
+    if complete:
+        index = _approved_index(folder)
+        gone = {e: n for e, n in index.items() if e not in listed}
+        for name in gone.values():
+            try:
+                (folder / name).unlink()
+            except OSError:
+                pass
+        if gone:
+            _save_approved_index(folder, {e: n for e, n in index.items() if e not in gone})
+
+
+def _fetch_status(page, ctx, status, folder, found, problems, wait=30, skip=frozenset(), first_page=False, seen=None):
+    """Search Form 1s with this status and save each result's PDF into `folder` (by serial, with its index.csv;
+    already saved ones are skipped), page after page. Adds the result rows (with "pdf") to `found`. `skip`: eForm IDs
+    neither opened nor added; `first_page`: keep only page 1 of each PDF; `seen` (a set): gets every eForm ID listed.
+    Returns True if every results page was read."""
+    index = _migrate_approved_names(folder)
+    label = status.lower()
+    emit("section", f"--- Searching {label} Form 1s ---", name=f"Searching {label} Form 1s")
+    total, rows = _approved_results(page, status=status, wait=wait)
+    pages, per, complete = _page_count(total, rows), max(len(rows), RESULTS_PER_PAGE), True
+    emit("info", f"{total} {label} Form 1(s) on {pages} page(s)")
+    which = "" if status == "APPROVED" else f"{label} "
+    for n in range(1, pages + 1):
+        try:
+            if n > 1:
+                emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
+                _, rows = _results_page(page, n, search=False, status=status, wait=wait)  # on from page n-1, which is showing
+            listed = min(per, total - (n - 1) * per)
+            if len(rows) < listed:  # rows eForms shows that can't be read: say so (and seen is incomplete)
+                complete = False
+                msg = (f"{which}results page {n}: eForms lists {listed} form(s), only {len(rows)} could be read"
+                       f"{_save_row_shapes(page, status)}")
+                problems.append(msg)
+                emit("error", msg)
+            if seen is not None:
+                seen.update(r["eform_id"] for r in rows)
+            _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems, status, wait, skip, first_page)
+        except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
+            msg = f"stopped at {which}results page {n} of {pages}: {str(e).splitlines()[0]}"
+            problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
+            emit("error", msg)  # ✖ on the section instead of a later ✔
+            have = {r["eform_id"] for r in found}
+            found += [{"eform_id": eid, "control_number": "", "finalized": "", "pdf": str(folder / name)}
+                      for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
+                      if eid not in have and eid not in skip and (folder / name).exists()]
+            return False
+    return complete
+
+
+def _results_page(page, n, search=True, status="APPROVED", wait=30):
     """Results page n (search=False: page on from the results shown), starting over from a freshly loaded home page
     once if it fails."""
     try:
-        return _approved_results(page, n, search, status)
+        return _approved_results(page, n, search, status, wait)
     except Exception as e:
         emit("step", f"results page {n} didn't load ({str(e).splitlines()[0]}); trying once more")
         _go_home(page, reload=True)
-        return _approved_results(page, n, status=status)
+        return _approved_results(page, n, status=status, wait=wait)
 
 
-def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
-    """Save the PDF of every row on results page n that isn't saved yet."""
+def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems, status="APPROVED", wait=30, skip=frozenset(),
+                     first_page=False):
+    """Save the PDF of every row on results page n that isn't saved yet (nor in `skip`)."""
     for row in rows:
+        if row["eform_id"] in skip:
+            continue
         known = index.get(row["eform_id"])
         if known and (folder / known).exists():  # saved on an earlier run
             found.append({**row, "pdf": str(folder / known)})
@@ -2347,6 +2637,8 @@ def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
         try:
             tmp = folder / f".{row['eform_id']}.part.pdf"
             _fetch_form_pdf(page, ctx, row, tmp)
+            if first_page:
+                _keep_first_page(tmp)
             dest = _file_by_serial(folder, index, row["eform_id"], tmp)
             _save_approved_index(folder, index)
             found.append({**row, "pdf": str(dest)})
@@ -2355,7 +2647,7 @@ def _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems):
             problems.append(f"eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
             emit("warn", f"could not get the PDF for eForm …{row['eform_id'][-4:]}: {str(e).splitlines()[0]}")
         _go_home(page)
-        _results_page(page, n)  # back to the same results page for the next row
+        _results_page(page, n, status=status, wait=wait)  # back to the same results page for the next row
 
 
 def read_approved(found=None):
@@ -2426,6 +2718,123 @@ def apply_approvals(records, import_unknown=False):
     return updated, added
 
 
+def not_approved_report(records, rows):
+    """Form 1s eForms lists as DISAPPROVED, RETURNED WITHOUT ACTION or RETURNED FOR CORRECTION (read_approved of
+    fetch_approved's `others`), matched with your suppressors by serial. A form counts only for a row that is filed or
+    pending, and only if it is that row's CURRENT filing: signed (item 9; else the results list's submitted date) on or
+    after the row's filed date. An older form of a serial that was filed again since is left alone (eForms keeps
+    listing it). Returns {"disapproved": [(row, rec)] (to be marked disapproved: re-file them), "correction":
+    [(row, rec)] (ATF wants changes; nothing is marked), "unsure": [(row, rec)] (a date is missing; nothing is marked)}."""
+    mine = {r["serial_number"].strip().upper(): r for r in rows}
+    rep = {"disapproved": [], "correction": [], "unsure": []}
+    for rec in sorted(records, key=lambda r: serial_key(r["serial"])):
+        row = mine.get(rec["serial"].strip().upper()) if rec["serial"].strip() and not is_other_nfa(rec) else None
+        if row is None or row["status"] not in ("filed", "pending"):
+            continue
+        signed, filed = _date(rec.get("filed_date")) or _date(rec.get("submitted")), _date(row["filed_date"])
+        if signed is None or filed is None:
+            rep["unsure"].append((row, rec))
+        elif signed >= filed:
+            rep["correction" if rec["status"] == CORRECTION else "disapproved"].append((row, rec))
+    return rep
+
+
+def record_disapprovals(serials):
+    """Mark these suppressors disapproved (only while filed or pending), so Advanced > Re-file offers them. Returns
+    the serials changed."""
+    rows = load_rows()
+    by = {r["serial_number"].strip().upper(): r for r in rows}
+    todo = list(dict.fromkeys(by[s.strip().upper()]["serial_number"] for s in serials
+                              if s.strip().upper() in by and by[s.strip().upper()]["status"] in ("filed", "pending")))
+    if not todo:
+        return []
+    if server_settings():
+        _server_op("record_approvals", {"updates": [{"serial": s, "fields": {"status": "disapproved"}} for s in todo], "added": []})
+        return todo
+    for s in todo:
+        by[s.strip().upper()]["status"] = "disapproved"
+    save_rows(rows)
+    return todo
+
+
+def in_process_report(records, rows):
+    """Submitted/in-process Form 1s (read_approved of fetch_approved's `in_process`) compared with your records by
+    serial: forms filed by hand outside this tool show up here long before they're approved. Returns
+    {"unknown": [rec] (suppressors not in your records: add them as filed), "queued": [(row, rec)] (queued or
+    disapproved here but already submitted on eForms: filing them would file them twice; mark them filed),
+    "pending": [(row, rec)] (pending here and in process on eForms: Resolve them as filed), "duplicates": [serial]
+    (on more than one in-process form; left out of the above), "other": [rec] (other NFA types: listed once approved),
+    "unreadable": [rec] (no type or serial could be read)}. Forms of serials already filed or approved here are left out."""
+    from collections import Counter
+    mine = {r["serial_number"].strip().upper(): r for r in rows}
+    rep = {"unknown": [], "queued": [], "pending": [], "duplicates": [], "other": [], "unreadable": []}
+    sup = []
+    for rec in records:
+        if is_other_nfa(rec):
+            rep["other"].append(rec)
+        elif "SILENCER" in rec["type"].upper() and rec["serial"].strip():
+            sup.append(rec)
+        else:
+            rep["unreadable"].append(rec)
+    counts = Counter(r["serial"].strip().upper() for r in sup)
+    rep["duplicates"] = sorted(s for s, n in counts.items() if n > 1)
+    for rec in sorted(sup, key=lambda r: serial_key(r["serial"])):
+        key = rec["serial"].strip().upper()
+        if counts[key] > 1:
+            continue
+        row = mine.get(key)
+        if row is None:
+            rep["unknown"].append(rec)
+        elif row["status"] in ("", "disapproved"):
+            rep["queued"].append((row, rec))
+        elif row["status"] == "pending":
+            rep["pending"].append((row, rec))
+    return rep
+
+
+def _in_process_fields(rec):
+    """What a submitted form says about its suppressor: filed (signed, item 9; else the results list's submitted date)."""
+    return {"status": "filed", "filed_date": rec.get("filed_date") or _us_date(rec.get("submitted")),
+            "eform_id": rec["eform_id"], "caliber": rec["caliber"].strip(),
+            "overall_length": (re.search(r"\d+(?:\.\d+)?", rec["overall_length"] or "") or [""])[0]}
+
+
+def record_in_process(records):
+    """Record suppressors found submitted/in process on eForms (in_process_report's "unknown" and "queued") as FILED:
+    new rows for serials not in your inventory, and queued or disapproved rows changed to filed, so they're waiting
+    for approval here and never filed again. Filed date and eForm ID from the form; no application number (eForms
+    doesn't list it); a recorded caliber or length is kept. Returns the serials recorded."""
+    rows = load_rows()
+    by = {r["serial_number"].strip().upper(): r for r in rows}
+    todo = []
+    for rec in records:
+        f, row = _in_process_fields(rec), by.get(rec["serial"].strip().upper())
+        if row is not None and row["status"] not in ("", "disapproved"):
+            continue
+        todo.append((rec["serial"].strip(), f, row))
+    if not todo:
+        return []
+    if server_settings():
+        if (_server().get("/api/hello").get("api") or 1) < 4:
+            raise ServerReadOnly("Your inventory server is too old to record forms filed outside this helper: update it "
+                                 "(atf-server update on the server), then run Check approvals again.")
+        _server_op("record_in_process", {"rows": [{"serial_number": row["serial_number"] if row else serial, **f}
+                                                   for serial, f, row in todo]})
+        return [row["serial_number"] if row else serial for serial, f, row in todo]
+    for serial, f, row in todo:
+        if row is None:
+            row = {c: "" for c in COLS}
+            row["serial_number"] = serial
+            rows.append(row)
+        row.update({"status": "filed", "filed_date": f["filed_date"], "eform_id": f["eform_id"]})
+        for k in ("caliber", "overall_length"):
+            row[k] = row[k] or f[k]
+    if any(row is None for _s, _f, row in todo):  # new rows: in serial order, as apply_approvals does (never while filing)
+        rows.sort(key=lambda r: serial_key(r["serial_number"]))
+    save_rows(rows)
+    return [row["serial_number"] if row else serial for serial, f, row in todo]
+
+
 def send_approval_pdfs(records):
     """With a server: upload the approval PDFs it doesn't have yet (by eForm ID). Returns how many it added."""
     import hashlib
@@ -2486,12 +2895,27 @@ def approval_report(records, rows, trust):
 
 def cmd_check_approved(_):
     """CLI: read-only check of approved Form 1s against data/suppressors.csv (suppressors only)."""
-    found, problems = fetch_approved()
+    others, in_process = [], []
+    found, problems = fetch_approved(others, in_process)
     records, more = read_approved(found)
+    rejected, more_rejected = read_approved(others)
+    submitted, more_submitted = read_approved(in_process)
     rep = approval_report(records, load_rows(), load_trust())
     updated, added = apply_approvals(records, import_unknown=getattr(_, "import_unknown", False))
+    nrep = not_approved_report(rejected, load_rows())
+    marked = record_disapprovals([row["serial_number"] for row, _rec in nrep["disapproved"]])
     print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s); "
-          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv.")
+          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv ({drop_misread_nfa(records)} misread suppressor(s) "
+          f"taken out of it); {len(marked)} marked disapproved.")
+    for key, title in (("disapproved", "Disapproved or returned by ATF (file them again: Advanced > Re-file)"),
+                       ("correction", "Returned for correction (nothing marked: see eForms)"),
+                       ("unsure", "Not approved, but couldn't tell if it's the current filing (nothing marked)")):
+        if nrep[key]:
+            print(f"\n{title}: {len(nrep[key])}")
+            for row, rec in nrep[key]:
+                print(f"  {row['serial_number']:12} {rec['status'].lower():24} eForm {rec['eform_id']}  filed {row['filed_date'] or '?'}")
+    rep["waiting"] = [r for r in rep["waiting"] if r["serial_number"] not in marked]
+    problems += more_rejected
     print(f"\n{len(records)} approved Form 1(s); suppressors: {sum(1 for r in records if 'SILENCER' in r['type'].upper())}; "
           f"other NFA items: {sum(1 for r in records if is_other_nfa(r))}; skipped: {dict(rep['skipped']) or 'none'}")
     for title, key in (("Approved and in your records", "matched"), ("Approved, but check these", "differs"),
@@ -2499,6 +2923,27 @@ def cmd_check_approved(_):
         print(f"\n{title}: {len(rep[key])}")
         for r, notes in rep[key]:
             print(f"  {r['serial']:12} cal {r['caliber']:6} len {r['overall_length']:5} approved {r['approval_date']}  {'; '.join(notes)}")
+    irep = in_process_report(submitted, load_rows())
+    problems += more_submitted
+    print(f"\n{len(submitted)} submitted/in process Form 1(s) checked (ones already in your records are skipped)")
+    for title, items in (("In process on eForms, NOT in your records (filed by hand?)", irep["unknown"]),
+                         ("In process on eForms, but queued or disapproved here (filing it would file it twice)",
+                          [rec for _row, rec in irep["queued"]])):
+        if items:
+            print(f"\n{title}: {len(items)}")
+            for r in items:
+                print(f"  {r['serial']:12} cal {r['caliber']:6} len {r['overall_length']:5} filed {_in_process_fields(r)['filed_date'] or '?'}  eForm {r['eform_id']}")
+    for row, rec in irep["pending"]:
+        print(f"  {row['serial_number']}: pending here and in process on eForms (eForm {rec['eform_id']}): resolve it as filed")
+    for s in irep["duplicates"]:
+        print(f"!! serial {s} is on more than one submitted/in process Form 1")
+    if irep["unknown"] or irep["queued"]:
+        if getattr(_, "import_unknown", False):
+            got = record_in_process(irep["unknown"] + [rec for _row, rec in irep["queued"]])
+            print(f"Recorded {len(got)} as filed: {', '.join(got)}")
+        else:
+            print("(not recorded; --import-unknown records them as filed)")
+    rep["waiting"] = [r for r in approval_report(records, load_rows(), load_trust())["waiting"] if r["serial_number"] not in marked]
     print(f"\nFiled, not approved yet: {len(rep['waiting'])}  {', '.join(r['serial_number'] for r in rep['waiting'])}")
     for s in rep["duplicates"]:
         print(f"!! serial {s} appears on more than one approved Form 1")
@@ -2555,10 +3000,27 @@ QUESTIONS_11 = [  # ATF's wording on the eForms applicant page (captured 2026-10
 ]
 # 11.M.2 ("If 'Yes', do you fall within any of the exceptions...") only offers N/A once 11.M.1 is No.
 
+# Race/ethnicity: eForms' checkbox list (seen live 2026-11-20); more than one may be ticked. Settings keep one as a
+# string (as before) or several as a list. The old "Alaska Native" spelling (before 1.5.2) never matched eForms.
+RACES = ["American Indian or Alaskan Native", "Asian", "Black or African American", "Hispanic or Latino",
+         "Middle Eastern/North African", "Native Hawaiian or Other Pacific Islander", "White", "Unknown"]
+
+
+def races(person):
+    """A person's race setting as a list of eForms options (a string or a list in trust.yaml; old spelling fixed)."""
+    val = (person or {}).get("race") or []
+    out = []
+    for r in ([val] if isinstance(val, str) else val):
+        r = re.sub(r"(?i)\balaska native\b", "Alaskan Native", str(r).strip())
+        known = next((k for k in RACES if k.lower() == r.lower()), r)
+        if known and known not in out:
+            out.append(known)
+    return out
+
+
 COMMON_REQUIRED = [
     ("responsible_persons.0.dob", "date of birth"), ("responsible_persons.0.sex", "sex"),
-    ("responsible_persons.0.race", "race"), ("responsible_persons.0.place_of_birth.state", "state of birth"),
-    ("responsible_persons.0.home_address.state", "state of residence"),
+    ("responsible_persons.0.race", "race"), ("responsible_persons.0.home_address.state", "state of residence"),
     ("cleo.department", "CLEO agency"), ("cleo.official", "CLEO official's name"), ("cleo.title", "CLEO official's title"),
     ("cleo.address.street", "CLEO street"), ("cleo.address.zip", "CLEO ZIP"), ("cleo.address.city", "CLEO city"),
     ("cleo.address.county", "CLEO county"), ("cleo.address.state", "CLEO state"),
@@ -2572,7 +3034,7 @@ REQUIRED = TRUST_REQUIRED + COMMON_REQUIRED  # (trust filing; kept for callers t
 # name and address are typed into the portal's "Add Responsible Person" popup. middle_name, suffix, email are optional.
 OTHER_RP_REQUIRED = [
     ("title", "title in the trust"), ("first_name", "first name"), ("last_name", "last name"), ("dob", "date of birth"),
-    ("sex", "sex"), ("race", "race"), ("place_of_birth.state", "state of birth"), ("home_address.street", "street address"),
+    ("sex", "sex"), ("race", "race"), ("home_address.street", "street address"),
     ("home_address.zip", "ZIP"), ("home_address.city", "city"), ("home_address.state", "state of residence"),
     ("eft", "fingerprint file (.eft)"), ("photo", "photo"), ("template", "signed 5320.23 template"),
 ]
@@ -2612,6 +3074,10 @@ def settings_problems(trust=None):
     kind = applicant_type(trust)
     need = COMMON_REQUIRED + (TRUST_REQUIRED if kind == "trust" else [])
     probs = [f"missing {desc} ({path})" for path, desc in need if not str(_get(trust, path) or "").strip()]
+    you = (trust.get("responsible_persons") or [{}])[0]
+    if born_in_us(you) and not birth_state(you):  # born abroad: no state (issue #6)
+        probs.append("missing state of birth (responsible_persons.0.place_of_birth.state)")
+    probs += [description_problem(trust)] if description_problem(trust) else []
     if kind == "individual":
         ans = answers_11(trust)
         blank = [q for q, a in ans.items() if a not in ("No", "Yes")]
@@ -2632,6 +3098,8 @@ def settings_problems(trust=None):
     for n, person in enumerate(other_rps(trust), 2):  # numbered, not named: these lines show on the menu's home screen
         probs += [f"responsible person {n}: missing {desc}" for path, desc in OTHER_RP_REQUIRED
                   if not str(_get(person, path) or "").strip()]
+        if born_in_us(person) and not birth_state(person):
+            probs.append(f"responsible person {n}: missing state of birth")
         for key, desc in (("eft", "fingerprint file"), ("photo", "photo")):
             if person.get(key) and not Path(person[key]).is_file():
                 probs.append(f"responsible person {n}: {desc} not found: {person[key]}")
@@ -2863,8 +3331,8 @@ def _row_context(trust, item):
            "answers": [{"q_id": q, "q_answer": a} for q, a in ans.items()] + [{"q_id": "11.M.2", "q_answer": "N/A"}],
            "upin": upin(trust),
            "icn": item["serial_number"] if icn_is_serial(trust) else "",
-           "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": rp["race"],
-           "rp_birth_state": rp["place_of_birth"]["state"].upper(),
+           "rp_title": rp.get("title", ""), "rp_dob": rp["dob"], "rp_race": ", ".join(races(rp)), "rp_races": [{"rp_race": r} for r in races(rp)],
+           "rp_birth_country": birth_country(rp), "rp_birth_state": birth_state(rp),
            "rp_residence_state": rp["home_address"]["state"].upper(), "rp_sex": rp["sex"].upper(),
            "cleo_department": cl["department"], "cleo_official": cl["official"], "cleo_title": cl["title"],
            "cleo_street": cl["address"]["street"], "cleo_zip": str(cl["address"]["zip"]),
@@ -2902,8 +3370,8 @@ def _other_rp_context(person, n, item):
             "rp_email": str(person.get("email") or ""), "rp_street": addr["street"], "rp_zip": str(addr["zip"]),
             # dropdowns: the portal lists these uppercased
             "rp_city": addr["city"].upper(), "rp_state": addr["state"].upper(), "rp_residence_state": addr["state"].upper(),
-            "rp_dob": person["dob"], "rp_race": person["race"], "rp_sex": person["sex"].upper(),
-            "rp_birth_state": person["place_of_birth"]["state"].upper(),
+            "rp_dob": person["dob"], "rp_race": ", ".join(races(person)), "rp_races": [{"rp_race": r} for r in races(person)], "rp_sex": person["sex"].upper(),
+            "rp_birth_country": birth_country(person), "rp_birth_state": birth_state(person),
             "form_5320_path": str(_find_5320(item["serial_number"], person=person)),
             "photo_path": person["photo"], "eft_path": person["eft"]}
 
@@ -3239,7 +3707,11 @@ def _pick(loc, val, wait_ms=30000, grace_ms=3000):
         if real and real_since is None:
             real_since = waited
         if waited >= wait_ms or (real_since is not None and waited - real_since >= grace_ms):
-            shown = ", ".join(real[:12]) + (f" and {len(real) - 12} more" if len(real) > 12 else "")
+            import difflib  # a long list (e.g. 250 countries): the nearest spellings say more than the first dozen
+            close = difflib.get_close_matches(val.strip().upper(), [t.upper() for t in real], n=5, cutoff=0.5)
+            close = [next(t for t in real if t.upper() == c) for c in close]
+            shown = (f"closest: {', '.join(close)}; {len(real)} choices in all" if len(real) > 12 and close else
+                     ", ".join(real[:12]) + (f" and {len(real) - 12} more" if len(real) > 12 else ""))
             raise NoSuchOption(f"{val!r} isn't one of the choices on the page"
                                + (f" ({shown})" if real else " (it shows none)"))
         loc.page.wait_for_timeout(250)
@@ -3521,7 +3993,7 @@ def main():
     p = sub.add_parser("update", help="update this folder to the newest release (asks first)"); p.add_argument("--check", action="store_true", help="only say whether a newer version is out (exit 2 if so)"); p.add_argument("--yes", action="store_true", help="don't ask before updating"); p.set_defaults(fn=lambda a: __import__("update").cmd_update(a))
     p = sub.add_parser("backup", help="make the backups now (records ZIP if changed; your backup folder from Settings)"); p.set_defaults(fn=cmd_backup)
     p = sub.add_parser("export", help="write the inventory to out/inventory_<date>.xlsx"); p.set_defaults(fn=lambda a: print("wrote", export_inventory()))
-    p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory"); p.set_defaults(fn=cmd_check_approved)
+    p = sub.add_parser("check-approved", help="read-only: compare approved Form 1s on eForms with your records"); p.add_argument("--import-unknown", action="store_true", help="also add approved suppressors missing from your inventory, and record suppressors in process on eForms (filed by hand) as filed"); p.set_defaults(fn=cmd_check_approved)
     p = sub.add_parser("fill-form1"); p.add_argument("row", type=int, nargs="?"); p.add_argument("--force", action="store_true", help="allow re-filing a row already marked filed"); p.add_argument("--all", action="store_true", help="loop through every unfiled row in one browser session"); p.add_argument("--count", type=int, help="loop through at most N unfiled rows"); p.add_argument("--dry", action="store_true", help="print the steps with their values; no browser"); p.add_argument("--capture", action="store_true"); p.add_argument("--submit", action="store_true", help="opt-in: tick certification and Sign & Submit, then wait for you to enter the emailed code and PIN"); p.add_argument("--auto-affirm", action="store_true", help="click the 'I affirm' popup for you (your affirmation)"); p.add_argument("--skip-ssn", action="store_true", help="don't pause for you to type your SSN (optional field; may delay processing)"); p.add_argument("--cleo", action="store_true", help="after the batch, save each filed Form 1's CLEO copy to out/cleo/ (read-only)"); p.set_defaults(fn=cmd_fill_form1)
     a = ap.parse_args(); a.fn(a)
 

@@ -217,7 +217,8 @@ def answers(monkeypatch):
     return s
 
 
-D = lambda kw: kw.get("default")  # noqa: E731  accept the offered default
+# accept the offered default (a checklist, which has none: keep what is ticked)
+D = lambda kw: kw["default"] if "default" in kw or "choices" not in kw else [c.value for c in kw["choices"] if c.checked]  # noqa: E731
 TICKED = lambda kw: [c.value for c in kw["choices"] if c.checked]  # noqa: E731
 
 

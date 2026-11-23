@@ -180,6 +180,10 @@ def home(rows):
               f"[link={INSTAGRAM}]@sk360.3d2a[/link] on Instagram[/]", soft_wrap=True, highlight=False)
     con.print(queue_table(rows))
     con.print(f"  {summary(rows)}")
+    rejected = sum(1 for r in rows if r["status"] == "disapproved")
+    if rejected:
+        con.print(f"  [red]✖ {rejected} Form 1{'s' if rejected != 1 else ''} disapproved by ATF: fix why, then file "
+                  f"{'them' if rejected != 1 else 'it'} again (Advanced > Re-file).[/]")
     server_line()
     new = update.available()
     if new:
@@ -940,14 +944,26 @@ def redate_flow():
 
 def refile_flow():
     rows = atf.load_rows()
+    rejected = [i for i, r in enumerate(rows) if r["status"] == "disapproved"]
     filed = [i for i, r in enumerate(rows) if r["status"] == "filed"][::-1]
-    if not filed:
-        con.print("  Nothing is marked filed.")
+    if not rejected and not filed:
+        con.print("  Nothing is marked filed or disapproved.")
         return pause()
-    i = questionary.select("Re-file which row?", choices=[_row_choice(rows, i, f"  #{short(rows[i]['application_number'])}") for i in filed]).ask()
+    choices = [_row_choice(rows, i, "  disapproved") for i in rejected] + \
+              [_row_choice(rows, i, f"  #{short(rows[i]['application_number'])}") for i in filed]
+    i = questionary.select("Re-file which row?", choices=choices).ask()
     if i is None:
         return
-    con.print(Panel(f"{escape(rows[i]['serial_number'])} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
+    serial = escape(rows[i]["serial_number"])
+    if rows[i]["status"] == "disapproved":
+        con.print(Panel(f"ATF disapproved or returned {serial}'s Form 1. Filing again makes a new application.\n"
+                        "First fix what it was disapproved for (eForms has ATF's letter), or it will be again: e.g. a\n"
+                        "new 5320.23 template (Settings) if an address was wrong. The form uses your settings as they are now.",
+                        border_style="yellow", expand=False))
+        if questionary.confirm("File it again?", default=False, auto_enter=False).ask():
+            file_flow([i], force=True)
+        return
+    con.print(Panel(f"{serial} is already filed (#{escape(short(rows[i]['application_number']))}).\n"
                     "Filing again creates a SECOND application for the same serial.", border_style="red", expand=False))
     if questionary.confirm("Re-file it anyway?", default=False, auto_enter=False).ask():
         file_flow([i], force=True)
@@ -965,8 +981,19 @@ STATES = ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
           "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
           "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
           "Washington", "West Virginia", "Wisconsin", "Wyoming"]
-DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
-RACES = ["American Indian or Alaska Native", "Asian", "Black or African American", "Native Hawaiian or Other Pacific Islander", "White"]
+# 99 characters: the Form 1 PDF eForms makes prints only the first 100 (atf.DESCRIPTION_MAX; the old default
+# was 102 and came out "...UNTIL A FORM 1 IS APPROV", issue #7)
+DEFAULT_DESCRIPTION = "I POSSESS NO PARTS OR PLANS AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL FORM 1 IS APPROVED"
+
+
+def _race(current):
+    """Race/ethnicity as eForms lists it: tick one or more. Returns a string for one (as settings always were), a list
+    for several."""
+    have = atf.races({"race": current})
+    picked = _a(questionary.checkbox("Race/ethnicity, as eForms lists it (space to tick one or more, Enter to continue):",
+                                     choices=[questionary.Choice(r, r, checked=r in have) for r in atf.RACES],
+                                     validate=lambda a: bool(a) or "Tick at least one"))
+    return picked[0] if len(picked) == 1 else picked
 
 
 class Cancelled(Exception):
@@ -1017,6 +1044,33 @@ def _state(msg, cur):
     v = _a(questionary.autocomplete(msg, choices=STATES, default=upper.get(str(cur or "").upper(), str(cur or "")),
                                     validate=lambda s: s.strip().upper() in upper or "Pick a state from the list"))
     return cur if str(cur or "").upper() == v.strip().upper() else upper[v.strip().upper()]  # unchanged: keep as saved
+
+
+def _birthplace(saved, country, state):
+    """Place of birth: the country (the US, or another for someone born abroad, e.g. on a military base), then the
+    state only for the US (eForms leaves Birth State empty otherwise; issue #6). `country`/`state` = current values."""
+    us = _a(questionary.confirm("Born in the United States?", default=atf.born_in_us({"place_of_birth": {"country": country}})))
+    if us:
+        return {**(saved or {}), "country": "United States of America", "state": _state("State of birth:", state)}
+    cur = "" if atf.born_in_us({"place_of_birth": {"country": country}}) else str(country or "").upper()
+    def ok(s):
+        s = s.strip().upper()
+        if not s:
+            return "Type the country"
+        return ("That's the United States: answer Yes to the question before" if atf.born_in_us({"place_of_birth": {"country": s}})
+                else True)
+    c = _a(questionary.text("Country of birth, as eForms spells it (e.g. GERMANY, KOREA, SOUTH, PHILIPPINES):",
+                            default=cur, validate=ok)).strip().upper()
+    return {**(saved or {}), "country": c, "state": ""}
+
+
+def _description(cur):
+    def ok(s):
+        n = len(s.strip())
+        return (True if 0 < n <= atf.DESCRIPTION_MAX else "Type a description" if not n else
+                f"{n} characters: the Form 1 PDF eForms makes prints only the first {atf.DESCRIPTION_MAX}")
+    return _a(questionary.text(f"Firearm description (the description box on the firearm page, up to {atf.DESCRIPTION_MAX} "
+                               "characters; edit if you like):", default=cur, validate=ok)).strip()
 
 
 def _check_template(others=()):
@@ -1083,10 +1137,8 @@ def _other_rp(p, others):
     p["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("dob"), validate=_date))
     p["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                      default=str(get("sex", "Male")).title()))
-    race = get("race")
-    p["race"] = _a(questionary.select("Race (as eForms lists it):", choices=RACES, default=race if race in RACES else None))
-    p["place_of_birth"] = {**(p.get("place_of_birth") or {}), "country": "United States of America",
-                           "state": _state("State of birth:", get("place_of_birth.state"))}
+    p["race"] = _race(get("race"))
+    p["place_of_birth"] = _birthplace(p.get("place_of_birth"), get("place_of_birth.country"), get("place_of_birth.state"))
     addr = dict(p.get("home_address") or {})
     addr["street"] = _a(questionary.text("Home street address:", default=get("home_address.street"), validate=_need))
     z = _a(questionary.text("Home ZIP:", default=str(get("home_address.zip")), validate=_need))
@@ -1187,10 +1239,9 @@ def settings_flow(first=False):
         rp["dob"] = _a(questionary.text("Date of birth (MM/DD/YYYY):", default=get("responsible_persons.0.dob"), validate=_date))
         rp["sex"] = _a(questionary.select("Sex (as the eForms dropdown lists it):", choices=["Male", "Female"],
                                           default=get("responsible_persons.0.sex", "Male").title()))
-        race = get("responsible_persons.0.race")
-        rp["race"] = _a(questionary.select("Race (as eForms lists it):", choices=RACES, default=race if race in RACES else None))
-        rp["place_of_birth"] = {**(rp.get("place_of_birth") or {}), "country": "United States of America",
-                                "state": _state("State of birth:", get("responsible_persons.0.place_of_birth.state"))}
+        rp["race"] = _race(get("responsible_persons.0.race"))
+        rp["place_of_birth"] = _birthplace(rp.get("place_of_birth"), get("responsible_persons.0.place_of_birth.country"),
+                                           get("responsible_persons.0.place_of_birth.state"))
         rp["home_address"] = {**(rp.get("home_address") or {}),
                               "state": _state("State you live in:", get("responsible_persons.0.home_address.state"))}
         ind = dict(t.get("individual") or {})
@@ -1218,8 +1269,7 @@ def settings_flow(first=False):
         fa["overall_length"] = _a(questionary.text("Default overall length for new suppressors (inches):", default=str(get("firearm.overall_length", "12")),
                                                    validate=lambda s: s.strip().replace(".", "", 1).isdigit() or "A number"))
         fa.pop("manufacturer_code", None)  # no longer a setting: always FMI for a Form 1 (config/mapping.yaml)
-        fa["description"] = _a(questionary.text("Firearm description (the description box on the firearm page; edit if you like):",
-                                                default=get("firearm.description", DEFAULT_DESCRIPTION), validate=_need))
+        fa["description"] = _description(get("firearm.description", DEFAULT_DESCRIPTION))
         con.rule("Files")
         files = dict(t.get("files") or {})
         files["eft"] = _clean_path(_a(questionary.path("Fingerprint file (.eft):", default=get("files.eft"), validate=_file(suffixes=(".eft",)))))
@@ -1672,19 +1722,82 @@ def _approved_table(items, title, style):
     return t
 
 
+def _not_approved_lines(nrep, marked):
+    """Check approvals: the Form 1s eForms lists as disapproved or returned (atf.not_approved_report)."""
+    if nrep["disapproved"]:
+        t = Table(box=box.ROUNDED, header_style="bold", title_justify="left", border_style="red",
+                  title=f"[bold]Disapproved or returned by ATF ({len(nrep['disapproved'])})[/]")
+        for col in ("Serial", "Caliber", "Filed", "eForms says"):
+            t.add_column(col)
+        for row, rec in nrep["disapproved"]:
+            t.add_row(escape(row["serial_number"]), escape(row["caliber"]), escape(row["filed_date"]), escape(rec["status"].lower()))
+        con.print(t)
+        con.print(f"  [bold red]✖[/] {len(marked)} marked disapproved. Find out why first (eForms has ATF's letter), fix it\n"
+                  "    (e.g. a new 5320.23 template if an address was wrong), then file them again: [bold]Advanced > Re-file[/].")
+    for key, what in (("correction", "returned for correction: open it in eForms to see what ATF wants (nothing changed here)"),
+                      ("unsure", "not approved in eForms, but its dates don't show whether that's this filing (nothing changed here)")):
+        for row, rec in nrep[key]:
+            con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: {what}[/]")
+
+
+def _in_process_lines(irep):
+    """Check approvals: suppressors submitted/in process on eForms that your records don't have as filed
+    (atf.in_process_report), e.g. filed by hand; offers to record them as filed. Returns the serials recorded."""
+    todo = irep["unknown"] + [rec for _row, rec in irep["queued"]]
+    if todo:
+        t = Table(box=box.ROUNDED, header_style="bold", title_justify="left", border_style="cyan",
+                  title=f"[bold]In process on eForms, not filed in your records ({len(todo)})[/]")
+        for col in ("Serial", "Caliber", "Length", "Filed", "Here"):
+            t.add_column(col)
+        for rec in irep["unknown"]:
+            f = atf._in_process_fields(rec)
+            t.add_row(escape(rec["serial"]), escape(f["caliber"]), escape(f["overall_length"]), escape(f["filed_date"]), "not in your records")
+        for row, rec in irep["queued"]:
+            f = atf._in_process_fields(rec)
+            t.add_row(escape(rec["serial"]), escape(f["caliber"]), escape(f["overall_length"]), escape(f["filed_date"]),
+                      "[bold red]queued: filing it would file it twice[/]" if row["status"] == "" else "[red]disapproved[/]")
+        con.print(t)
+    for row, _rec in irep["pending"]:
+        con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: pending here and in process on eForms, so it was submitted:\n"
+                  "    Resolve a pending row > It was filed.[/]")
+    if irep["other"]:
+        con.print(f"  [dim]{len(irep['other'])} other NFA item(s) in process: listed once approved.[/]")
+    if not todo:
+        return []
+    serials = [r["serial"] for r in todo]
+    names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
+    if not questionary.confirm(f"Record the {len(todo)} suppressor(s) already submitted on eForms ({names}) as filed?",
+                               default=True).ask():
+        if irep["queued"]:
+            con.print("  [yellow]⚠ Not recorded. The queued ones are still queued: remove them (Edit or remove a queued\n"
+                      "    suppressor) or File would submit them again.[/]")
+        return []
+    try:
+        return atf.record_in_process(todo)
+    except Exception as e:
+        con.print(f"  [red]✖ Couldn't record them: {escape(str(e).splitlines()[0])}[/]")
+        return []
+
+
 def approvals_flow():
     con.print(Panel("Reads your [bold]approved[/] Form 1s on eForms. Read-only: it only clicks Search, View Form, View PDF\n"
                     "and Go Home. Each PDF is saved to out/approved/, and suppressors are checked against your records by\n"
                     "serial (caliber, overall length). SBRs, SBSs and other types go in their own list. The first run fetches every\n"
-                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals.",
+                    "approved form (roughly 10-20 seconds each); later runs only fetch new approvals. It also looks at forms\n"
+                    "still in process (so ones you filed by hand can be recorded as filed) and, while forms are waiting, for\n"
+                    "disapproved and returned ones, so you can file those again.",
                     title="Check approvals", border_style="cyan", expand=False))
     if not questionary.confirm("Open the browser?", default=True, auto_enter=False).ask():
         return
+    others, in_process = [], []
     try:
-        found, problems = atf.fetch_approved()
+        found, problems = atf.fetch_approved(others, in_process)
     finally:
         P.finish()
     records, more = atf.read_approved(found)
+    rejected, more_rejected = atf.read_approved(others)
+    submitted, more_submitted = atf.read_approved(in_process)
+    more += more_rejected + more_submitted
     rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
     sup = sum(1 for r in records if "SILENCER" in r["type"].upper())
     nfa = [{"type": " ".join(r["type"].upper().split())} for r in records if atf.is_other_nfa(r)]
@@ -1698,12 +1811,20 @@ def approvals_flow():
         con.print(_approved_table(rep["differs"], f"[bold]Approved, check these ({len(rep['differs'])})[/]", "yellow"))
     if rep["unknown"]:
         con.print(_approved_table(rep["unknown"], f"[bold]Approved, NOT in your records ({len(rep['unknown'])})[/]", "cyan"))
-    waiting = [r["serial_number"] for r in rep["waiting"]]
+    updated, added = atf.apply_approvals(records)
+    nrep = atf.not_approved_report(rejected, atf.load_rows())
+    marked = atf.record_disapprovals([row["serial_number"] for row, _ in nrep["disapproved"]])
+    _not_approved_lines(nrep, marked)
+    irep = atf.in_process_report(submitted, atf.load_rows())
+    recorded = _in_process_lines(irep)
+    waiting = [r["serial_number"] for r in atf.approval_report(records, atf.load_rows(), atf.load_trust())["waiting"]
+               if r["serial_number"] not in marked]
     con.print(f"  Filed, not approved yet: [bold]{len(waiting)}[/]" + (f"  ({escape(', '.join(waiting[:12]))}{', …' if len(waiting) > 12 else ''})" if waiting else ""))
-    alerts = [f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]] + problems + more
+    alerts = ([f"serial {s} is on more than one approved Form 1" for s in rep["duplicates"]]
+              + [f"serial {s} is on more than one submitted/in process Form 1 (filed twice? see eForms)" for s in irep["duplicates"]]
+              + problems + more)
     if alerts:
         con.print(Panel("\n".join(f"• {escape(a)}" for a in alerts), title="Look at these", border_style="red", expand=False))
-    updated, added = atf.apply_approvals(records)
     if rep["unknown"]:
         serials = [r["serial"] for r, _ in rep["unknown"]]
         names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
@@ -1712,6 +1833,7 @@ def approvals_flow():
             more_updated, added = atf.apply_approvals(records, import_unknown=True)
             updated += more_updated
     new_nfa = atf.record_sbrs(records)
+    misread = atf.drop_misread_nfa(records)
     if atf.server_settings():
         with con.status("Saving new approval PDFs on your server…"):
             sent = atf.send_approval_pdfs(records)
@@ -1719,9 +1841,13 @@ def approvals_flow():
             con.print(f"  [green]✔[/] {sent} approval PDF(s) saved on your server.")
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
+    if recorded:
+        con.print(f"  [green]✔[/] {len(recorded)} suppressor(s) in process on eForms recorded as filed: they wait for approval here.")
     if new_nfa:
         label = atf.nfa_label(atf.load_sbrs())
         con.print(f"  [green]✔[/] {label}: {new_nfa} added (Inventory > Show another view > {label}).")
+    if misread:
+        con.print(f"  [green]✔[/] {misread} suppressor(s) that an older version listed as other NFA items were taken off that list.")
     con.print("  [dim]PDFs: out/approved/[/]")
     pause()
 
@@ -1733,7 +1859,7 @@ def advanced_flow():
         questionary.Choice("Practice run: fill a form without submitting", practice_flow)] + ([
         questionary.Choice("Regenerate a 5320.23 with a different date", redate_flow)] if trust_filing else []) + [
         questionary.Choice("Make CLEO packets for filed forms", cleo_packets_flow),
-        questionary.Choice("Re-file a row that's already filed", refile_flow),
+        questionary.Choice("Re-file a disapproved or already filed row", refile_flow),
         questionary.Choice("Capture portal pages (when ATF changes the site)", lambda: (atf.cmd_inspect(None), pause())),
         questionary.Choice("Check for a new version now", lambda: update_flow(force=True)),
         questionary.Choice("Back", "back")]).ask()

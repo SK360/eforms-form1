@@ -7,8 +7,8 @@ responsible_persons:                      # you first (name/address come from yo
   - title: "Settlor"                      # your title in the trust (typed into eForms as "title of the submitter")
     dob: "MM/DD/YYYY"
     sex: "Male"                           # as the eForms dropdown lists it: Male / Female
-    race: "White"                         # must match the eForms race option text
-    place_of_birth: {country: "United States of America", state: "Texas"}
+    race: "White"                         # an eForms option (Settings lists them); several: ["Hispanic or Latino", "White"]
+    place_of_birth: {country: "United States of America", state: "Texas"}   # born abroad: {country: "GERMANY", state: ""}
     home_address: {state: "Texas"}        # state of residence
   # other responsible persons in the trust (trust only; Settings > Other responsible persons in the trust), each typed into eForms'
   # "Add Responsible Person" with their own 5320.23 (forms/<template>), photo and fingerprints:
@@ -34,7 +34,7 @@ cleo:                                     # chief law enforcement officer: typed
 firearm:                                  # same for every suppressor
   model: "N/A"
   overall_length: "12"                    # inches
-  description: "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL A FORM 1 IS APPROVED"
+  description: "I POSSESS NO PARTS OR PLANS AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL FORM 1 IS APPROVED"   # 100 characters at most
 files:
   trust_document: "/abs/path/to/trust.pdf"
   trust_document_desc: "TRUST"

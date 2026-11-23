@@ -11,7 +11,7 @@ from conftest import FIXTURE, FIXTURE_ANSWERS, FIXTURE_SSN, TODAY, D, atf, ui
 
 QUIT = lambda kw: "quit"  # noqa: E731
 SETTINGS = lambda kw: ui.settings_flow  # noqa: E731
-DESC_PROMPT = "Firearm description (the description box on the firearm page; edit if you like):"
+DESC_PROMPT = "Firearm description (the description box on the firearm page, up to 100 characters; edit if you like):"
 
 
 def saved():
@@ -26,7 +26,7 @@ def test_new_user_template_first_and_prefilled(sandbox, answers, screen):
     shutil.copy(FIXTURE, tpl)
     checks = {}
     answers(True, D, f"'{tpl}'",                                        # accept disclaimer; a trust (default); template, quoted
-            "Doe Family Trust", D, D, "Male", "Asian", D, "Ohio",       # name typed over a prefill; title, DOB, birth state accepted
+            "Doe Family Trust", D, D, "Male", ["Asian"], D, D, "Ohio",    # name typed over a prefill; title, DOB, born in the US, birth state accepted
             D, "Pat Chief", D, D, D, D, "Clark", D,                         # CLEO: official typed, county typed, rest accepted
             D, D, D,                                                        # model, length, description: defaults
             str(f / "prints.eft"), lambda kw: (checks.setdefault("blank_photo", kw["validate"]("")), str(f / "me.jpg"))[1],
@@ -66,14 +66,14 @@ def test_drag_and_drop_quotes_and_windows_paths():
 
 
 def test_changed_cleo_title_still_stamps(configured, answers, screen):
-    answers(SETTINGS, D, True, *[D] * 9, "SHERIFF", *[D] * 8, D, D, D, True, False, "done", QUIT)
+    answers(SETTINGS, D, True, *[D] * 10, "SHERIFF", *[D] * 8, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved()["cleo"]["title"] == "SHERIFF" and "stamps correctly" in screen.getvalue()
 
 
 def test_kept_template_and_defaults_change_nothing(configured, answers, screen):
     before = saved()
-    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, "done", QUIT)
+    answers(SETTINGS, D, True, *[D] * 19, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved() == before and "stamps correctly" in screen.getvalue()
 
@@ -84,7 +84,7 @@ def test_new_template_values_win(configured, answers, screen):
     (atf.DATA / "trust.yaml").write_text(yaml.safe_dump(t), encoding="utf-8")
     newt = configured / "files" / "new.pdf"
     shutil.copy(FIXTURE, newt)
-    answers(SETTINGS, D, False, str(newt), *[D] * 18, D, D, D, True, False, "done", QUIT)
+    answers(SETTINGS, D, False, str(newt), *[D] * 19, D, D, D, True, False, "done", QUIT)
     ui.menu()
     assert saved()["cleo"]["official"] == FIXTURE_ANSWERS["cleo.official"]
 
@@ -107,7 +107,7 @@ def test_new_individual_setup(sandbox, answers, screen):
     for name in ("prints.eft", "me.jpg"):
         (f / name).write_bytes(b"x")
     answers(True, "individual",                                         # accept disclaimer; file as an individual
-            "01/02/1980", "Male", "White", "Ohio", "Ohio",              # DOB, sex, race, birth state, state of residence
+            "01/02/1980", "Male", ["White"], True, "Ohio", "Ohio",      # DOB, sex, race (ticked), born in the US, birth state, residence
             *["No"] * len(atf.QUESTIONS_11), "N/A",                      # questions 11.A-11.M.1; no UPIN (typed N/A)
             "SPRINGFIELD POLICE DEPARTMENT", "Pat Chief", "CHIEF OF POLICE", "200 MAIN ST", "45502", "Springfield", "Clark", "Ohio",
             D, D, D, str(f / "prints.eft"), str(f / "me.jpg"), False, QUIT)
@@ -115,9 +115,10 @@ def test_new_individual_setup(sandbox, answers, screen):
     out, t = screen.getvalue(), saved()
     asked = [m for _, m in answers.asked]
     assert not any("5320.23" in m or "Trust" in m or "title in the trust" in m for m in asked)   # nothing about a trust
-    assert asked[7].startswith("11.A. Do you intend to make any firearm") and "Questions 11.A-11.M" in out
+    assert asked[8].startswith("11.A. Do you intend to make any firearm") and "Questions 11.A-11.M" in out
     assert t["applicant_type"] == "individual" and set(t["individual"]["answers"].values()) == {"No"}
     assert t["individual"]["upin"] == ""                                                       # "N/A" = no UPIN
+    assert t["responsible_persons"][0]["race"] == "White"                                      # one race: saved as before
     assert "trust" not in t and "trust_document" not in t["files"] and not (atf.FORMS / "5320.23.pdf").exists()
     assert atf.settings_problems() == [] and "Settings saved" in out
 
@@ -126,7 +127,7 @@ def test_individual_answering_yes_is_saved_but_blocks_filing(sandbox, answers, s
     f = sandbox / "files"
     for name in ("prints.eft", "me.jpg"):
         (f / name).write_bytes(b"x")
-    answers(True, "individual", "01/02/1980", "Male", "White", "Ohio", "Ohio", "No", "No", "Yes", *["No"] * 10, "",
+    answers(True, "individual", "01/02/1980", "Male", ["White"], True, "Ohio", "Ohio", "No", "No", "Yes", *["No"] * 10, "",
             "SPRINGFIELD POLICE DEPARTMENT", "Pat Chief", "CHIEF OF POLICE", "200 MAIN ST", "45502", "Springfield", "Clark", "Ohio",
             D, D, D, str(f / "prints.eft"), str(f / "me.jpg"), False, QUIT)
     ui.menu()
@@ -141,9 +142,9 @@ def test_add_change_and_remove_another_responsible_person(configured, answers, s
         (f / name).write_bytes(b"x")
     theirs = f / "jane 5320.pdf"
     shutil.copy(FIXTURE, theirs)
-    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False,           # everything about you kept, as before
+    answers(SETTINGS, D, True, *[D] * 19, D, D, D, True, False,           # everything about you kept, as before
             "add", f"'{theirs}'",                                          # add one: their template (dragged, quoted)
-            "Co-Trustee", "Jane", D, "Roe", "JR", D, D, "Female", "White", D,  # names typed over JOHN Q DOE; suffix JR
+            "Co-Trustee", "Jane", D, "Roe", "JR", D, D, "Female", ["White"], D, D,  # names typed over JOHN Q DOE; suffix JR
             D, D, D, D,                                                    # home address: read from their template
             str(f / "jane.eft"), str(f / "jane.jpg"), "done", QUIT)
     ui.menu()
@@ -156,7 +157,7 @@ def test_add_change_and_remove_another_responsible_person(configured, answers, s
     assert other["template"] == "5320.23_jane-roe.pdf" and (atf.FORMS / "5320.23_jane-roe.pdf").read_bytes() == theirs.read_bytes()
     assert atf.settings_problems() == [] and "all 2 5320.23 templates stamp correctly" in out
     choices = []
-    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False,
+    answers(SETTINGS, D, True, *[D] * 19, D, D, D, True, False,
             lambda kw: (choices.extend(c.title for c in kw["choices"]), "remove 0")[1], True, "done", QUIT)
     ui.menu()
     assert choices == ["Done (you + 1)", "Add a responsible person", "Change Jane Roe (Co-Trustee)", "Remove Jane Roe (Co-Trustee)"]
@@ -167,7 +168,7 @@ def test_cancelling_a_new_responsible_person_copies_nothing(configured, answers,
     theirs = configured / "files" / "jane.pdf"
     shutil.copy(FIXTURE, theirs)
     before = saved()
-    answers(SETTINGS, D, True, *[D] * 18, D, D, D, True, False, "add", str(theirs), "Co-Trustee", None, QUIT)
+    answers(SETTINGS, D, True, *[D] * 19, D, D, D, True, False, "add", str(theirs), "Co-Trustee", None, QUIT)
     ui.menu()
     assert saved() == before and list(atf.FORMS.glob("5320.23_*")) == []
 
@@ -182,7 +183,7 @@ def test_settings_goes_straight_to_other_responsible_persons(configured, answers
     shutil.copy(FIXTURE, theirs)
     before = saved()
     answers(pick("Settings"), pick("Other responsible persons in the trust (0)"), "add", str(theirs),
-            "Co-Trustee", "Jane", "", "Roe", "(none)", D, D, "Female", "White", D, D, D, D, D,
+            "Co-Trustee", "Jane", "", "Roe", "(none)", D, D, "Female", ["White"], D, D, D, D, D, D,
             str(f / "jane.eft"), str(f / "jane.jpg"), "done", QUIT)
     ui.menu()
     asked = [m for _, m in answers.asked]
@@ -207,3 +208,17 @@ def test_individual_settings_menu(configured, answers, screen):
                             "New versions (tell me when one is out)",
                             "Check my setup (files, templates, browser; no eForms)", "Back"]
     assert answers.asked[2][1] == "Who files the Form 1s?"
+
+
+def test_race_checklist_ticks_the_saved_races_and_saves_several_as_a_list(answers):
+    seen = {}
+
+    def tick(kw):
+        seen["choices"] = [c.value for c in kw["choices"]]
+        seen["ticked"] = [c.value for c in kw["choices"] if c.checked]
+        seen["empty"] = kw["validate"]([])
+        return ["Hispanic or Latino", "American Indian or Alaskan Native"]
+    answers(tick)
+    assert ui._race("American Indian or Alaska Native") == ["Hispanic or Latino", "American Indian or Alaskan Native"]
+    assert seen["choices"] == atf.RACES and seen["ticked"] == ["American Indian or Alaskan Native"]   # old spelling found
+    assert seen["empty"] == "Tick at least one"

@@ -7,6 +7,134 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.6.3 (2026-11-22)
+
+### Fixed
+- **Check approvals reads older Form 1s with 6-digit eForm IDs.** Before, only 7- and 8-digit IDs were read, so older
+  approved forms were missed, and the run could stop with "couldn't get to results page 2" (a page that doesn't exist)
+  or "no result rows could be read" for a disapproved form. The ID is now read from each row's own ID link, whatever
+  its length. Thanks to the user who reported it and tested the fix.
+- If eForms ever lists more forms on a page than the helper can read, you're told so, and a small file in `out/`
+  describes each row without any of its values (only lengths and button labels), so it's safe to send for help.
+- **Older approved suppressors are read as suppressors.** On older approval PDFs the type came out as "(SPECIFY)"
+  (a printed hint on the form), so those suppressors were listed as other NFA items and never offered for your
+  inventory. The type is now read from what was typed on the form, and the caliber, overall length and filed date
+  are read on that older form (ATF's September 2007 revision) too, where ATF ticked "Approved" with an X instead of
+  a check mark (those forms used to show "Approved box not ticked on the PDF"). The next Check approvals reads the PDFs already
+  saved (nothing is downloaded again), takes them off the other NFA list and offers to add them to your inventory.
+- Windows: saving an approval PDF no longer fails with "Access is denied" when another program holds the file for a
+  moment (it's retried, and the helper no longer keeps the PDF open itself). If it still fails, the message says which
+  file, in case it's open in a PDF viewer.
+- Check approvals also waits for the whole results table before reading it, in case a slow PC draws it row by row.
+
+### Tested
+- Live on the reporting user's Windows PC: all his approved and disapproved Form 1s were found, and his older
+  approvals (September 2007 form, 6-digit eForm IDs) were read as approved suppressors and added to his inventory.
+  Also tested against a fake eForms dashboard with 6-digit IDs and serials in the Internal Control Number column.
+
+## 1.6.2 (2026-11-21)
+
+### Fixed
+- **Born outside the United States? Setup now asks.** Setup used to assume everyone was born in the US and insisted on
+  a state of birth, which blocked anyone born abroad (on a military base overseas, say). It now asks **Born in the
+  United States?** first. Answer No and it asks for the country of birth instead, picks it in eForms' Birth Country
+  list, and leaves Birth State empty, as eForms allows. This works for you and for each other responsible person
+  in a trust. Type the country as eForms spells it (e.g. GERMANY); if eForms has no such choice, filing stops at that
+  field and names the closest spellings it offers. A 5320.23 template that names a foreign country of birth fills
+  this in for you. Settings saved before this version count as born in the US, as they always did. Thanks to
+  Slingshot1808 for reporting it (#6).
+- **The firearm description is now 100 characters at most.** The Form 1 PDF that eForms has made since about
+  October 2026 prints only the first 100 characters of the description, even though the box on the firearm page
+  takes more. The old default description was 102 characters, so it came out on the form as
+  "...UNTIL A FORM 1 IS APPROV". The new default is 99 characters:
+  "I POSSESS NO PARTS OR PLANS AND WILL NOT PURCHASE OR MANUFACTURE ANY PARTS UNTIL FORM 1 IS APPROVED".
+  Setup won't take a longer one, and filing stops with "Fix these in Settings first" until a longer saved one is
+  shortened. **If you kept the old default, shorten it in Settings > All settings before your next filing** (accept
+  everything else as it is; at the description, type the new one or your own of up to 100 characters). Forms
+  already filed were approved with the cut description. Thanks to An-8pound-Oreck for reporting it (#7).
+- **The description is read back right after it's typed in**, like the serial and length on the verify page. If
+  the box kept anything other than the whole description, nothing is submitted.
+
+### Tested
+- Not yet live: filing with a foreign country of birth (tested on a fake portal page only), and the description
+  read-back on the real firearm page.
+- The cut-off description was traced through approved and in-process Form 1 PDFs: forms filed before eForms changed
+  its PDFs show the full text, and every one since stops at 100 characters. The helper itself types the whole text
+  (checked in the browser it uses).
+
+## 1.6.1 (2026-11-21)
+
+### Fixed
+- **No more screen full of "MuPDF error: format error: cannot find object in xref" lines** while Check approvals
+  reads Form 1s still in process. They were harmless messages about the PDFs eForms sends, printed while each one was
+  cut down to its first page. They're switched off now, the page is copied in a way that works on those PDFs, and if
+  a PDF can't be cut down it's kept whole.
+
+### Tested
+- Check approvals' in-process search (1.6.0) worked live: a user's forms filed by hand were found and recorded as
+  filed. The fix above is tested on a PDF with the same kind of broken references.
+
+## 1.6.0 (2026-11-20)
+
+Form 1s filed by hand show up before they're approved.
+
+### Fixed
+- **Check approvals now finds Form 1s still in process, not only approved ones.** Before, a suppressor you filed
+  yourself on eForms (outside this helper) wasn't seen until ATF approved it. Check approvals now also looks at
+  eForms' "Submitted/In Process" list. Any suppressor there that your records don't have as filed is shown and can be
+  recorded as **filed**, with the filed date and eForm ID taken from the form (eForms doesn't list the application
+  number). It then waits for approval like any other filing.
+- **No more filing a suppressor twice by accident.** If a serial is already in process on eForms but queued in the
+  helper (say you added it to have it in your inventory), Check approvals warns that filing it would file it twice
+  and offers to record it as filed. A pending row that eForms shows in process gets a reminder to resolve it as filed,
+  and a serial on more than one in-process form gets a warning.
+- Only the first page of each in-process form is kept (`out/in-process/`), and each form is opened only once.
+  The page is removed once the form leaves the list. Forms this helper filed itself aren't opened again.
+
+### Inventory server
+- Server API 4 (new operation `record_in_process`). If your inventory lives on the server, update the server too.
+  Until you do, the helper says so instead of recording these forms.
+
+### Tested
+- Tested against a fake eForms dashboard and the real server in a temp folder. Not yet run against live eForms: it
+  uses the same search and View PDF steps as the CLEO-copy fetch, which has worked live on submitted forms.
+
+## 1.5.2 (2026-11-20)
+
+Race/ethnicity matches eForms' list.
+
+### Fixed
+- **"American Indian or Alaskan Native" is now spelled the way eForms spells it.** Thanks to @ruinz89 for finding and
+  fixing it (#4). Before, filing stopped at the race step for anyone who had picked it. Settings saved with the old spelling
+  are corrected automatically; nothing to redo.
+
+### New
+- **All of eForms' race/ethnicity options, and more than one at a time.** Settings now lists the eight options eForms
+  shows (Hispanic or Latino, Middle Eastern/North African and Unknown were missing) as a checklist, the same for
+  every responsible person. Each ticked one is ticked on eForms. Settings with one race are unchanged.
+
+### Tested
+- With a fake eForms popup. The option names come from eForms' own list (seen 2026-11-20); not yet filed live with
+  more than one race or with the new options.
+
+## 1.5.1 (2026-11-19)
+
+Disapproved forms can be filed again.
+
+### New
+- **Check approvals finds disapproved and returned Form 1s.** While any suppressor is filed and waiting, it also
+  searches eForms for Form 1s that are disapproved or returned without action, saves their PDFs to
+  `out/not-approved/`, and marks those suppressors *disapproved* (the home screen says how many). Returned for
+  correction is reported, not marked. Only a serial's current filing counts: an old disapproved form of a serial
+  that was filed again since is left alone.
+- **Advanced > Re-file lists disapproved suppressors first**, with a reminder to fix what ATF disapproved them for
+  (eForms has the letter) before filing again. Each re-filing is a new application. Until now a disapproved form
+  stayed "filed", and deleting rows from the Excel export or the filing log didn't change that.
+
+### Tested
+- With a fake eForms dashboard, and against a real inventory server. Not yet seen live: a real disapproved or
+  returned form in eForms (its PDF is expected to have the same item 4 as an approved one).
+
 ## 1.5.0 (2026-11-17)
 
 Backups, and installing no longer needs Python.

@@ -139,7 +139,7 @@ plain CLI, kept for debugging/scripting:
   Mapping step options `only: trust|individual` (checked before placeholders are filled) and `if_set: <ctx key>`.
   The same RP popup carries the individual's photo, EFT, DOB, birthplace, sex, race (responsible_persons[0] settings).
 - **Other responsible persons** (trust only; `responsible_persons[1:]`, `atf.other_rps()`): each has title, first/middle/
-  last name, suffix (portal "Cadence"), email, dob, sex, race, place_of_birth.state, home_address {street, zip, city,
+  last name, suffix (portal "Cadence"), email, dob, sex, race, place_of_birth {country, state}, home_address {street, zip, city,
   state}, eft, photo, and `template` = their own signed 5320.23 copied to `forms/5320.23_<first-last>.pdf` (on save).
   `stamp_5320(row, when, person=p)` -> `out/5320.23_<serial>.<first-last>.pdf` (serial, caliber, date; NOT their CLEO
   line: item 5 is the CLEO where THEY live); `stamp_all()` = you + them (menu, practice, redate, fill-5320).
@@ -335,11 +335,35 @@ plain CLI, kept for debugging/scripting:
   that has a "9." just left of it (~10 pt below; checked on every saved real approval 2026-11-05: always found, and
   equal to the filing log's date for every one this tool filed; page 2 repeats a signature date but isn't used))
   by position relative to labels, ignoring the label font. Report = SUPPRESSORS (type contains SILENCER) matched to
-  suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (7-8 digits) and control numbers (11) do NOT
+  suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (6-8 digits; older forms 6) and control numbers (11) do NOT
   equal the 9-digit application numbers recorded at filing, hence matching by serial. Report only; nothing imported.
   Results-table rows are found from each VISIBLE "View Form" button (the page has hidden duplicates whose innerText
-  still reads "View Form"), climbing to the smallest ancestor with one such button and a 7+ digit ID; buttons are
-  tagged data-atf-row so the click hits that row. The home page shows "Total Rows: 0" before any search: wait for rows.
+  still reads "View Form"), climbing to the smallest ancestor with one such button that is a `tr`, holds the row's
+  `eformId-link` or a 7+ digit number; buttons are tagged data-atf-row so the click hits that row. The eForm ID = that
+  link's text, ANY length (1.6.3: a user's older forms have 6-digit IDs; only 7-8 were read, so 1 of his 7 approvals
+  showed as "7 page(s)" + "couldn't get to results page 2" and his disapproved one "no result rows could be read");
+  without a link a 7-8 digit number, never shorter (a serial like TD261122 in the ICN column has 6 digits in a row).
+  Pages = total / `RESULTS_PER_PAGE` (10; page 1's rows only when more: `_page_count`). A page where eForms lists
+  more than were read = a problem line + `out/results_rows_*.txt` (`_save_row_shapes`: per row the ID length, digit
+  group lengths, button labels, NO values; users can send it) and `_fetch_status` returns False (in-process deletes
+  nothing). `settle()` reads until 10 rows or unchanged for 0.5 s (a precaution for a table drawn row by row; not
+  seen live). The `dashboard` test fixture sets RESULTS_PER_PAGE = its `per`; `draw=ms` draws rows one at a time.
+  **Older approval PDFs** (same user, 1.6.3; layout: "e. Of Barrel:", "f. Overall:", "g. Serial Number (See
+  instruction 2i.)", "Size (Specify)"): the type window read only the printed hint "(SPECIFY)", so 6 suppressors were
+  "6 (SPECIFY)" other NFA items in data/sbrs.csv and never offered for the inventory. Now `value()` ignores spans
+  wholly in brackets, and a type that isn't a known one (`_known_type`: SILENCER + NFA_TYPES, `_loose` letters only)
+  falls back to the page-1 span that is exactly a type name in capitals (printed text is mixed case). `is_other_nfa`
+  refuses a bracketed type (an unknown real type is still kept as printed). `drop_misread_nfa(records)` (menu + CLI,
+  local only: the server has no remove) takes sbrs rows whose eForm ID now reads as SILENCER off that list; the saved
+  PDFs are re-read, never downloaded again. That layout is ATF Form 1 "Revised September 2007" (the user sent a
+  scan of the blank form + a clip of item 4): caliber = `c. Caliber,` (value ~58 pt below, under "(Specify)", dx
+  -10..45 so the serial column isn't caught), `e. Of Barrel:` / `f. Overall:` (5..25 pt below), item 9 is one label
+  "9. Date" (date window dx from -12), and ATF ticks its boxes with a bold "X" (`ticked()` takes an X up to 30 pt
+  left of the label, or the newer ZapfDingbats check; his first run said "Approved box not ticked" for all six). `older_approval_pdf()` in tests/test_approvals.py rebuilds it (positions from
+  the scan, pt = px / 1.9). Live 2026-11-22: his six were read (caliber, length, X tick) and added, on his PC. Windows "Access is denied" (WinError 5) renaming a downloaded PDF: `_replace`
+  retries ~10 s and names the file; `read_approved_pdf`, `_keep_first_page`, `save_form1_cleo` open PDFs from bytes
+  (no open handle).
+  The home page shows "Total Rows: 0" before any search: wait for rows.
   Overall length is compared with the row's recorded length (else the settings default) only for suppressors in your
   records (older builds differ). Older control numbers are 10 digits (newer 11); also read from the PDF's last page.
   Approvals from Oct 2026 on print the date as "October 15, 2026" ~4.5 pt below the "Date" label (older: 08/15/2026,
@@ -353,6 +377,35 @@ plain CLI, kept for debugging/scripting:
   table reads as the new results, then the search resets to page 1): page n is reached from page n-1
   (`search=False`), Search only after Go Home; a failed page is retried once from a reloaded home page; if it still
   fails, paging stops with a problem line (✖) and the report covers every PDF already saved (index.csv).
+  **Disapproved/returned** (added 2026-11-19, after a user's Form 1s were disapproved for an RPQ address and they
+  couldn't re-file: nothing ever set `disapproved` and Re-file listed only `filed`): `fetch_approved(others)` (menu and
+  CLI pass a list) runs `_fetch_status` for each `NOT_APPROVED` status (DISAPPROVED, RETURNED WITHOUT ACTION, RETURNED
+  FOR CORRECTION; eForms' `#form-status-search` options from the captures) after APPROVED, only while a row is
+  filed/pending (`_anything_waiting`), each from a reloaded home page, `wait=NOT_APPROVED_WAIT` (15 s: an empty
+  search can't be told from a slow one); PDFs into `out/not-approved/<status-slug>/` (own index.csv); result rows
+  get "status"; a failed status search is one problem line, the approvals are kept. `not_approved_report(records,
+  rows)`: a form counts only for a filed/pending row whose filed_date <= the form's item 9 (else the results'
+  submitted date) = its CURRENT filing (eForms keeps listing the old form after a re-file); no dates = "unsure";
+  RETURNED FOR CORRECTION = reported only. `record_disapprovals(serials)` -> status disapproved (server:
+  `record_approvals` with status disapproved; mark_pending `force` already allowed disapproved). Menu: table + home
+  line "N Form 1s disapproved", Advanced > Re-file lists disapproved rows first ("File it again?", reminder to fix
+  the cause: the re-file uses the settings/template as they are now). Not yet seen live: a real disapproved form's
+  View PDF (assumed to have item 4 like an approved one).
+  **In process / filed by hand** (added 2026-11-20, after a user reported that Form 1s they filed by hand outside the tool
+  showed up only once approved; before this, Check approvals never searched SUBMITTED, and a hand-filed serial added
+  via Add suppressors was QUEUED, so File would have submitted it a second time): `fetch_approved(others, in_process)` (menu
+  and CLI pass a list) runs `_fetch_in_process` after APPROVED, ALWAYS (not only while something is waiting; wait 30 s
+  if a row is filed/pending, else NOT_APPROVED_WAIT): `_fetch_status(SUBMITTED, skip=_tracked_eform_ids(),
+  first_page=True)` saves page 1 only (`_keep_first_page`) to `out/in-process/<serial>.pdf` + index.csv. Skipped (never
+  opened): eForm IDs already in suppressors.csv and form1_index.csv eForms whose serial is filed/pending/approved here.
+  Once every results page was read, files of forms no longer listed are deleted. `in_process_report(records, rows)`:
+  unknown (not in records), queued (status "" or disapproved here = would be filed twice), pending (hint: Resolve as
+  filed; never changed automatically), duplicates (serial on 2+ in-process forms; left out of the rest), other NFA
+  types (ignored until approved). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
+  submitted date, eform_id, no application number, caliber/length only fill gaps; new rows re-sorted. Server: op
+  `record_in_process` (API 4; app checks /api/hello api >= 4, else ServerReadOnly "too old"; queued/disapproved only,
+  all or nothing, `_loose_inches`). Menu `_in_process_lines` (asks before recording; declining warns that queued ones
+  would be filed again); CLI records them only with `--import-unknown`. Live 2026-11-21 (a user's first run, 84 in process: imported fine); it printed one "MuPDF error: cannot find object in xref" line per object while trimming (`_keep_first_page` ran before anything switched MuPDF's messages off; 1.6.1: switched off there, page 1 copied with insert_pdf since select() is undone by MuPDF's repair, whole PDF kept if trimming fails).
 - **CLEO notification copies** (added 2026-11-06; optional; files in `out/cleo/`, path via `_cleo_dir()`). The CLEO
   gets the Form 1 and each RP's 5320.23, and **neither shows the serial** (ATF leaves it off the CLEO's copies; so must
   everything made for the CLEO, the packet's cover included). 5320.23: the generator's CLEO copy = ATF's CLEO-copy
@@ -467,8 +520,11 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   fixed 1.5 s; 10 real filings faster).
 - **Locked/prefilled fields** hang `select`/`fill` for 30s: use `skip_if_disabled: true` (done for the firearm popup
   country); the CLEO country is locked so its step was removed. Applicant address/phone/email are prefilled.
-- **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay). Only the
-  "White" option text has been verified live; other races in the wizard list are the standard category names.
+- **Race/Ethnicity** is a PrimeNG multiselect (`#raceEthnicity .ui-multiselect`, option panel is an overlay, stays open
+  while ticking). `atf.RACES` = eForms' 8 options (uppercase there; list seen in a user's screenshot 2026-11-20).
+  Settings `race` = a string (one) or a list (several; wizard `ui._race` checklist); `atf.races(person)` reads either
+  and fixes the pre-1.5.2 "Alaska Native" spelling (PR #4: it never matched "ALASKAN NATIVE"). The mapping repeats
+  over `rp_races`; `rp_race` = them joined. Only "White" has been filed live.
 - **Photo:** eForms requires a photo for the responsible person (`#photoFile`); the 5320.23 PDF itself doesn't need one.
 - **Fingerprint popup:** attaching the EFT opens an info dialog ("Valid EBTS Package", Ok); the `dismiss_dialog` step
   WAITS (up to 60 s, `value`) for a dialog matching `require`, prints it and clicks Ok. It used to wait a fixed 1.5 s:
@@ -477,11 +533,25 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   are now ignored (only ones mentioning `about: EBTS` are shown) and the user is never asked to close the RP form.
   If no Valid message appears, submitting is refused (see `require`); look at it.
 - **birthState is disabled until birthCountry is chosen** (800 ms wait step). Caliber is free text for silencers;
-  barrel length is hidden for silencers. Birth country and citizenship are fixed to US in the mapping.
+  barrel length is hidden for silencers. Citizenship is fixed to US in the mapping. **Place of birth** (issue #6,
+  1.6.2): `place_of_birth: {country, state}`; `atf.born_in_us(person)` = no country or a US spelling (`_US_SPELLINGS`;
+  settings before 1.6.2 always said "United States of America"); `birth_country()` (US = `US_COUNTRY`, else the
+  setting uppercased) and `birth_state()` ("" abroad) feed `rp_birth_country`/`rp_birth_state`; the mapping picks the
+  country and skips `#birthState` (`if_set`) when born abroad, as the portal allows. State of birth is required in
+  `settings_problems` only when born in the US (no longer in COMMON_/OTHER_RP_REQUIRED). The wizard asks "Born in the
+  United States?" (`ui._birthplace`), then the state, else the country as free text (a US spelling is turned away).
+  The portal's country list isn't bundled (captures keep only the first 40 options): a spelling it doesn't offer fails
+  at that step, and `_pick` then names the closest options (difflib) when there are more than 12. `read_template`
+  reads 9c Country of Birth; a foreign one sets the country and drops the state.
 - **Manufacturer code is `FMI`** for a Form 1 suppressor (`{mfr_code}` defaults to it); an SBR etc. made from an
   existing receiver uses the ORIGINAL manufacturer's code (the portal's own popup text says so).
-  The wizard's default firearm description is "I POSSESS NO PARTS OR PLANS, AND WILL NOT PURCHASE OR MANUFACTURE
-  ANY PARTS UNTIL A FORM 1 IS APPROVED" (`DEFAULT_DESCRIPTION` in ui.py); users may edit it.
+  **Firearm description: at most `atf.DESCRIPTION_MAX` = 100 characters** (issue #7, 1.6.2). The portal's textarea
+  takes more, but the Form 1 PDF eForms has made since about Oct 2026 (pdf-lib; earlier ones were OpenPDF and printed
+  it whole) prints only the first 100: the old 102-character default came out "...IS APPROV" on every form from then
+  on. The wizard refuses longer ones (`ui._description`); `settings_problems` blocks filing on a longer saved one
+  (`description_problem`, names the last words that would print). The default is now 99 characters (`DEFAULT_DESCRIPTION`
+  in ui.py); users may edit it. The mapping reads `#description` back right after filling it (exact,
+  case-insensitive: the portal uppercases), so a box that kept less is a mismatch and nothing is submitted.
 - **CLEO city/county/state are dropdowns** populated from the ZIP (1500 ms wait); `_row_context` uppercases them.
   The county is never on the 5320.23, so the wizard's county question is the only empty one when a template is read.
   A value the dropdown doesn't offer = `NoSuchOption` after ~3 s naming the page's choices + the step's `fix` hint

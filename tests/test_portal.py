@@ -174,16 +174,19 @@ RP_PAGE = """<table><tr><td>Settlor</td><td>DOE</td><td><input type="image" id="
 </div>
 <div class="modal" id="ebts" style="display:none">Validation Status: Valid EBTS Package <button onclick="this.parentNode.style.display='none'">Ok</button></div>
 <ul class="ui-multiselect-panel" id="races" style="display:none">
-  <li class="ui-multiselect-item" onclick="window.race=this.innerText">Asian</li><li class="ui-multiselect-item" onclick="window.race=this.innerText">White</li></ul>
+  <li class="ui-multiselect-item" onclick="window.races.push(this.innerText)">ASIAN</li>
+  <li class="ui-multiselect-item" onclick="window.races.push(this.innerText)">HISPANIC OR LATINO</li>
+  <li class="ui-multiselect-item" onclick="window.races.push(this.innerText)">AMERICAN INDIAN OR ALASKAN NATIVE</li>
+  <li class="ui-multiselect-item" onclick="window.races.push(this.innerText)">WHITE</li></ul>
 <script>
-  window.saved = [];
+  window.saved = []; window.races = [];
   const v = id => { const e = document.getElementById(id); return e.tagName === 'SELECT' ? e.options[e.selectedIndex].text : e.value; };
   function fillZip() { document.getElementById('state').add(new Option('OHIO'));
     document.querySelector("select[name='city']").add(new Option('SPRINGFIELD')); }
   function saveRp() {
     const rp = {}; for (const id of ['citizenType', 'title', 'firstName', 'middleNameDetail', 'middleName', 'lastName', 'cadence',
-        'emailAddress', 'street', 'zipCode', 'state', 'dateOfBirth', 'birthState', 'stateOfResidence', 'sex']) rp[id] = v(id);
-    rp.city = document.querySelector("select[name='city']").value; rp.race = window.race;
+        'emailAddress', 'street', 'zipCode', 'state', 'dateOfBirth', 'birthCountry', 'birthState', 'stateOfResidence', 'sex']) rp[id] = v(id);
+    rp.city = document.querySelector("select[name='city']").value; rp.race = window.races.join(', '); window.races = [];
     rp.files = ['formFile', 'photoFile', 'eftFile'].map(id => document.getElementById(id).files.length);
     window.saved.push(rp);
     const n = document.querySelectorAll("input[id$='Edit']").length, tr = document.createElement('tr');
@@ -222,8 +225,9 @@ def test_adds_another_responsible_person(configured):
     assert bad == [] and saved == [{
         "citizenType": "U.S.CITIZEN", "title": "Co-Trustee", "firstName": "Jane", "middleNameDetail": "INITIAL ONLY",
         "middleName": "Q", "lastName": "Roe", "cadence": "JR", "emailAddress": "jane@example.com", "street": "300 ELM ST",
-        "zipCode": "45503", "state": "OHIO", "city": "SPRINGFIELD", "dateOfBirth": "03/04/1985", "birthState": "OHIO",
-        "stateOfResidence": "OHIO", "sex": "FEMALE", "race": "White", "files": [1, 1, 1]}]
+        "zipCode": "45503", "state": "OHIO", "city": "SPRINGFIELD", "dateOfBirth": "03/04/1985",
+        "birthCountry": "UNITED STATES OF AMERICA", "birthState": "OHIO",
+        "stateOfResidence": "OHIO", "sex": "FEMALE", "race": "WHITE", "files": [1, 1, 1]}]
     assert [(r["label"], r["ok"], r["private"]) for r in reads] == [
         ("Responsible person 2 (list)", True, True), ("Responsible persons listed", True, False)]
 
@@ -277,3 +281,18 @@ def test_each_supporting_document_is_listed_before_the_next(configured):
         atf._run_steps(page, block, atf._row_context(atf.load_trust(), atf.load_rows()[0]), False, [])
         rows = page.evaluate("[...document.querySelectorAll('#docs tr')].map(r => r.innerText.replace(/\\s+/g, ' ').trim())")
     assert rows == ["printer.jpg 3D PRINTER", "it's filament.jpg FILAMENT"]
+
+
+def test_races_from_settings():
+    """One race (a string, as settings always were), several (a list), and the old spelling that never matched eForms."""
+    assert atf.races({"race": "White"}) == ["White"]
+    assert atf.races({"race": ["hispanic or latino", "White", "White"]}) == ["Hispanic or Latino", "White"]
+    assert atf.races({"race": "American Indian or Alaska Native"}) == ["American Indian or Alaskan Native"]
+    assert atf.races({}) == []
+
+
+def test_another_person_with_two_races_and_the_old_spelling(configured):
+    queue(("S1", "9"))
+    add_other_rp(race=["Hispanic or Latino", "American Indian or Alaska Native"])
+    saved, bad, _ = _run_on_fake_popup()
+    assert bad == [] and saved[0]["race"] == "HISPANIC OR LATINO, AMERICAN INDIAN OR ALASKAN NATIVE"

@@ -653,6 +653,49 @@ def _record_approvals(conn, body, device, at, rid):
     return out
 
 
+def _loose_inches(value):
+    """A length read from a form's PDF: its number of inches, or "" (never refused: it's only filled in)."""
+    m = re.search(r"\d+(?:\.\d+)?", str(value or ""))
+    return m.group() if m else ""
+
+
+def _record_in_process(conn, body, device, at, rid):
+    """Check approvals: suppressors found submitted/in process on eForms (e.g. filed by hand outside the app) recorded as
+    filed: rows [{serial_number, caliber, overall_length, filed_date, eform_id}]. A serial not in the inventory is added
+    as filed; a queued or disapproved one becomes filed (filed date and eForm ID from the form; a recorded caliber or
+    length is kept). Any other status = refused, nothing saved."""
+    rows = body.get("rows") or []
+    if not rows:
+        raise Refused("No suppressors given.")
+    out, seen = [], set()
+    for n in rows:
+        serial = _text(n.get("serial_number"), "serial number", n.get("serial_number") or "(no serial)", limit=40)
+        if serial.upper() in seen:
+            raise Refused(f"{serial} is given twice. Nothing was saved.")
+        seen.add(serial.upper())
+        filed, eform = to_iso(n.get("filed_date")), str(n.get("eform_id") or "").strip()
+        have = conn.execute("SELECT * FROM suppressors WHERE serial = ? COLLATE NOCASE", (serial,)).fetchone()
+        if have is None:
+            conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, filed_date, eform_id, updated_at, "
+                         "updated_by) VALUES (?, ?, ?, 'filed', ?, ?, ?, ?)",
+                         (serial, _text(n.get("caliber"), "caliber", serial, required=False, limit=40),
+                          _loose_inches(n.get("overall_length")), filed, eform, at, device))
+            _log(conn, at, device, "record_in_process", serial, None, row(conn, serial), rid)
+        else:
+            r = _current(conn, have["serial"])
+            if r["status"] not in ("queued", "disapproved"):
+                raise Refused(f"{r['serial']} is {r['status']} on your server, not queued: nothing was saved.")
+            before = row(conn, r["serial"])
+            caliber = r["caliber"] or _text(n.get("caliber"), "caliber", serial, required=False, limit=40)
+            length = r["overall_length"] or _loose_inches(n.get("overall_length"))
+            conn.execute("UPDATE suppressors SET status = 'filed', filed_date = ?, eform_id = ?, caliber = ?, overall_length = ?, "
+                         "updated_at = ?, updated_by = ? WHERE id = ?", (filed, eform, caliber, length, at, device, r["id"]))
+            _log(conn, at, device, "record_in_process", r["serial"], before, row(conn, r["serial"]), rid)
+            serial = r["serial"]
+        out.append(row(conn, serial))
+    return out
+
+
 def _record_sbrs(conn, body, device, at, rid):
     """Check approvals: approved non-suppressors, added or (by eForm ID) filled in with the details given. Rows from
     an app that doesn't send a type are SBRs (all it could record)."""
@@ -680,7 +723,7 @@ def _record_sbrs(conn, body, device, at, rid):
 OPERATIONS = {"set_built": _set_built, "clear_built": _clear_built, "add_queued": _add_queued,
               "edit_queued": _edit_queued, "remove_queued": _remove_queued, "mark_pending": _mark_pending,
               "mark_filed": _mark_filed, "unmark_pending": _unmark_pending, "record_approvals": _record_approvals,
-              "record_sbrs": _record_sbrs}
+              "record_sbrs": _record_sbrs, "record_in_process": _record_in_process}
 
 
 def add_approval_pdfs(conn, pdf_dir, items, device):

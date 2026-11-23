@@ -136,6 +136,22 @@ def test_approvals_go_to_the_server(server, configured):
     assert atf.apply_approvals([rec]) == ([], [])                                                # nothing new: nothing sent
 
 
+def test_a_disapproval_goes_to_the_server_and_the_row_can_be_filed_again(server, configured, portal):
+    queued_on_server(server, "S1")
+    atf._server_op("mark_pending", {"serial": "S1", "filed_date": "11/01/2026"})
+    atf._server_op("mark_filed", {"serial": "S1", "application_number": "900000777"})
+    assert atf.record_disapprovals(["s1"]) == ["S1"] and atf.record_disapprovals(["S1"]) == []      # once only
+    atf._FETCHED.clear()
+    assert atf.load_rows()[0]["status"] == "disapproved" and history("S1")[-1] == "record_approvals"
+    assert "S1" not in [r["serial_number"] for r in atf.load_rows() if r["status"] not in atf.SKIP]   # File leaves it alone
+    portal([("S1", "9")])
+    atf.file_rows(atf.load_rows(), [0], SimpleNamespace(**{**OPTS, "force": True}))              # Advanced > Re-file
+    atf._FETCHED.clear()
+    row = atf.load_rows()[0]
+    assert (row["status"], row["application_number"], row["filed_date"]) == ("filed", "900000001", TODAY)
+    assert history("S1")[-2:] == ["mark_pending", "mark_filed"] and atf.outbox() == []
+
+
 def test_the_server_keeps_each_type(server, configured):
     queued_on_server(server, "S1")
     sbs = {"type": "SHORT BARRELED SHOTGUN", "approved": True, "serial": "G1", "approval_date": "10/30/2026", "eform_id": "2000002",
@@ -160,3 +176,20 @@ def test_saved_approval_pdfs_fill_filed_dates_on_the_server(server, configured):
     assert atf.backfill_from_approval_pdfs() == ["S1"]
     assert {r["serial_number"]: r["filed_date"] for r in atf.load_rows()} == {"S1": "06/01/2026"}
     assert history("S1")[-1] == "record_approvals" and atf.backfill_from_approval_pdfs() == []
+
+
+def test_forms_filed_by_hand_are_recorded_as_filed_on_the_server(server, configured, monkeypatch):
+    queued_on_server(server, "S1", "S2")
+    rec = lambda serial, eform: {"type": "SILENCER", "approved": False, "serial": serial, "eform_id": eform, "caliber": "9",  # noqa: E731
+                                 "overall_length": "12", "filed_date": "11/03/2026", "submitted": "11/3/2026", "approval_date": ""}
+    rep = atf.in_process_report([rec("S1", "4000001"), rec("H1", "4000009")], atf.load_rows())
+    assert [r["serial"] for r in rep["unknown"]] == ["H1"] and [row["serial_number"] for row, _ in rep["queued"]] == ["S1"]
+    assert atf.record_in_process(rep["unknown"] + [r for _, r in rep["queued"]]) == ["H1", "S1"]
+    atf._FETCHED.clear()
+    rows = {r["serial_number"]: r for r in atf.load_rows()}
+    assert {s: (r["status"], r["filed_date"], r["eform_id"]) for s, r in rows.items()} == {
+        "H1": ("filed", "11/03/2026", "4000009"), "S1": ("filed", "11/03/2026", "4000001"), "S2": ("", "", "")}
+    assert history("S1") == ["add_queued", "record_in_process"]
+    monkeypatch.setattr(remote.Server, "get", lambda self, path, **kw: {"api": 3})     # an older server: told to update it
+    with pytest.raises(atf.ServerReadOnly, match="too old"):
+        atf.record_in_process([rec("S2", "4000002")])

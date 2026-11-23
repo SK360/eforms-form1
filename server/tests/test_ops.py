@@ -157,3 +157,24 @@ def test_record_approvals_fills_only_an_empty_filed_date(filled):
     filled.execute("UPDATE suppressors SET filed_date = NULL WHERE serial = 'A103'")
     with pytest.raises(db.Refused, match="not a date"):
         op(filled, "record_approvals", updates=[{"serial": "A103", "fields": {"filed_date": "someday"}}])
+
+
+def test_record_in_process_records_forms_filed_by_hand_as_filed(filled):
+    """Check approvals found these submitted/in process on eForms (e.g. filed by hand): a new serial is added as filed,
+    a queued one becomes filed (so it isn't filed twice); a recorded caliber/length is kept; any other status = refused."""
+    before = db.row(filled, "A136")
+    op(filled, "record_in_process", device="PC", rows=[
+        {"serial_number": "H1", "caliber": "9", "overall_length": '12"', "filed_date": "11/04/2026", "eform_id": "4000004"},
+        {"serial_number": "a136", "caliber": "45", "overall_length": "7", "filed_date": "11/03/2026", "eform_id": "4000002"}])
+    h1, a136 = db.row(filled, "H1"), db.row(filled, "A136")
+    assert (h1["status"], h1["caliber"], h1["overall_length"], h1["filed_date"], h1["eform_id"], h1["application_number"]) == (
+        "filed", "9", "12", "11/04/2026", "4000004", "")
+    assert (a136["status"], a136["filed_date"], a136["eform_id"]) == ("filed", "11/03/2026", "4000002")
+    assert (a136["caliber"], a136["overall_length"]) == (before["caliber"], before["overall_length"])   # recorded: kept
+    assert [h["operation"] for h in db.history(filled, "A136")] == ["import", "record_in_process"]
+    with pytest.raises(db.Refused, match="A101 is approved on your server"):                 # all or nothing
+        op(filled, "record_in_process", rows=[{"serial_number": "A137", "filed_date": "11/03/2026", "eform_id": "4000007"},
+                                              {"serial_number": "A101", "filed_date": "11/03/2026", "eform_id": "4000008"}])
+    assert db.row(filled, "A137")["status"] == ""
+    with pytest.raises(db.Refused, match="given twice"):
+        op(filled, "record_in_process", rows=[{"serial_number": "H2"}, {"serial_number": "h2"}])
