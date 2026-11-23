@@ -2,6 +2,7 @@
 fake eForms dashboard with View Form / Submit Void buttons. The test fails if anything but the read-only controls is clicked."""
 import csv
 import json
+from pathlib import Path
 from urllib.parse import unquote
 
 import pymupdf
@@ -113,8 +114,8 @@ def test_safe_click_refuses_anything_unexpected():
 
 
 DASHBOARD = """<a href='#' onclick="document.title='LOGGEDOUT'">Log Out</a><div id=app></div><script>
-const BY = %s, PER = %d, LINKS = %d, MODE = %s;  // BY: status -> forms; LINKS page numbers shown at a time, in blocks or sliding
-let STATUS = '';
+const BY = %s, PER = %d, LINKS = %d, MODE = %s, DRAW = %d;  // BY: status -> forms; LINKS page numbers shown at a time, in blocks or sliding
+let STATUS = '', SHOWN = 0;  // DRAW: ms between rows (a table drawn row by row, as a slow PC might)
 const app = () => document.getElementById('app');
 function home() {
   app().innerHTML = `<select id="form-type-search"><option>Select...</option><option>ATF Form 1 (5320.1)</option><option>ATF Form 4 (5320.4)</option></select>
@@ -129,13 +130,14 @@ function search() {
   window.hits = ok ? (BY[STATUS] || []) : []; setTimeout(() => showPage(1), 1500);   // results arrive after a delay, like the real portal
 }
 function showPage(n) {
+  const token = ++SHOWN;
   // markup like a UI-library table: empty first cell, column titles inside cells, hidden duplicate buttons
   const T = t => `<span class="col-title">${t} </span>`;
   const rows = window.hits.slice((n - 1) * PER, n * PER).map(f => `<tr><td></td><td>${T('ID')}<span class="ng-star-inserted"><a id="eformId-link"> ${f.id} </a></span></td>
-     <td>${T('Permit / Control Number')}2026${f.id}0</td><td></td><td>${T('Created By')}JOHN DOE</td>
+     <td>${T('Permit / Control Number')}${f.id.length > 6 ? '2026' + f.id + '0' : ''}</td><td>${T('Internal Control Number')}${f.icn}</td><td>${T('Created By')}JOHN DOE</td>
      <td>1/1/2026</td><td>${f.sub}</td><td>${f.fin}</td><td><button style="display:none" onclick="fetch('/clicked/hidden')">View Form</button>
      <button onclick="viewForm('${f.id}')">View Form</button> ${STATUS === 'APPROVED' ? `<button onclick="fetch('/clicked/void')">Submit Void</button>`
-     : `<button onclick="fetch('/clicked/withdraw')">Withdraw Form</button>`}</td></tr>`).join('');
+     : `<button onclick="fetch('/clicked/withdraw')">Withdraw Form</button>`}</td></tr>`);
   const pages = Math.ceil(window.hits.length / PER);
   let lo = MODE.startsWith('block') ? Math.floor((n - 1) / LINKS) * LINKS + 1 : Math.max(1, Math.min(n - Math.floor(LINKS / 2), pages - LINKS + 1));
   const nums = Array.from({length: Math.min(LINKS, pages - lo + 1)}, (_, i) => lo + i);
@@ -143,8 +145,9 @@ function showPage(n) {
      onclick="${to >= 1 && to <= pages ? `showPage(${to});` : ''}return false"><span class="pi pi-caret" style="display:inline-block;width:12px;height:12px"></span></a>`;
   const links = icon('first', 1) + icon('prev', n - 1) + '<span class="ui-paginator-pages">' + nums.map(k => `<a href="#" class="ui-paginator-page${k === n && !MODE.includes('nomark') ? ' ui-state-active' : ''}"
      onclick="showPage(${k});return false">${k}</a>`).join(' ') + '</span>' + icon('next', n + 1) + icon('last', pages);
-  document.getElementById('results').innerHTML = `<table><tr><th>ID</th><th>Permit / Control Number</th></tr>${rows}</table>
+  document.getElementById('results').innerHTML = `<table><tr><th>ID</th><th>Permit / Control Number</th></tr>${DRAW ? rows.slice(0, 1).join('') : rows.join('')}</table>
      <div class="ui-paginator">${links} <input type="text" value="10"></div><span>10 | Total Rows: ${window.hits.length}</span>`;
+  if (DRAW) rows.slice(1).forEach((r, i) => setTimeout(() => { if (token === SHOWN) document.querySelector('#results tbody').insertAdjacentHTML('beforeend', r); }, (i + 1) * DRAW));
 }
 function viewForm(id) {
   app().innerHTML = `<button id="saveBtn" onclick="fetch('/clicked/save')">Save</button><button id="cancelBtn">Cancel</button>
@@ -173,11 +176,13 @@ def dashboard(monkeypatch):
         state["logged_out"] = page.title() == "LOGGEDOUT"
     monkeypatch.setattr(atf, "_logout", tracked_logout)
 
-    def configure(forms, start="/home", per=10, links=5, mode="slide", status="APPROVED", others=None):
+    def configure(forms, start="/home", per=10, links=5, mode="slide", status="APPROVED", others=None, draw=0):
         by = {status: forms, **(others or {})}
+        monkeypatch.setattr(atf, "RESULTS_PER_PAGE", per)   # eForms shows 10; the paging tests use smaller pages
         pdfs = {f[0]: f[2] for fs in by.values() for f in fs}
-        html = DASHBOARD % (json.dumps({st: [{"id": f[0], "fin": f[1], "sub": f[3] if len(f) > 3 else "1/2/2026"} for f in fs]
-                                       for st, fs in by.items()}), per, links, json.dumps(mode))
+        html = DASHBOARD % (json.dumps({st: [{"id": f[0], "fin": f[1], "sub": f[3] if len(f) > 3 else "1/2/2026",
+                                            "icn": f[4] if len(f) > 4 else ""} for f in fs]
+                                       for st, fs in by.items()}), per, links, json.dumps(mode), draw)
 
         def route(r):
             path = r.request.url.split("fake.test", 1)[1]
@@ -767,3 +772,134 @@ def test_a_pdf_that_cant_be_trimmed_is_kept_whole(tmp_path):
     pdf.write_bytes(b"%PDF-1.4 not really a pdf")
     atf._keep_first_page(pdf)
     assert pdf.read_bytes() == b"%PDF-1.4 not really a pdf"
+
+
+def test_a_table_drawn_row_by_row_is_read_whole(configured, dashboard):
+    """A precaution, not seen live: a table drawn row by row must be read whole, not at its first row (that made 7
+    forms look like 7 pages, and later pages came up short). The live "7 page(s)" (2026-11-22) was 6-digit IDs."""
+    queue(("T201", "22", "filed", "1"))
+    state = dashboard(FORMS[:7], draw=150)
+    found, problems = atf.fetch_approved()
+    assert problems == [] and state["bad_clicks"] == [] and state["pdf_hits"] == 7 and len(found) == 7
+    state = dashboard(FORMS, draw=150)                  # 12 forms: page 2 is drawn row by row too
+    found, problems = atf.fetch_approved()
+    assert problems == [] and state["pdf_hits"] == 7 + 5 and len({f["eform_id"] for f in found}) == 12  # 7 saved before
+
+
+def test_six_digit_eform_ids_are_read(configured, dashboard):
+    """Live 2026-11-22 (a user's older forms): eForm IDs of 6 digits. Only 7-8 digit IDs were read, so 1 of his 7
+    approved forms was seen ("7 approved Form 1(s) on 7 page(s)", then "couldn't get to results page 2") and his
+    disapproved one not at all. IDs come from each row's ID link now; the serial in the Internal Control Number
+    column (6 digits in a row) must not be taken for one."""
+    queue(("T201", "22", "filed", "1"))
+    old = [(f"10000{n}", "4/23/2019", older_approval_pdf(serial=f"2014{n}"), "4/1/2019", f"TD26112{n}") for n in range(1, 7)]
+    state = dashboard(old + [FORMS[0]], others={"DISAPPROVED": [("100009", "", approved_pdf(serial="T201"), "1/2/2026")]})
+    others = []
+    found, problems = atf.fetch_approved(others)
+    assert problems == [] and state["bad_clicks"] == []
+    assert sorted(f["eform_id"] for f in found) == sorted([f"10000{n}" for n in range(1, 7)] + ["1000001"])
+    assert [o["eform_id"] for o in others] == ["100009"] and state["pdf_hits"] == 8
+    records, more = atf.read_approved(found)                # his 2007-form approvals: suppressors, with caliber + length
+    rep = atf.approval_report(records, atf.load_rows(), atf.load_trust())
+    assert more == [] and sorted((r["serial"], r["caliber"], r["overall_length"]) for r, _ in rep["unknown"]) == [
+        (f"2014{n}", "30", "9") for n in range(1, 7)]
+    assert atf.record_sbrs(records) == 0 and atf.load_sbrs() == []
+    assert sorted(atf.apply_approvals(records, import_unknown=True)[1]) == [f"2014{n}" for n in range(1, 7)]
+
+
+def test_rows_that_cant_be_read_are_reported_with_their_shape_only(configured, dashboard, monkeypatch):
+    """A short read is a problem line naming a file that describes each row without its values, not "7 page(s)"."""
+    real = atf._parse_result_row
+    monkeypatch.setattr(atf, "_parse_result_row", lambda r: None if "1000002" in str(r) else real(r))
+    state = dashboard(FORMS[:3])
+    found, problems = atf.fetch_approved()
+    assert len(problems) == 1 and "results page 1: eForms lists 3 form(s), only 2 could be read" in problems[0]
+    assert state["pdf_hits"] == 2
+    shapes = next((atf.OUT).glob("results_rows_*.txt")).read_text(encoding="utf-8")
+    assert "ID link: 7 characters" in shapes and "buttons: View Form, Submit Void (+1 hidden)" in shapes
+    assert "1000002" not in shapes and "JOHN" not in shapes and "8/15/2026" not in shapes
+
+
+def older_approval_pdf(serial="20141", caliber="30", overall="9", approved=True):
+    """ATF Form 1 "Revised September 2007" as eForms rendered a user's older approvals (6-digit eForm IDs, 2026-11-22),
+    placed from his scan of the blank form and his clip of item 4 (pt = px / 1.9): mixed-case labels ("c. Caliber,"
+    / "Gauge or" / "Size" / "(Specify)", "e. Of Barrel:", "f. Overall:", "g. Serial Number"), typed values in the same
+    Times font. The type sits ~40 pt below its label; only the printed "(Specify)" is inside the old type window."""
+    doc = pymupdf.open()
+    p = doc.new_page(width=612, height=792)
+    label = lambda x, top, t: p.insert_text((x, top + 6.5), t, fontname="tiro", fontsize=8)  # noqa: E731
+    value = lambda x, top, t: p.insert_text((x, top + 6), t, fontname="tiro", fontsize=7)    # noqa: E731
+    label(42, 300, "4. Description of Firearm"), label(140, 300, "(complete items a through i)")
+    label(42, 309, "a. Name and Location of Original Manufacturer of"), label(52, 318, "Firearm (Receiver)")
+    label(247, 309, "b. Type of Firearm to be made"), label(256, 318, "(See instruction 1c)")
+    label(361, 309, "c. Caliber,"), label(369, 318, "Gauge or"), label(369, 327, "Size"), label(370, 336, "(Specify)")
+    label(416, 312, "d. Model")
+    label(416, 335, "Length"), label(416, 345, "(Inches)"), label(451, 335, "e. Of Barrel:"), label(510, 335, "f. Overall:")
+    label(416, 362, "g. Serial Number"), label(475, 362, "(See instruction 2i.)")
+    label(42, 393, "h. Additional Description"), label(317, 393, "i. State Why You Intend To Make Firearm")
+    value(39, 349, "FORM 1 REGISTRATION, UNITED STATES"), value(248, 349, "SILENCER"), value(362, 368, caliber)
+    value(514, 351, overall), value(417, 378, serial), value(418, 322, "N/A"), value(317, 410, "ANY LAWFUL PURPOSE")
+    label(519, 542, "9. Date"), value(521, 556, "04/01/2019")
+    label(42, 573, "The space below is for the use of the Bureau of Alcohol, Tobacco, Firearms and Explosives")
+    label(63, 607, "Approved"), label(100, 607, "(With the following conditions, if any)")
+    label(337, 607, "Disapproved"), label(385, 607, "(For the following reasons)")
+    # ATF ticks this form's boxes with a bold X (his clip of the decision block, 2026-11-22), not a ZapfDingbats check
+    p.insert_text((47, 616) if approved else (319, 616), "X", fontname="hebo", fontsize=10)
+    label(42, 665, "Authorized ATF Official"), label(528, 664, "Date"), value(530, 680, "04/23/2019")
+    label(510, 750, "ATF Form 1 (5320.1)"), label(510, 758, "Revised September 2007")
+    return doc.tobytes()
+
+
+def test_older_approval_pdf_is_read_as_a_suppressor(tmp_path):
+    f = tmp_path / "o.pdf"
+    f.write_bytes(older_approval_pdf())
+    r = atf.read_approved_pdf(f)
+    assert (r["type"], r["serial"], r["caliber"], r["overall_length"], r["barrel_length"], r["approved"]) == (
+        "SILENCER", "20141", "30", "9", "", True)
+    assert (r["approval_date"], r["filed_date"], r["model"]) == ("04/23/2019", "04/01/2019", "N/A")
+    f.write_bytes(older_approval_pdf(approved=False))       # the X in the Disapproved box
+    assert atf.read_approved_pdf(f)["approved"] is False
+    assert not atf.is_other_nfa(r)
+    f.write_bytes(approved_pdf(type_="(Specify)"))           # no type anywhere: unreadable, never another NFA item
+    r = atf.read_approved_pdf(f)
+    assert r["type"] == "" and not atf.is_other_nfa(r)
+
+
+def test_only_real_nfa_types_are_other_nfa_items():
+    assert atf.is_other_nfa({"type": "SHORT BARRELED RIFLE"}) and atf.is_other_nfa({"type": "Short-barreled shotgun"})
+    assert atf.is_other_nfa({"type": "ANY OTHER WEAPON"}) and atf.is_other_nfa({"type": "SOME NEW TYPE"})
+    for kind in ("SILENCER", "(SPECIFY)", " ( Specify ) ", "", "  "):
+        assert not atf.is_other_nfa({"type": kind}), kind
+
+
+def test_suppressors_misread_as_other_nfa_items_are_taken_off_that_list(configured):
+    """6 of a user's older suppressors were saved to data/sbrs.csv with the type "(SPECIFY)"; the next Check approvals
+    reads them as SILENCER and takes them out (and records them as suppressors)."""
+    base = {k: "" for k in atf.SBR_COLS}
+    atf.save_sbrs([dict(base, serial_number="20141", type="(SPECIFY)", eform_id="100001"),
+                   dict(base, serial_number="R1", type="SHORT BARRELED RIFLE", eform_id="1000004")])
+    recs = [{"type": "SILENCER", "eform_id": "100001", "serial": "20141"}, {"type": "SHORT BARRELED RIFLE", "eform_id": "1000004"}]
+    assert atf.drop_misread_nfa(recs) == 1
+    assert [r["serial_number"] for r in atf.load_sbrs()] == ["R1"]
+    assert atf.drop_misread_nfa(recs) == 0
+
+
+def test_a_rename_windows_refuses_for_a_moment_is_retried(tmp_path, monkeypatch):
+    src, dest = tmp_path / "a.part.pdf", tmp_path / "A101.pdf"
+    src.write_bytes(b"x")
+    real, calls = Path.replace, []
+
+    def flaky(self, target):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(13, "Access is denied")
+        return real(self, target)
+    monkeypatch.setattr(Path, "replace", flaky)
+    monkeypatch.setattr(atf.time, "sleep", lambda s: None)
+    atf._replace(src, dest)
+    assert dest.read_bytes() == b"x" and len(calls) == 3
+    src.write_bytes(b"y")
+    calls.clear()
+    monkeypatch.setattr(Path, "replace", lambda self, target: (_ for _ in ()).throw(PermissionError(13, "Access is denied")))
+    with pytest.raises(PermissionError, match="open in a PDF viewer"):
+        atf._replace(src, dest)

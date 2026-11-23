@@ -314,11 +314,35 @@ plain CLI, kept for debugging/scripting:
   that has a "9." just left of it (~10 pt below; checked on every saved real approval 2026-11-05: always found, and
   equal to the filing log's date for every one this tool filed; page 2 repeats a signature date but isn't used))
   by position relative to labels, ignoring the label font. Report = SUPPRESSORS (type contains SILENCER) matched to
-  suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (7-8 digits) and control numbers (11) do NOT
+  suppressors.csv by serial; other types go to `record_sbrs`, and `skipped` counts only forms with an unreadable type. eForm IDs (6-8 digits; older forms 6) and control numbers (11) do NOT
   equal the 9-digit application numbers recorded at filing, hence matching by serial. Report only; nothing imported.
   Results-table rows are found from each VISIBLE "View Form" button (the page has hidden duplicates whose innerText
-  still reads "View Form"), climbing to the smallest ancestor with one such button and a 7+ digit ID; buttons are
-  tagged data-atf-row so the click hits that row. The home page shows "Total Rows: 0" before any search: wait for rows.
+  still reads "View Form"), climbing to the smallest ancestor with one such button that is a `tr`, holds the row's
+  `eformId-link` or a 7+ digit number; buttons are tagged data-atf-row so the click hits that row. The eForm ID = that
+  link's text, ANY length (1.6.3: a user's older forms have 6-digit IDs; only 7-8 were read, so 1 of his 7 approvals
+  showed as "7 page(s)" + "couldn't get to results page 2" and his disapproved one "no result rows could be read");
+  without a link a 7-8 digit number, never shorter (a serial like TD261122 in the ICN column has 6 digits in a row).
+  Pages = total / `RESULTS_PER_PAGE` (10; page 1's rows only when more: `_page_count`). A page where eForms lists
+  more than were read = a problem line + `out/results_rows_*.txt` (`_save_row_shapes`: per row the ID length, digit
+  group lengths, button labels, NO values; users can send it) and `_fetch_status` returns False (in-process deletes
+  nothing). `settle()` reads until 10 rows or unchanged for 0.5 s (a precaution for a table drawn row by row; not
+  seen live). The `dashboard` test fixture sets RESULTS_PER_PAGE = its `per`; `draw=ms` draws rows one at a time.
+  **Older approval PDFs** (same user, 1.6.3; layout: "e. Of Barrel:", "f. Overall:", "g. Serial Number (See
+  instruction 2i.)", "Size (Specify)"): the type window read only the printed hint "(SPECIFY)", so 6 suppressors were
+  "6 (SPECIFY)" other NFA items in data/sbrs.csv and never offered for the inventory. Now `value()` ignores spans
+  wholly in brackets, and a type that isn't a known one (`_known_type`: SILENCER + NFA_TYPES, `_loose` letters only)
+  falls back to the page-1 span that is exactly a type name in capitals (printed text is mixed case). `is_other_nfa`
+  refuses a bracketed type (an unknown real type is still kept as printed). `drop_misread_nfa(records)` (menu + CLI,
+  local only: the server has no remove) takes sbrs rows whose eForm ID now reads as SILENCER off that list; the saved
+  PDFs are re-read, never downloaded again. That layout is ATF Form 1 "Revised September 2007" (the user sent a
+  scan of the blank form + a clip of item 4): caliber = `c. Caliber,` (value ~58 pt below, under "(Specify)", dx
+  -10..45 so the serial column isn't caught), `e. Of Barrel:` / `f. Overall:` (5..25 pt below), item 9 is one label
+  "9. Date" (date window dx from -12), and ATF ticks its boxes with a bold "X" (`ticked()` takes an X up to 30 pt
+  left of the label, or the newer ZapfDingbats check; his first run said "Approved box not ticked" for all six). `older_approval_pdf()` in tests/test_approvals.py rebuilds it (positions from
+  the scan, pt = px / 1.9). Live 2026-11-22: his six were read (caliber, length, X tick) and added, on his PC. Windows "Access is denied" (WinError 5) renaming a downloaded PDF: `_replace`
+  retries ~10 s and names the file; `read_approved_pdf`, `_keep_first_page`, `save_form1_cleo` open PDFs from bytes
+  (no open handle).
+  The home page shows "Total Rows: 0" before any search: wait for rows.
   Overall length is compared with the row's recorded length (else the settings default) only for suppressors in your
   records (older builds differ). Older control numbers are 10 digits (newer 11); also read from the PDF's last page.
   Approvals from Oct 2026 on print the date as "October 15, 2026" ~4.5 pt below the "Date" label (older: 08/15/2026,

@@ -7,6 +7,31 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.6.3 (2026-11-22)
+
+### Fixed
+- **Check approvals reads older Form 1s with 6-digit eForm IDs.** Before, only 7- and 8-digit IDs were read, so older
+  approved forms were missed, and the run could stop with "couldn't get to results page 2" (a page that doesn't exist)
+  or "no result rows could be read" for a disapproved form. The ID is now read from each row's own ID link, whatever
+  its length. Thanks to the user who reported it and tested the fix.
+- If eForms ever lists more forms on a page than the helper can read, you're told so, and a small file in `out/`
+  describes each row without any of its values (only lengths and button labels), so it's safe to send for help.
+- **Older approved suppressors are read as suppressors.** On older approval PDFs the type came out as "(SPECIFY)"
+  (a printed hint on the form), so those suppressors were listed as other NFA items and never offered for your
+  inventory. The type is now read from what was typed on the form, and the caliber, overall length and filed date
+  are read on that older form (ATF's September 2007 revision) too, where ATF ticked "Approved" with an X instead of
+  a check mark (those forms used to show "Approved box not ticked on the PDF"). The next Check approvals reads the PDFs already
+  saved (nothing is downloaded again), takes them off the other NFA list and offers to add them to your inventory.
+- Windows: saving an approval PDF no longer fails with "Access is denied" when another program holds the file for a
+  moment (it's retried, and the helper no longer keeps the PDF open itself). If it still fails, the message says which
+  file, in case it's open in a PDF viewer.
+- Check approvals also waits for the whole results table before reading it, in case a slow PC draws it row by row.
+
+### Tested
+- Live on the reporting user's Windows PC: all his approved and disapproved Form 1s were found, and his older
+  approvals (September 2007 form, 6-digit eForm IDs) were read as approved suppressors and added to his inventory.
+  Also tested against a fake eForms dashboard with 6-digit IDs and serials in the Internal Control Number column.
+
 ## 1.6.2 (2026-11-21)
 
 ### Fixed

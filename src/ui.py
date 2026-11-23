@@ -1727,6 +1727,7 @@ def approvals_flow():
             more_updated, added = atf.apply_approvals(records, import_unknown=True)
             updated += more_updated
     new_nfa = atf.record_sbrs(records)
+    misread = atf.drop_misread_nfa(records)
     if atf.server_settings():
         with con.status("Saving new approval PDFs on your server…"):
             sent = atf.send_approval_pdfs(records)
@@ -1739,6 +1740,8 @@ def approvals_flow():
     if new_nfa:
         label = atf.nfa_label(atf.load_sbrs())
         con.print(f"  [green]✔[/] {label}: {new_nfa} added (Inventory > Show another view > {label}).")
+    if misread:
+        con.print(f"  [green]✔[/] {misread} suppressor(s) that an older version listed as other NFA items were taken off that list.")
     con.print("  [dim]PDFs: out/approved/[/]")
     pause()
 

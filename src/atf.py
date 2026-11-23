@@ -43,12 +43,13 @@ import os
 import re
 from datetime import date, datetime
 import sys
+import time
 from pathlib import Path
 
 import yaml
 from pypdf import PdfReader
 
-__version__ = "1.6.2"  # bump with each release; CHANGELOG.md says what changed
+__version__ = "1.6.3"  # bump with each release; CHANGELOG.md says what changed
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA, OUT, FORMS = ROOT / "data", ROOT / "out", ROOT / "forms"
@@ -749,10 +750,23 @@ NFA_TYPES = {"SHORT BARRELED RIFLE": ("SBR", "SBRs"), "SHORT BARRELED SHOTGUN": 
 NFA_DEFAULT_TYPE = "SHORT BARRELED RIFLE"
 
 
+def _loose(text):
+    """Letters only, upper case: "Short-barreled rifle" -> "SHORTBARRELEDRIFLE"."""
+    return re.sub(r"[^A-Z]", "", (text or "").upper())
+
+
+def _known_type(text):
+    """The type name (loose form) that `text` contains: SILENCER or one of NFA_TYPES; "" for none."""
+    loose = _loose(text)
+    return next((k for k in ["SILENCER"] + [_loose(t) for t in NFA_TYPES] if k in loose), "")
+
+
 def is_other_nfa(record):
-    """An approved Form 1 for anything but a suppressor. A type that couldn't be read is neither: it gets reported."""
-    kind = (record.get("type") or "").strip().upper()
-    return bool(kind) and "SILENCER" not in kind
+    """An approved Form 1 for anything but a suppressor (a type this tool doesn't know is kept as printed). A type that
+    couldn't be read is neither: it gets reported. Nor is a printed hint in brackets: an older PDF was once read as
+    "(SPECIFY)" and 6 suppressors were saved as other NFA items (2026-11-22)."""
+    kind = " ".join((record.get("type") or "").upper().split())
+    return bool(_loose(kind)) and _known_type(kind) != "SILENCER" and not re.fullmatch(r"\(.*\)", kind)
 
 
 def nfa_short(kind):
@@ -834,6 +848,20 @@ def record_sbrs(records):
     elif changed:
         save_sbrs(rows)
     return added
+
+
+def drop_misread_nfa(records):
+    """Take out of data/sbrs.csv the rows whose eForm ID is now read as a SUPPRESSOR: older approvals once read with the
+    type "(SPECIFY)" were saved there (a user's 6, 2026-11-22). Local inventory only (the server has no remove; its
+    rows stay). Returns how many were removed."""
+    if server_settings():
+        return 0
+    sup = {r["eform_id"] for r in records if _known_type(r.get("type")) == "SILENCER" and r.get("eform_id")}
+    rows = load_sbrs()
+    keep = [r for r in rows if not (r.get("eform_id") and r["eform_id"] in sup)]
+    if len(keep) != len(rows):
+        save_sbrs(keep)
+    return len(rows) - len(keep)
 
 
 def approved_pdf_for(row):
@@ -1736,7 +1764,8 @@ def read_approved_pdf(path):
     ignored (in eForms' PDFs labels are TimesNewRomanPSMT; typed values are Helvetica, the serial "TimesNewRoman")."""
     import pymupdf
     pymupdf.TOOLS.mupdf_display_errors(False)  # newer eForms PDFs have dangling refs ("cannot find object in xref"): harmless
-    page = pymupdf.open(path)[0]
+    # Opened from bytes, so no file handle stays open (Windows can't rename or replace an open file).
+    page = pymupdf.open("pdf", Path(path).read_bytes())[0]
     spans = [sp for blk in page.get_text("dict")["blocks"] for ln in blk.get("lines", []) for sp in ln["spans"] if sp["text"].strip()]
     label_fonts = {sp["font"] for sp in spans if re.search(r"Serial number|Caliber or gauge|Overall length|Type of firearm", sp["text"])}
 
@@ -1746,6 +1775,7 @@ def read_approved_pdf(path):
             return ""
         lab = hits[0]
         vals = sorted((sp for sp in spans if sp["font"] not in label_fonts and "Zapf" not in sp["font"]
+                       and not re.fullmatch(r"\(.*\)", sp["text"].strip())  # printed hints like "(Specify)", never values
                        and dx[0] <= sp["bbox"][0] - lab.x0 <= dx[1] and dy[0] <= sp["bbox"][1] - lab.y0 <= dy[1]),
                       key=lambda sp: (sp["bbox"][1], sp["bbox"][0]))
         return " ".join(sp["text"].strip() for sp in vals)
@@ -1756,9 +1786,11 @@ def read_approved_pdf(path):
     line_y = dis[0].y0 if dis else None
     approved = [h for h in page.search_for("Approved") if line_y is not None and abs(h.y0 - line_y) < 4 and h.x0 < dis[0].x0 - 30]
 
-    def ticked(hits):  # ZapfDingbats check glyph just left of the label (only drawn when the box is ticked)
-        return bool(hits) and any("Zapf" in sp["font"] and 0 < hits[0].x0 - sp["bbox"][0] < 20 and abs(sp["bbox"][1] - hits[0].y0) < 8
-                                  for sp in spans)
+    def ticked(hits):  # a mark just left of the label, only drawn when the box is ticked: a ZapfDingbats check (newer
+        # approvals) or a bold "X" (the Sept 2007 form of older approvals: a user's, 2026-11-22, all read as not ticked)
+        return bool(hits) and any(("Zapf" in sp["font"] and 0 < hits[0].x0 - sp["bbox"][0] < 20
+                                   or sp["text"].strip() in ("X", "x") and 0 < hits[0].x0 - sp["bbox"][0] < 30)
+                                  and abs(sp["bbox"][1] - hits[0].y0) < 8 for sp in spans)
     below = (lambda h: h.y0 > line_y + 30) if line_y is not None else None
     # Item 9: "9. Date" right of the applicant's signature = the day it was signed, which in eForms is the day it was
     # submitted (checked on saved approvals 2026-11-05: the same day as the filing log for every one filed by this tool).
@@ -1769,12 +1801,23 @@ def read_approved_pdf(path):
         last = [ln.strip() for ln in page.parent[-1].get_text().splitlines() if ln.strip()]
         cut = next((i for i, ln in enumerate(last) if ln.lower() == "approval conditions"), len(last))
         conditions = " ".join(last[:cut]) or "see the last page of the PDF"
-    return {"type": value("Type of firearm", (-60, 120), (20, 40)), "serial": value("g. Serial number", (-10, 120), (5, 22)),
-            "caliber": value("c. Caliber or gauge", (-10, 75), (20, 40)), "model": value("d. Model", (-10, 60), (5, 20)),
-            "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)), "overall_length": value("Overall length", (-15, 50), (5, 22)),
+    kind = value("Type of firearm", (-60, 120), (20, 40))
+    if not _known_type(kind):
+        # Older approvals (a user's, 2026-11-22: 6-digit eForm IDs) lay item 4 out differently: the type came out as
+        # "(SPECIFY)", so 6 suppressors were listed as other NFA items. The typed type is the only span on page 1 that is
+        # exactly a type name in capitals; the printed text spells them in lower case.
+        kind = next((sp["text"].strip() for sp in spans if _known_type(sp["text"]) and sp["text"].strip().isupper()
+                     and _known_type(sp["text"]) == _loose(sp["text"])), kind)
+    return {"type": kind, "serial": value("g. Serial number", (-10, 120), (5, 22)),
+            # The Sept 2007 form (older approvals) labels these "c. Caliber, / Gauge or / Size", "e. Of Barrel:" and
+            # "f. Overall:"; its caliber sits ~58 pt below the label, under the printed "(Specify)", in a ~50 pt column.
+            "caliber": value("c. Caliber or gauge", (-10, 75), (20, 40)) or value("c. Caliber,", (-10, 45), (35, 78)),
+            "model": value("d. Model", (-10, 60), (5, 20)),
+            "barrel_length": value("e. Barrel length", (-10, 50), (5, 22)) or value("e. Of Barrel:", (-10, 50), (5, 25)),
+            "overall_length": value("Overall length", (-15, 50), (5, 22)) or value("f. Overall:", (-10, 50), (5, 25)),
             "approved": ticked(approved) and not ticked(dis),
             "approval_date": _mmddyyyy(value("Date", (-5, 80), (2, 20), pick=below)), "conditions": conditions,
-            "filed_date": _us_date(value("Date", (-5, 80), (2, 20), pick=item9)),
+            "filed_date": _us_date(value("Date", (-12, 80), (2, 20), pick=item9)),  # 2007 form: "9. Date" is one label
             "pdf_control_number": next((m.group(1) for pg in page.parent for m in [re.search(r"Control\s*Number:\s*(\d{10,11})\b", pg.get_text())] if m), "")}
 
 
@@ -1799,28 +1842,39 @@ _READ_BLOB_JS = """async () => { const b = window.__atfLastBlob; window.__atfLas
   return btoa(s); }"""
 
 
-# Text of each result row, whatever the table markup: climb from each "View Form" button to the smallest ancestor that
-# holds exactly one "View Form" button and a 7+ digit number (the eForm ID). Each button is tagged data-atf-row=<i>
-# (in this browser only) so the click below hits exactly that row's button.
+# Each result row, whatever the table markup: climb from each "View Form" button to the smallest ancestor that holds
+# exactly one "View Form" button and is a table row, holds the row's eForm ID link (`eformId-link`) or a 7+ digit
+# number. Returns {text, id}: id = that link's text ("" without one). Each button is tagged data-atf-row=<i> (in this
+# browser only) so the click below hits exactly that row's button.
 _ROW_TEXTS_JS = """() => {
   const shown = e => e.getClientRects().length > 0;  // hidden elements still report their text, so check visibility
   const views = root => [...root.querySelectorAll('button')].filter(b => shown(b) && b.innerText.trim() === 'View Form');
+  const link = el => el.querySelector('[id="eformId-link"]');
   document.querySelectorAll('[data-atf-row]').forEach(b => b.removeAttribute('data-atf-row'));
   return views(document).map((b, i) => {
     b.setAttribute('data-atf-row', i); let el = b;
-    while (el.parentElement && !(/\\d{7}/.test(el.innerText) && views(el).length === 1)) el = el.parentElement;
-    return el.innerText; }); }"""
+    while (el.parentElement && !((el.tagName === 'TR' || link(el) || /\\d{7}/.test(el.innerText)) && views(el).length === 1))
+      el = el.parentElement;
+    const a = link(el);
+    return {text: el.innerText, id: a ? a.innerText.trim() : ''}; }); }"""
 
 
-def _parse_result_row(text):
-    """eForm ID (7-8 digits), Permit/Control number (10 digits on older forms, 11 on newer), finalized date (last of 3)."""
-    eid = re.search(r"(?<!\d)\d{7,8}(?!\d)", text)
+def _parse_result_row(row):
+    """eForm ID, Permit/Control number (10 digits on older forms, 11 on newer), finalized date (last of 3). `row` =
+    {text, id} from _ROW_TEXTS_JS (or plain text). The ID is the row's ID link, any length (older forms have 6 digits:
+    live 2026-11-22, only 7-8 were read); without a link, a 7-8 digit number in the text (not shorter: a serial in the
+    Internal Control Number column, e.g. TD261122, has 6 digits in a row)."""
+    text, link = (row.get("text") or "", row.get("id") or "") if isinstance(row, dict) else (row, "")
+    eid = re.fullmatch(r"\d{4,9}", link) or re.search(r"(?<!\d)\d{7,8}(?!\d)", text)
     if not eid:
         return None
     control = re.search(r"(?<!\d)\d{10,11}(?!\d)", text)
     dates = re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", text)  # created, submitted, finalized (none yet while in process)
     return {"eform_id": eid.group(), "control_number": control.group() if control else "", "finalized": dates[-1] if dates else "",
             "submitted": dates[1] if len(dates) > 1 else ""}
+
+
+RESULTS_PER_PAGE = 10  # the eForms results table's rows per page (its "10" box); fewer = the last page, or still drawing
 
 
 def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
@@ -1830,6 +1884,20 @@ def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
     seconds to wait for result rows (an empty search looks the same as a slow one until then)."""
     def rows():
         return [r for r in (_parse_result_row(t) for t in page.evaluate(_ROW_TEXTS_JS)) if r]
+
+    def settle():
+        # A precaution, not seen live: if a slow PC drew the table row by row, a read at the first row would come up
+        # short (now a problem line). Read until a full page shows, or the rows are unchanged for 0.5 s. (A user's
+        # "7 approved Form 1(s) on 7 page(s)", 2026-11-22, was 6-digit eForm IDs, not this.)
+        nonlocal current
+        same = 0
+        for _ in range(40):
+            if not current or len(current) >= RESULTS_PER_PAGE or same >= 2:
+                break
+            page.wait_for_timeout(250)
+            now = rows()
+            same = same + 1 if [r["eform_id"] for r in now] == [r["eform_id"] for r in current] else 0
+            current = now
     current = rows()
     if search:
         page.locator("#form-type-search").select_option(label="ATF Form 1 (5320.1)")
@@ -1843,10 +1911,11 @@ def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
                 break
             page.wait_for_timeout(250)
             current = rows()
+        settle()
     total = int((re.search(r"Total Rows:\s*(\d+)", page.inner_text("body")) or [0, 0])[1])
     if total and not current:
         raise RuntimeError(f"eForms says {total} {status.lower()} form(s) but no result rows could be read; the page layout "
-                           "may have changed (use Advanced > Capture portal pages)")
+                           f"may have changed{_save_row_shapes(page, status)}")
     def click(loc, expected):
         nonlocal current
         first = current[0]["eform_id"] if current else ""
@@ -1856,6 +1925,7 @@ def _approved_results(page, page_no=1, search=True, status="APPROVED", wait=30):
             current = rows()
             if current and current[0]["eform_id"] != first:
                 break
+        settle()
 
     # The paginator shows only some page numbers (live 2026-10-19: "6" of 7 never showed up). Click the target when
     # shown; else the highest shown number below it; else the icon-only arrow right after the numbers (next).
@@ -1903,6 +1973,38 @@ _PAGER_JS = """() => {
   const off = nxt && /disabled/i.test((nxt.className || '') + ' ' + ((nxt.parentElement || {}).className || '') + (nxt.getAttribute('aria-disabled') || ''));
   if (nxt && !off) nxt.setAttribute('data-atf-next', '1');
   return {nums, current, next: !!(nxt && !off), html: box.outerHTML.slice(0, 20000)}; }"""
+
+
+# What each shown table row looks like, WITHOUT its values (users send these files): the ID link's length, the
+# lengths of its digit groups, its visible button labels. For results rows that couldn't be read.
+_ROW_SHAPES_JS = """() => {
+  const shown = e => e.getClientRects().length > 0;
+  return [...document.querySelectorAll('tr')].filter(shown).map(tr => {
+    const a = tr.querySelector('[id="eformId-link"]'), all = [...tr.querySelectorAll('button')];
+    const runs = (tr.innerText.match(/\\d+/g) || []).map(d => d.length);
+    const buttons = all.filter(shown).map(b => b.innerText.trim().replace(/\\d/g, '#').slice(0, 30));
+    const hidden = all.length - all.filter(shown).length;
+    return 'ID link: ' + (a ? a.innerText.trim().length + ' characters' : 'none') + '; digit groups (lengths): '
+      + (runs.join(' ') || 'none') + '; buttons: ' + (buttons.join(', ') || 'none') + (hidden ? ' (+' + hidden + ' hidden)' : '');
+  }).filter(s => !/^ID link: none; digit groups \\(lengths\\): none; buttons: none$/.test(s)); }"""
+
+
+def _save_row_shapes(page, status):
+    """Save _ROW_SHAPES_JS's lines for debugging; returns ' (... saved in ...)' or ''."""
+    try:
+        lines = page.evaluate(_ROW_SHAPES_JS)
+        f = OUT / f"results_rows_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        f.write_text(f"Check approvals, {status.lower()}: what each table row on the page looks like, without its values\n"
+                     "(lengths and button labels only; nothing personal).\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        return f" (what the rows look like, without their values, is saved in {f})"
+    except Exception:
+        return ""
+
+
+def _page_count(total, rows):
+    """Results pages for `total` forms. eForms shows RESULTS_PER_PAGE a page; page 1's rows count only when more (a
+    short read must not make more pages: live 2026-11-22, 1 of 7 rows read = "7 page(s)")."""
+    return -(-total // max(len(rows), RESULTS_PER_PAGE))
 
 
 def _save_pager(page):
@@ -2011,7 +2113,7 @@ def save_form1_cleo(pdf, eform_id, index):
     """Keep the CLEO-copy pages of a submitted form's PDF as out/cleo/Form1_<serial>.cleo.pdf. Returns the serial."""
     import pymupdf
     serial = (read_approved_pdf(pdf)["serial"] or "").strip()  # item 4g of the ATF copy (page 1; same layout)
-    doc = pymupdf.open(pdf)
+    doc = pymupdf.open("pdf", Path(pdf).read_bytes())  # no open file handle: the file is deleted next
     pages = _cleo_pages(doc)
     if not pages:
         raise RuntimeError("its PDF has no CLEO copy pages")
@@ -2045,7 +2147,7 @@ def _fetch_form1_cleo(page, ctx, wanted):
     dates = {_us_date(d) for s, d in wanted.items() if s.upper() in need}
     _go_home(page, reload=True)  # a home page without results: Search only from there
     total, rows = _approved_results(page, status=SUBMITTED)
-    pages = -(-total // max(len(rows), 1))
+    pages = _page_count(total, rows)
     for n in range(1, pages + 1):
         if not need:
             break
@@ -2230,6 +2332,19 @@ def _save_approved_index(folder, index):
         w.writerows(sorted(index.items(), key=lambda kv: serial_key(kv[1])))
 
 
+def _replace(src, dest, tries=6):
+    """src.replace(dest), retried for a few seconds on Windows' "Access is denied" (WinError 5: a virus scanner or a
+    PDF viewer holding a file for a moment; a user's run, 2026-11-22). The last failure is raised, naming the file."""
+    for i in range(tries):
+        try:
+            return src.replace(dest)
+        except PermissionError as e:
+            if i == tries - 1:
+                raise PermissionError(f"couldn't save {dest.name} in {dest.parent} (is it open in a PDF viewer? close it and "
+                                      f"run Check approvals again): {e.strerror or e}") from None
+            time.sleep(0.5 * (i + 1))
+
+
 def _file_by_serial(folder, index, eform_id, pdf):
     """Rename a downloaded approval PDF to <serial>.pdf (A101.pdf; A101_2.pdf if that serial already has another
     form; eForm-<id>.pdf if the serial can't be read) and record it in the index. Returns the new path."""
@@ -2244,7 +2359,7 @@ def _file_by_serial(folder, index, eform_id, pdf):
         name, n = f"{base}_{n}.pdf", n + 1
     dest = folder / name
     if Path(pdf) != dest:
-        Path(pdf).replace(dest)
+        _replace(Path(pdf), dest)
     index[eform_id] = name
     return dest
 
@@ -2337,7 +2452,7 @@ def _keep_first_page(pdf):
     import pymupdf
     pymupdf.TOOLS.mupdf_display_errors(False)
     try:
-        src = pymupdf.open(pdf)
+        src = pymupdf.open("pdf", Path(pdf).read_bytes())  # no open file handle (Windows renames it next)
         if src.page_count <= 1:
             return
         out = pymupdf.open()
@@ -2395,18 +2510,25 @@ def _fetch_status(page, ctx, status, folder, found, problems, wait=30, skip=froz
     label = status.lower()
     emit("section", f"--- Searching {label} Form 1s ---", name=f"Searching {label} Form 1s")
     total, rows = _approved_results(page, status=status, wait=wait)
-    pages = -(-total // max(len(rows), 1))
+    pages, per, complete = _page_count(total, rows), max(len(rows), RESULTS_PER_PAGE), True
     emit("info", f"{total} {label} Form 1(s) on {pages} page(s)")
+    which = "" if status == "APPROVED" else f"{label} "
     for n in range(1, pages + 1):
         try:
             if n > 1:
                 emit("section", f"--- Results page {n} ---", name=f"Results page {n} of {pages}")
                 _, rows = _results_page(page, n, search=False, status=status, wait=wait)  # on from page n-1, which is showing
+            listed = min(per, total - (n - 1) * per)
+            if len(rows) < listed:  # rows eForms shows that can't be read: say so (and seen is incomplete)
+                complete = False
+                msg = (f"{which}results page {n}: eForms lists {listed} form(s), only {len(rows)} could be read"
+                       f"{_save_row_shapes(page, status)}")
+                problems.append(msg)
+                emit("error", msg)
             if seen is not None:
                 seen.update(r["eform_id"] for r in rows)
             _fetch_page_rows(page, ctx, n, rows, folder, index, found, problems, status, wait, skip, first_page)
         except Exception as e:  # can't get to a results page: report what is saved instead of losing the whole run
-            which = "" if status == "APPROVED" else f"{label} "
             msg = f"stopped at {which}results page {n} of {pages}: {str(e).splitlines()[0]}"
             problems.append(msg + " (the report below also covers every PDF saved earlier; run Check approvals again)")
             emit("error", msg)  # ✖ on the section instead of a later ✔
@@ -2415,7 +2537,7 @@ def _fetch_status(page, ctx, status, folder, found, problems, wait=30, skip=froz
                       for eid, name in sorted(index.items(), key=lambda kv: serial_key(kv[1]))
                       if eid not in have and eid not in skip and (folder / name).exists()]
             return False
-    return True
+    return complete
 
 
 def _results_page(page, n, search=True, status="APPROVED", wait=30):
@@ -2711,7 +2833,8 @@ def cmd_check_approved(_):
     nrep = not_approved_report(rejected, load_rows())
     marked = record_disapprovals([row["serial_number"] for row, _rec in nrep["disapproved"]])
     print(f"Recorded {len(updated)} approval(s) in data/suppressors.csv; added {len(added)} approved suppressor(s); "
-          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv; {len(marked)} marked disapproved.")
+          f"{record_sbrs(records)} new other NFA item(s) in data/sbrs.csv ({drop_misread_nfa(records)} misread suppressor(s) "
+          f"taken out of it); {len(marked)} marked disapproved.")
     for key, title in (("disapproved", "Disapproved or returned by ATF (file them again: Advanced > Re-file)"),
                        ("correction", "Returned for correction (nothing marked: see eForms)"),
                        ("unsure", "Not approved, but couldn't tell if it's the current filing (nothing marked)")):
