@@ -150,7 +150,7 @@ portal:
     # with the row (mapped live 2026-11-19: "aero prec" -> AERO PRECISION INC / LLC; LLC verified = AP2). atf.py
     # _pick_manufacturer does both, and clicks Verify Manufacturer.
     - {action: pick_manufacturer}
-    - {selector: "#closeVerifiedManufacturerModal", action: click}
+    - {selector: "#closeVerifiedManufacturerModal", action: click, optional: true}   # only after Verify; none when eForms opens with it verified (2026-11-24)
     - {selector: "#country", action: select, value: "{mfr_country}", skip_if_disabled: true}   # skipped if locked/prefilled
     - {selector: "#nextButton", action: click}
     # --- firearm popup 2 ---

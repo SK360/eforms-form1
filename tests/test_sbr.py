@@ -173,20 +173,25 @@ def test_cleo_copy_gets_items_4a_to_4c_and_still_no_serial(configured):
 
 # eForms' manufacturer popup as mapped live 2026-11-19: a PrimeNG autocomplete that matches any part of a name
 FAKE_MFR = """<input type="radio" id="byName" checked><input type="radio" id="byCode"><input id="manufacturerCode">
-<p-autocomplete id="manufacturerName"><span><input type="text"></span></p-autocomplete><div id="panel"></div>
+<div id="manufacturerNameInput"><p-autocomplete id="manufacturerName"><span><input type="text"></span></p-autocomplete></div><div id="panel"></div>
 <input id="manufacturerCodeFromName" readonly><button id="verifyManufacturer">Verify Manufacturer</button>
+<button id="clearManufacturer">Clear</button>
 <script>
 const LIST = {"AERO PRECISION INC": "AP1", "AERO PRECISION LLC": "AP2", "PALMETTO STATE ARMORY": "PS1",
               "PALMETTO STATE ARMORY LLC": "PS2", "RAWL, JAMES B DBA PALMETTO ARMAMENT": "RW1"};
 let chosen = null;
-const box = document.querySelector('#manufacturerName input'), panel = document.getElementById('panel');
-box.addEventListener('keyup', () => { const q = box.value.toUpperCase();
+const panel = document.getElementById('panel'), inp = () => document.querySelector('#manufacturerName input');
+function rebind() { const box = inp(); box.addEventListener('keyup', () => { const q = box.value.toUpperCase();
   const hits = q.length < 3 ? [] : Object.keys(LIST).filter(n => n.includes(q));
   panel.innerHTML = hits.length ? '<div class="ui-autocomplete-panel"><ul>' + hits.map(n =>
-    '<li class="ui-autocomplete-list-item"><span>' + n + '</span></li>').join('') + '</ul></div>' : ''; });
-panel.addEventListener('click', e => { const li = e.target.closest('li'); if (li) { chosen = li.innerText.trim(); box.value = chosen; panel.innerHTML = ''; } });
+    '<li class="ui-autocomplete-list-item"><span>' + n + '</span></li>').join('') + '</ul></div>' : ''; }); }
+rebind();
+panel.addEventListener('click', e => { const li = e.target.closest('li'); if (li) { chosen = li.innerText.trim(); inp().value = chosen; panel.innerHTML = ''; } });
 document.getElementById('verifyManufacturer').onclick = () => {
-  document.getElementById('manufacturerCodeFromName').value = document.getElementById('byCode').checked ? '' : (LIST[chosen] || ''); };
+  document.getElementById('manufacturerCodeFromName').value = document.getElementById('byCode').checked ? '' : (LIST[chosen] || '');
+  if (document.getElementById('manufacturerCodeFromName').value) inp().disabled = true; };   // eForms locks a verified name
+document.getElementById('clearManufacturer').onclick = () => { inp().disabled = false; inp().value = ''; chosen = null;
+  document.getElementById('manufacturerCodeFromName').value = ''; };
 </script>"""
 
 
@@ -321,3 +326,51 @@ def test_model_with_a_caliber_not_listed_is_typed(model_page, monkeypatch):
     monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("nothing to ask"))
     assert atf._pick_model(model_page, "M4E1", "6.5 GRENDEL", nfa=True) == ""
     assert model_page.locator("#weaponCaliber").input_value() == "6.5 GRENDEL"
+
+
+LOCK_AS_LIVE = """([name, code]) => {  // live 2026-11-24: verified, the input is replaced by plain text
+    const wrap = document.getElementById('manufacturerNameInput');
+    window.savedInput = wrap.innerHTML;
+    wrap.innerHTML = '<div class="manufacturerNameBox"> ' + name + ' </div>';
+    document.getElementById('manufacturerCodeFromName').value = code;
+    document.getElementById('clearManufacturer').onclick = () => { wrap.innerHTML = window.savedInput;
+      document.getElementById('manufacturerCodeFromName').value = ''; rebind(); }; }"""
+
+
+def test_popup_opening_with_the_marked_name_verified_keeps_it(mfr_page, monkeypatch):
+    mfr_page.evaluate(LOCK_AS_LIVE, ["STAG ARMS", "NBC"])
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("verified already; nothing to ask"))
+    assert atf._pick_manufacturer(mfr_page, "", "Stag Arms") == {"mfr_code": "NBC", "mfr_atf_name": "STAG ARMS"}
+
+
+def test_popup_opening_with_another_name_verified_clears_it(mfr_page, monkeypatch):
+    mfr_page.evaluate(LOCK_AS_LIVE, ["AERO PRECISION INC", "AP1"])
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("an exact match needs no question"))
+    assert atf._pick_manufacturer(mfr_page, "", "Aero Precision LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+def test_a_name_eforms_verified_and_locked_is_kept(mfr_page, monkeypatch):
+    # 2026-11-24 (STAG ARMS -> NBC): the typed name was verified, eForms greyed out the box, and the next search
+    # waited 30 s to type into it. Verified as the marked name: kept, nothing typed.
+    mfr_page.evaluate("""() => { const box = document.querySelector('#manufacturerName input');
+        box.value = 'AERO PRECISION LLC'; box.disabled = true; document.getElementById('manufacturerCodeFromName').value = 'AP2'; }""")
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("verified already; nothing to ask"))
+    assert atf._pick_manufacturer(mfr_page, "", "Aero Precision LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+def test_a_locked_wrong_name_is_cleared_and_searched_again(mfr_page, monkeypatch):
+    mfr_page.evaluate("""() => { const box = document.querySelector('#manufacturerName input');
+        box.value = 'AERO PRECISION INC'; box.disabled = true; document.getElementById('manufacturerCodeFromName').value = 'AP1'; }""")
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("an exact match needs no question"))
+    assert atf._pick_manufacturer(mfr_page, "", "Aero Precision LLC") == {"mfr_code": "AP2", "mfr_atf_name": "AERO PRECISION LLC"}
+
+
+def test_usa_is_eforms_united_states():
+    assert atf._mfr_country("usa") == atf._mfr_country("") == atf._mfr_country("U.S.") == "UNITED STATES"
+    assert atf._mfr_country("Germany") == "GERMANY"
+
+
+def test_model_spelled_exactly_as_engraved_wins(model_page, monkeypatch):
+    model_page.evaluate("MODELS.push('STAG-15', 'STAG 15')")
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("one is spelled as engraved; nothing to ask"))
+    assert atf._pick_model(model_page, "STAG-15", "5.56", nfa=True) == "STAG-15"

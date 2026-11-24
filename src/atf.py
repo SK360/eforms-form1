@@ -3353,7 +3353,7 @@ def _row_context(trust, item):
                     "docs": ctx["docs"] + ([{"doc_path": photo, "doc_desc": "PHOTO OF RECEIVER MARKINGS",
                                              "doc_file": json.dumps(Path(photo).name)}] if photo else [])})
     ctx.update({"nfa": "yes" if is_nfa_row(item) else "", "product_type": (item.get("type") or "SILENCER").upper(),
-                "mfr_code": item.get("mfr_code") or ("" if is_nfa_row(item) else "FMI"), "_found": {}, "mfr_country": item.get("mfr_country") or "UNITED STATES",
+                "mfr_code": item.get("mfr_code") or ("" if is_nfa_row(item) else "FMI"), "_found": {}, "mfr_country": _mfr_country(item.get("mfr_country")),
                 "unit": item.get("unit") or "CALIBER", "barrel_length": item.get("barrel_length", "")})
     others = [_other_rp_context(p, n, item) for n, p in enumerate(other_rps(trust), 2)]
     ctx.update({"other_rps": others, "has_other_rps": "yes" if others else "", "rp_count": str(1 + len(others))})
@@ -3380,6 +3380,12 @@ def _norm_name(text):
     return re.sub(r"[^A-Z0-9 ]", "", re.sub(r"\s+", " ", (text or "").upper())).strip()
 
 
+def _mfr_country(c):
+    """eForms' #country lists "UNITED STATES"; a receiver marked USA (or nothing) means that."""
+    c = str(c or "").strip().upper()
+    return "UNITED STATES" if c in _US_SPELLINGS else c
+
+
 _MFR_WAIT_MS = 8000  # how long eForms' name search may take to list anything
 
 
@@ -3399,21 +3405,68 @@ def _pick_manufacturer(page, code, name, tries=3):
         return {"mfr_code": code}
     _tick(page, "#byName")
     box = page.locator("#manufacturerName input")
-    items = page.locator(".ui-autocomplete-panel li")
+    # PrimeNG's suggestion list; newer PrimeNG names it p-autocomplete-*, and an ARIA listbox in any version
+    items = page.locator(".ui-autocomplete-panel li, .p-autocomplete-panel li, "
+                         "p-autocomplete [role=listbox] [role=option], body > [role=listbox] [role=option]")
+
+    def shown_code():
+        try:
+            return (page.locator("#manufacturerCodeFromName").input_value(timeout=2000) or "").strip()
+        except Exception:
+            return ""
+
+    # verified, eForms swaps the input for plain text: <div class="manufacturerNameBox"> STAG ARMS </div> (live 2026-11-24;
+    # the popup can even open that way, with the last manufacturer verified on this account)
+    name_box = page.locator("#manufacturerNameInput .manufacturerNameBox")
+
+    def shown_name():
+        try:
+            if name_box.count():
+                return (name_box.first.inner_text(timeout=2000) or "").strip()
+            if box.count():
+                return (box.input_value(timeout=2000) or "").strip()
+        except Exception:
+            pass
+        return ""
 
     def verified_by_hand():  # eForms shows a verified code (it took the name, or the user picked it by hand)
-        try:
-            found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
-            shown = (box.input_value() or "").strip()
-        except Exception:
+        found = shown_code()
+        if not found:
             return None
-        if found:
-            emit("step", f"    manufacturer verified: {shown} (code {found})")
-            return {"mfr_code": found, "mfr_atf_name": shown}
-        return None
+        shown = shown_name()
+        emit("step", f"    manufacturer verified: {shown} (code {found})")
+        return {"mfr_code": found, "mfr_atf_name": shown}
+
+    def verify():  # Verify Manufacturer, then wait for the code (eForms can be slow; 2026-11-24 a run timed out)
+        page.locator("#verifyManufacturer").click()
+        for _ in range(max(2, _MFR_WAIT_MS // 500)):
+            page.wait_for_timeout(500)
+            if shown_code():
+                return
+
+    def unlock():
+        """Once a name is verified, eForms replaces the name box with plain text (2026-11-24, STAG ARMS -> NBC: the next
+        fill then waited 30 s for a box that was gone). Click Clear to get the box back."""
+        if box.count() and box.is_enabled(timeout=2000) and not shown_code():
+            return
+        clear = page.locator("#clearManufacturer, button:has-text('Clear')").first
+        if clear.count():
+            clear.click()
+        try:
+            box.wait_for(state="visible", timeout=5000)
+        except Exception:
+            raise RuntimeError("eForms shows a verified manufacturer and Clear did not bring the name box back")
+        if not box.is_enabled(timeout=2000):
+            raise RuntimeError("eForms locked the manufacturer name box and Clear did not unlock it")
 
     def search(q):
-        box.fill("")
+        done = verified_by_hand()  # verified already (by eForms or by hand): keep it if it is the marked name
+        if done and _norm_name(done["mfr_atf_name"]) == _norm_name(name):
+            return done
+        if done:
+            emit("step", f"    eForms has {done['mfr_atf_name']} verified, not {name}: clearing it")
+        unlock()
+        box.fill("", timeout=5000)
         box.press_sequentially(q, delay=60)
         try:
             items.first.wait_for(timeout=_MFR_WAIT_MS)
@@ -3429,6 +3482,8 @@ def _pick_manufacturer(page, code, name, tries=3):
     for _ in range(tries):
         for query in queries:
             names = search(query)
+            if isinstance(names, dict):  # already verified as the marked name
+                return names
             if names:
                 break
         exact = [n for n in names if _norm_name(n) == _norm_name(name)]
@@ -3437,12 +3492,12 @@ def _pick_manufacturer(page, code, name, tries=3):
             emit("step", f"    manufacturer: {picked} (exact match)")
             break
         if not names:  # no list reached us; the site may still take the typed name as is (2026-11-19: it showed AP2)
-            box.fill("")
+            unlock()
+            box.fill("", timeout=5000)
             box.press_sequentially(name, delay=60)
             page.wait_for_timeout(1000)
             page.keyboard.press("Escape")
-            page.locator("#verifyManufacturer").click()
-            page.wait_for_timeout(1500)
+            verify()
         done = verified_by_hand()  # the page already shows a verified code: nothing to ask
         if done:
             return done
@@ -3468,11 +3523,9 @@ def _pick_manufacturer(page, code, name, tries=3):
     if picked is None:
         raise RuntimeError(f"no eForms manufacturer chosen for {name!r}")
     # exact text: "PALMETTO STATE ARMORY" must not hit "PALMETTO STATE ARMORY LLC"
-    page.locator(".ui-autocomplete-panel li",
-                 has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
-    page.locator("#verifyManufacturer").click()
-    page.wait_for_timeout(1500)
-    found = (page.locator("#manufacturerCodeFromName").input_value() or "").strip()
+    items.filter(has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
+    verify()
+    found = shown_code()
     if not found:
         raise RuntimeError(f"eForms did not verify {picked!r} (no manufacturer code shown)")
     emit("step", f"    manufacturer code: {found}")
@@ -3512,6 +3565,10 @@ def _pick_model(page, model, caliber, nfa):
 
         names = listed(model)
         hits = [n for n in names if _model_matches(n, model)]
+        # "STAG-15" and "STAG 15" are both listed: the one spelled exactly as engraved wins (case aside)
+        literal = [n for n in hits if n.upper() == model.strip().upper()]
+        if len(hits) > 1 and len(literal) == 1:
+            hits = literal
         if len(hits) == 1:
             picked = hits[0]
         else:

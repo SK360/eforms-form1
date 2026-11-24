@@ -302,7 +302,7 @@ def inventory_flow():
         choices = [questionary.Choice("Show another view…", "show")]
         server = atf.server_settings()  # with a server, its own page is the phone's
         if any(r["status"] == "" for r in rows):
-            choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
+            choices.append(questionary.Choice("Edit or remove a queued item", edit_queued_flow))
         if any(r["status"] == "approved" for r in rows):
             choices.append(questionary.Choice("Record builds", builds_flow))
             choices.append(questionary.Choice("Open an approved PDF", open_approved_flow))
@@ -354,7 +354,7 @@ def edit_queued_flow():
         return pause()
     choices = [questionary.Choice(f"{rows[i]['serial_number']}  (caliber {rows[i]['caliber']}, {rows[i]['overall_length'] or '?'}\")", i)
                for i in queued]
-    i = questionary.select("Which queued suppressor?", choices=choices + [questionary.Choice("Back", "back")]).ask()
+    i = questionary.select("Which queued item?", choices=choices + [questionary.Choice("Back", "back")]).ask()
     if i in (None, "back"):
         return
     r = rows[i]
@@ -2055,12 +2055,12 @@ def menu():
             choices.append(questionary.Choice(f"⚠ Resolve a pending row ({', '.join(pending)})", resolve_flow))
         if queued:
             names = ", ".join(queued[:4]) + (", …" if len(queued) > 4 else "")
-            choices.append(questionary.Choice(f"File {len(queued)} queued suppressor{'s' if len(queued) > 1 else ''} ({names})", file_flow))
+            choices.append(questionary.Choice(f"File {len(queued)} queued item{'s' if len(queued) > 1 else ''} ({names})", file_flow))
         choices += [questionary.Choice("Inventory", inventory_flow), questionary.Choice("Add suppressors or an SBR", add_flow)]
         if any(r["status"] == "approved" and not atf.is_built(r) for r in rows):
             choices.append(questionary.Choice("Building one? Find the serial to use", build_serial_flow))
         if any(r["status"] == "" for r in rows):
-            choices.append(questionary.Choice("Edit or remove a queued suppressor", edit_queued_flow))
+            choices.append(questionary.Choice("Edit or remove a queued item", edit_queued_flow))
         new = update.available()
         if new:
             choices.append(questionary.Choice(f"⬆ Update to version {new['version']}", update_flow))
