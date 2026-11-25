@@ -2764,25 +2764,29 @@ def in_process_report(records, rows):
     disapproved here but already submitted on eForms: filing them would file them twice; mark them filed),
     "pending": [(row, rec)] (pending here and in process on eForms: Resolve them as filed), "duplicates": [serial]
     (on more than one in-process form; left out of the above), "other": [rec] (other NFA types: listed once approved),
-    "unreadable": [rec] (no type or serial could be read)}. Forms of serials already filed or approved here are left out."""
+    "unreadable": [rec] (no type or serial could be read)}. Forms of serials already filed or approved here are left out.
+    An SBR (etc.) in your queue is matched the same way ("queued", "pending"; PR #5: one filed by hand stayed pending);
+    one that isn't in your queue stays in "other" (recorded from its approval, record_sbrs)."""
     from collections import Counter
-    mine = {r["serial_number"].strip().upper(): r for r in rows}
+    mine = {r["serial_number"].strip().upper(): r for r in rows if not is_nfa_row(r)}
+    nfa_mine = {r["serial_number"].strip().upper(): r for r in rows if is_nfa_row(r)}
     rep = {"unknown": [], "queued": [], "pending": [], "duplicates": [], "other": [], "unreadable": []}
-    sup = []
+    sup, nfa = [], []
     for rec in records:
         if is_other_nfa(rec):
-            rep["other"].append(rec)
+            (nfa if rec["serial"].strip().upper() in nfa_mine else rep["other"]).append(rec)
         elif "SILENCER" in rec["type"].upper() and rec["serial"].strip():
             sup.append(rec)
         else:
             rep["unreadable"].append(rec)
     counts = Counter(r["serial"].strip().upper() for r in sup)
-    rep["duplicates"] = sorted(s for s, n in counts.items() if n > 1)
-    for rec in sorted(sup, key=lambda r: serial_key(r["serial"])):
+    counts.update(f"NFA {r['serial'].strip().upper()}" for r in nfa)
+    rep["duplicates"] = sorted({s.removeprefix("NFA ") for s, n in counts.items() if n > 1}, key=serial_key)
+    for rec, nfa_rec in sorted([(r, False) for r in sup] + [(r, True) for r in nfa], key=lambda x: serial_key(x[0]["serial"])):
         key = rec["serial"].strip().upper()
-        if counts[key] > 1:
+        if counts[f"NFA {key}" if nfa_rec else key] > 1:
             continue
-        row = mine.get(key)
+        row = (nfa_mine if nfa_rec else mine).get(key)
         if row is None:
             rep["unknown"].append(rec)
         elif row["status"] in ("", "disapproved"):
@@ -2805,10 +2809,12 @@ def record_in_process(records):
     for approval here and never filed again. Filed date and eForm ID from the form; no application number (eForms
     doesn't list it); a recorded caliber or length is kept. Returns the serials recorded."""
     rows = load_rows()
-    by = {r["serial_number"].strip().upper(): r for r in rows}
+    by = {(is_nfa_row(r), r["serial_number"].strip().upper()): r for r in rows}  # an SBR only matches an SBR row
     todo = []
     for rec in records:
-        f, row = _in_process_fields(rec), by.get(rec["serial"].strip().upper())
+        f, row = _in_process_fields(rec), by.get((is_other_nfa(rec), rec["serial"].strip().upper()))
+        if row is None and is_other_nfa(rec):  # not in the queue: recorded once approved (record_sbrs)
+            continue
         if row is not None and row["status"] not in ("", "disapproved"):
             continue
         todo.append((rec["serial"].strip(), f, row))
@@ -3538,6 +3544,22 @@ def _model_matches(option, model):
     return bool(m) and (o == m or o.endswith(" " + m))
 
 
+def _close_models(options, model, n=8):
+    """eForms model entries that look like a mistyped `model`, best first: compared whole and by their tail (the
+    maker's name often comes first, "AERO PRECISION M4E1")."""
+    import difflib
+    key = lambda t: re.sub(r"[^A-Z0-9]", "", t.upper())  # noqa: E731  "STAG-15" = "STAG 15"
+    m = key(model)
+
+    def score(option):
+        words = _norm_name(option).split()
+        tails = {" ".join(words[i:]) for i in range(len(words))}
+        return max(difflib.SequenceMatcher(None, m, key(t)).ratio() for t in tails)
+
+    scored = sorted(((score(o), o) for o in options), key=lambda x: -x[0])
+    return [o for sc, o in scored if sc >= 0.6][:n]
+
+
 def _pick_model(page, model, caliber, nfa):
     """Firearm popup 2, model and caliber. A silencer (FMI): plain text inputs, typed. An SBR etc.: Model is an
     ng-select of ATF's list for that maker, Caliber a select (mapped live 2026-11-19). The model is typed into the
@@ -3563,25 +3585,44 @@ def _pick_model(page, model, caliber, nfa):
             return [t.strip() for t in options.all_inner_texts()
                     if t.strip() and not re.match(r"(?i)no items found", t.strip())]
 
-        names = listed(model)
-        hits = [n for n in names if _model_matches(n, model)]
-        # "STAG-15" and "STAG 15" are both listed: the one spelled exactly as engraved wins (case aside)
-        literal = [n for n in hits if n.upper() == model.strip().upper()]
-        if len(hits) > 1 and len(literal) == 1:
-            hits = literal
-        if len(hits) == 1:
-            picked = hits[0]
-        else:
-            shown = hits or listed("")
-            if shown:
-                listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(shown, 1))
-                ans = ask(f"eForms lists these models for this manufacturer; the receiver is engraved \"{model}\".\n"
-                          f"{listing}\nType the number of the matching one, or press Enter if none matches "
-                          "(it is then typed in as not listed, which ATF checks by hand): ").strip()
-                if ans.isdigit() and 1 <= int(ans) <= len(shown):
-                    picked = shown[int(ans) - 1]
+        query = model
+        while True:
+            names = listed(query)
+            hits = [n for n in names if _model_matches(n, query)]
+            # "STAG-15" and "STAG 15" are both listed: the one spelled exactly as engraved wins (case aside)
+            literal = [n for n in hits if n.upper() == query.strip().upper()]
+            if len(hits) > 1 and len(literal) == 1:
+                hits = literal
+            if len(hits) == 1:
+                picked = hits[0]
+                break
+            everything = listed("")
+            if not everything:
+                break  # no list at all: typed in as not listed
+            # No match is usually a typo (PR #5: a fat-fingered model went in as "not listed" though it was listed):
+            # the closest entries first, never typed in as not listed without being told to
+            close = hits or _close_models(everything, query)
+            shown = close or everything
+            listing = "\n".join(f"  {i}. {n}" for i, n in enumerate(shown, 1))
+            head = (f"No eForms model matches \"{query}\" exactly. Closest for this manufacturer:" if close and not hits
+                    else f"eForms lists these models for this manufacturer; the receiver is engraved \"{model}\":")
+            ans = ask(f"{head}\n{listing}\nType the number of the matching one, another spelling to search again, "
+                      "\"none\" to type it in as not listed (ATF then checks it by hand), or q to stop: ").strip()
+            if ans.isdigit() and 1 <= int(ans) <= len(shown):
+                picked = shown[int(ans) - 1]
+                break
+            if ans.lower() == "q":
+                page.keyboard.press("Escape")
+                raise RuntimeError("model not chosen")
+            if ans.lower() == "none":
+                if _norm_name(query) != _norm_name(model):
+                    emit("warn", f"    typing the queued model \"{model}\" in as not listed (fix a typo with Edit or "
+                                 "remove a queued item)")
+                break
+            if ans:
+                query = ans
         if picked:
-            listed(model if picked in names else "")
+            listed(query if picked in names else "")
             options.filter(has_text=re.compile("^\\s*" + re.escape(picked) + "\\s*$")).first.click()
             try:
                 _pick(page.locator("select#weaponCaliber"), caliber, wait_ms=5000, grace_ms=1500)

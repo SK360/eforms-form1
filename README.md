@@ -246,7 +246,12 @@ of eForms first (eForms allows one session at a time).
   length, approval date); a form whose type can't be read gets a warning instead of being recorded. Approvals are
   recorded in your inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed
   before using this tool). A suppressor with no filed date (filed before this tool) gets the date you signed it,
-  item 9 of the approval; a recorded filed date is never changed. The helper still only files suppressors.
+  item 9 of the approval; a recorded filed date is never changed.
+- **Forms still in process:** Check approvals also reads your submitted/in process Form 1s, so a form you finished by
+  hand on eForms is found by serial (suppressors, and SBRs and other items in your queue). A queued one is offered to
+  be recorded as filed (filed date and eForm ID from the form); a *pending* one is flagged so you can resolve it as
+  filed. eForms doesn't list the application number there: it's on the confirmation after you submit, so type it in
+  under **Resolve a pending row** if you want it recorded.
 - **Disapproved or returned forms:** while any suppressor is filed and waiting, Check approvals also looks for Form 1s
   that eForms lists as **disapproved** or **returned without action** (PDFs saved to `out/not-approved/`). Those
   suppressors are marked *disapproved*, and the home screen says so. Find out why (eForms has ATF's letter) and fix

@@ -1761,16 +1761,16 @@ def _in_process_lines(irep):
         con.print(f"  [yellow]⚠ {escape(row['serial_number'])}: pending here and in process on eForms, so it was submitted:\n"
                   "    Resolve a pending row > It was filed.[/]")
     if irep["other"]:
-        con.print(f"  [dim]{len(irep['other'])} other NFA item(s) in process: listed once approved.[/]")
+        con.print(f"  [dim]{len(irep['other'])} other NFA item(s) in process that aren't in your queue: listed once approved.[/]")
     if not todo:
         return []
     serials = [r["serial"] for r in todo]
     names = ", ".join(serials[:6]) + (", …" if len(serials) > 6 else "")
-    if not questionary.confirm(f"Record the {len(todo)} suppressor(s) already submitted on eForms ({names}) as filed?",
+    if not questionary.confirm(f"Record the {len(todo)} item(s) already submitted on eForms ({names}) as filed?",
                                default=True).ask():
         if irep["queued"]:
             con.print("  [yellow]⚠ Not recorded. The queued ones are still queued: remove them (Edit or remove a queued\n"
-                      "    suppressor) or File would submit them again.[/]")
+                      "    item) or File would submit them again.[/]")
         return []
     try:
         return atf.record_in_process(todo)
@@ -1842,7 +1842,7 @@ def approvals_flow():
     if updated or added:
         con.print(f"  [green]✔[/] Inventory updated: {len(updated)} approval(s) recorded, {len(added)} suppressor(s) added.")
     if recorded:
-        con.print(f"  [green]✔[/] {len(recorded)} suppressor(s) in process on eForms recorded as filed: they wait for approval here.")
+        con.print(f"  [green]✔[/] {len(recorded)} item(s) in process on eForms recorded as filed: they wait for approval here.")
     if new_nfa:
         label = atf.nfa_label(atf.load_sbrs())
         con.print(f"  [green]✔[/] {label}: {new_nfa} added (Inventory > Show another view > {label}).")

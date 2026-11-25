@@ -309,17 +309,37 @@ def test_model_is_picked_from_the_list(model_page, monkeypatch):
 
 def test_model_not_in_the_list_asks_then_types_it(model_page, monkeypatch):
     asked = []
-    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or "")
+    answers = iter(["", "none"])  # Enter alone is not "none": asked again
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or next(answers))
     assert atf._pick_model(model_page, "X99", "5.56", nfa=True) == ""
-    assert "AP15" in asked[0]  # the whole list is shown
+    assert "AP15" in asked[0] and len(asked) == 2  # nothing close: the whole list is shown
     assert model_page.locator("#descriptionNotListed").is_checked()
     assert model_page.locator("#weaponModel").input_value() == "X99"
 
 
 def test_model_chosen_by_number(model_page, monkeypatch):
-    monkeypatch.setattr(atf, "ask", lambda prompt: "6")  # AR15
+    asked = []
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or "1")  # AR15, the closest
     assert atf._pick_model(model_page, "AR-15 LOWER", "5.56", nfa=True) == "AR15"
     assert model_page.evaluate("window.picked") == "AR15"
+    assert "  1. AR15" in asked[0] and "AP15" not in asked[0]
+
+
+def test_mistyped_model_shows_the_closest_and_can_be_searched_again(model_page, monkeypatch):
+    # PR #5: a fat-fingered model was typed in as "not listed" though eForms had it
+    asked, answers = [], iter(["M4E1"])
+    monkeypatch.setattr(atf, "ask", lambda prompt: asked.append(prompt) or next(answers))
+    assert atf._pick_model(model_page, "M4E2", "5.56", nfa=True) == "AERO PRECISION M4E1"
+    assert "Closest" in asked[0] and "AERO PRECISION M4E1" in asked[0] and len(asked) == 1
+    assert model_page.evaluate("window.picked") == "AERO PRECISION M4E1"
+    assert not model_page.locator("#descriptionNotListed").is_checked()
+
+
+def test_model_pick_can_be_stopped(model_page, monkeypatch):
+    monkeypatch.setattr(atf, "ask", lambda prompt: "q")
+    with pytest.raises(RuntimeError, match="model not chosen"):
+        atf._pick_model(model_page, "X99", "5.56", nfa=True)
+    assert not model_page.locator("#descriptionNotListed").is_checked()
 
 
 def test_model_with_a_caliber_not_listed_is_typed(model_page, monkeypatch):
@@ -374,3 +394,36 @@ def test_model_spelled_exactly_as_engraved_wins(model_page, monkeypatch):
     model_page.evaluate("MODELS.push('STAG-15', 'STAG 15')")
     monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("one is spelled as engraved; nothing to ask"))
     assert atf._pick_model(model_page, "STAG-15", "5.56", nfa=True) == "STAG-15"
+
+
+def in_process_rec(serial, eform, kind="SHORT BARRELED RIFLE"):
+    return {"type": kind, "serial": serial, "caliber": "5.56", "overall_length": "30", "eform_id": eform,
+            "filed_date": "11/24/2026", "submitted": ""}
+
+
+def test_a_pending_sbr_in_process_on_eforms_is_reported(configured):
+    # PR #5: an SBR submitted by hand stayed pending after Check approvals
+    add_sbr()
+    rows = atf.load_rows()
+    rows[0]["status"] = "pending"
+    atf.save_rows(rows)
+    rep = atf.in_process_report([in_process_rec("XYZ123", "4000001"), in_process_rec("OTHER9", "4000002")], atf.load_rows())
+    assert [row["serial_number"] for row, _ in rep["pending"]] == ["XYZ123"]
+    assert [r["serial"] for r in rep["other"]] == ["OTHER9"] and rep["unknown"] == []
+
+
+def test_a_queued_sbr_already_submitted_is_recorded_as_filed(configured):
+    add_sbr()
+    rep = atf.in_process_report([in_process_rec("XYZ123", "4000001")], atf.load_rows())
+    assert [row["serial_number"] for row, _ in rep["queued"]] == ["XYZ123"]
+    assert atf.record_in_process([rec for _, rec in rep["queued"]]) == ["XYZ123"]
+    row = atf.load_rows()[0]
+    assert (row["status"], row["eform_id"], row["filed_date"], row["type"]) == ("filed", "4000001", "11/24/2026", "SHORT BARRELED RIFLE")
+
+
+def test_an_sbr_form_never_matches_a_suppressor_with_the_same_serial(configured):
+    queue(("XYZ123", "9"))
+    rep = atf.in_process_report([in_process_rec("XYZ123", "4000001")], atf.load_rows())
+    assert rep["queued"] == [] and [r["serial"] for r in rep["other"]] == ["XYZ123"]
+    assert atf.record_in_process([in_process_rec("XYZ123", "4000001")]) == []
+    assert atf.load_rows()[0]["status"] == ""

@@ -401,7 +401,9 @@ plain CLI, kept for debugging/scripting:
   Once every results page was read, files of forms no longer listed are deleted. `in_process_report(records, rows)`:
   unknown (not in records), queued (status "" or disapproved here = would be filed twice), pending (hint: Resolve as
   filed; never changed automatically), duplicates (serial on 2+ in-process forms; left out of the rest), other NFA
-  types (ignored until approved). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
+  types: matched by serial against NFA queue rows only (`is_nfa_row`; an SBR never matches a suppressor with the same
+  serial) into queued/pending the same way (PR #5, 2026-11-24: a tester's hand-submitted SBR stayed pending); one not
+  in the queue stays in "other" (recorded once approved, record_sbrs). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
   submitted date, eform_id, no application number, caliber/length only fill gaps; new rows re-sorted. Server: op
   `record_in_process` (API 4; app checks /api/hello api >= 4, else ServerReadOnly "too old"; queued/disapproved only,
   all or nothing, `_loose_inches`). Menu `_in_process_lines` (asks before recording; declining warns that queued ones
@@ -622,7 +624,10 @@ prints steps without a browser. `--capture` records screens after the automated 
 - CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms); the fetch at the end
   of a real batch (`file_rows` with `cleo`) worked live 2026-11-16. Not yet live: an individual's submitted PDF (assumed to carry the
   same "CLEO Copy" pages).
-- **SBR / SBS / AOW filing (branch `sbr-research`, 2026-11-19; NOT yet filed live)**: see "Other NFA items" above and
+- **SBR / SBS / AOW filing (branch `sbr-research`, 2026-11-19)**: a tester (PR #5) ran one through to the PIN on
+  2026-11-24 (af44fdf) and submitted it by hand; a second went through as a practice run. Model pick: no exact match =
+  closest entries (`_close_models`, difflib on the tail after the maker's name) + number / another spelling / "none"
+  (typed in as not listed) / q; Enter alone never falls back to not listed. see "Other NFA items" above and
   docs/sbr-research.md. Popups mapped live on a throwaway draft; the verify page's barrel-length id is assumed
   (`#barrelLength`): the first practice run must confirm it (Capture portal pages). Local inventory only.
 - Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on

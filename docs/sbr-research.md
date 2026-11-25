@@ -70,7 +70,8 @@ list for that maker: for AP2 "17DM-15, A15, AC-9, AERO PRECISION M4E1, AP15, AR1
 (`select#weaponCaliber`, 58 values like `5.56`, `5.56 NATO`, `300 BLACKOUT`). Ticking `#descriptionNotListed` ("My
 item description is not in the list, create new item") turns both into plain text inputs `input#weaponModel`
 (maxlength 50) and `input#weaponCaliber`: the same ids the silencer steps fill, so **tick it and type** (no need to
-know ATF's lists). Then `#unitOfMeasure` (CALIBER/GAUGE/...), **`#barrelLength`** (maxlength 6),
+know ATF's lists). The script picks from the list first; with no exact match it shows the closest entries and asks
+(a number, another spelling, or "none" to type it in as not listed), so a typo never goes in as not listed silently. Then `#unitOfMeasure` (CALIBER/GAUGE/...), **`#barrelLength`** (maxlength 6),
 `#overallLength` (6), `#serialNumber` (30), `#description` (textarea, maxlength 120). "State Why You Intend To Make
 Firearm" is fixed text "FOR ALL LAWFUL PURPOSES". On-screen rules: model must match the receiver's engraving; one
 caliber (9, 45, 357, 5.56, 7.62, 300); serial must match the engraving. "Save As New Template" is a button to avoid.
