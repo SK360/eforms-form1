@@ -207,7 +207,10 @@ def add_queued(new_rows):
 
 
 def edit_queued(serial, changes, version=None):
-    """Change a queued row's serial_number / caliber / overall_length."""
+    """Change a queued row's serial_number / caliber / overall_length (an SBR etc. also its NFA_QUEUE_COLS). A new
+    manufacturer name drops the code saved from the last eForms lookup, so the next filing looks the new name up."""
+    if "mfr_name" in changes and "mfr_code" not in changes:
+        changes = dict(changes, mfr_code="")
     if server_settings():
         _server_op("edit_queued", {"serial": serial, "changes": changes, "version": version})
         return
@@ -3393,6 +3396,18 @@ def _mfr_country(c):
 
 
 _MFR_WAIT_MS = 8000  # how long eForms' name search may take to list anything
+_MFR_SUFFIXES = {"INC", "INCORPORATED", "LLC", "LC", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LP",
+                 "LLP", "PLLC", "GMBH", "AG", "SA", "SPA"}
+
+
+def _mfr_queries(name):
+    """What to type into eForms' manufacturer search, best first. The search matches any part of a name, so a name
+    without punctuation and company suffix lists the marked one and its variants in one go: "SIG SAUER INC." listed
+    nothing (2026-11-25, the period) and cost a wait before "SIG SAUER" did. Then shorter, a word at a time."""
+    words = _norm_name(name).split()
+    while len(words) > 1 and words[-1] in _MFR_SUFFIXES:
+        words.pop()
+    return [" ".join(words[:n]) for n in range(len(words), 0, -1)] or [name]
 
 
 def _pick_manufacturer(page, code, name, tries=3):
@@ -3481,9 +3496,8 @@ def _pick_manufacturer(page, code, name, tries=3):
         page.wait_for_timeout(500)  # the list can grow as more results arrive
         return [t.strip() for t in items.all_inner_texts() if t.strip()]
 
-    # the full name first, then shorter (drop a word at a time): "AERO PRECISION LLC" -> "AERO PRECISION" -> "AERO"
-    words = name.split()
-    queries = [" ".join(words[:n]) for n in range(len(words), 0, -1)] or [name]
+    # "AERO PRECISION LLC" -> "AERO PRECISION" (lists INC and LLC; the exact one is picked) -> "AERO"
+    queries = _mfr_queries(name)
     query, picked, names = queries[0], None, []
     for _ in range(tries):
         for query in queries:

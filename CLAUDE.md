@@ -92,7 +92,9 @@ plain CLI, kept for debugging/scripting:
   in `mfr_address`, model, serial); no ATF code: `pick_manufacturer` (mapping action -> `_pick_manufacturer`) uses
   the row's code if it has one (FMI for suppressors), else eForms' own name search (PrimeNG autocomplete
   `p-autocomplete#manufacturerName input`, real keystrokes, matches any part of a name; list
-  `.ui-autocomplete-panel li.ui-autocomplete-list-item`; nothing listed = no match): an exact match (case and
+  `.ui-autocomplete-panel li.ui-autocomplete-list-item`; nothing listed = no match; `_mfr_queries`: first search = the
+  name without punctuation and company suffix (INC, LLC...), then a word shorter: "SIG SAUER INC." listed nothing
+  live 2026-11-25 and cost an 8 s wait before "SIG SAUER"): an exact match (case and
   punctuation ignored) is picked, else the list is shown in the terminal (`ask`: number, another spelling, q);
   exact-text click (PALMETTO STATE ARMORY vs ... LLC); Verify; code read from `#manufacturerCodeFromName` and saved
   to the row by `_file_one` (mapped live 2026-11-19 in a clean browser). `nfa_row_problems` (all markings,
@@ -160,7 +162,8 @@ plain CLI, kept for debugging/scripting:
   code/PIN panel on `banner`).
 - `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters behind one "Show another view…"; `open_approved_flow` via
   `atf.approved_pdf_for`, `export_flow` -> `atf.export_inventory()` .xlsx (openpyxl), `edit_queued_flow`: queued rows
-  only; filed/approved are locked), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
+  only; filed/approved are locked; an SBR etc. also offers manufacturer, city/state, country, model, barrel length, description and photo (PR #5,
+  2026-11-25), checked with `nfa_row_problems`; `edit_queued` drops `mfr_code` when the name changes), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
   counts up the last digit group; any clash = nothing added), `resolve_flow`, `approvals_flow`, `settings_flow`
   (wizard), `advanced_flow`. `open_file()` uses open / os.startfile / xdg-open. `settings_menu`: All settings, Other
   responsible persons (trust), Check my setup (`check_setup_flow`).

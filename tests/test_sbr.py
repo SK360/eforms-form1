@@ -159,6 +159,65 @@ def test_menu_adds_an_sbr_and_refuses_multi(configured, answers, screen):
     assert "Added XYZ123 (SBR)" in screen.getvalue()
 
 
+def test_menu_edits_every_marking_of_a_queued_sbr(configured, answers, screen):
+    from conftest import pick, ui
+    add_sbr()
+    seen = {}
+
+    def menu_items(kw):
+        seen["items"] = [c.title for c in kw["choices"]]
+        return "mfr_name"
+    answers(pick("Edit or remove a queued item"), pick("XYZ123"), menu_items, "sig sauer inc.", lambda kw: "quit")
+    ui.menu()
+    for item in ("Change the manufacturer", "Change the model", "Change the description", "Change the barrel length",
+                 "Change the manufacturer's city and state", "Change the markings photo"):
+        assert item in seen["items"], item
+    row = atf.load_rows()[0]
+    # saved uppercased like Add does; the code from the old name's lookup is dropped so filing looks the new one up
+    assert (row["mfr_name"], row["mfr_code"], row["model"]) == ("SIG SAUER INC.", "", "M4E1")
+
+
+def test_menu_edit_keeps_a_queued_sbr_fileable(configured, answers, screen):
+    from conftest import pick, ui
+    add_sbr()
+    answers(pick("Edit or remove a queued item"), pick("XYZ123"), lambda kw: "model", "mcx", lambda kw: "quit")
+    ui.menu()
+    assert atf.load_rows()[0]["model"] == "MCX"
+
+
+def test_suppressor_edit_menu_is_unchanged(configured, answers, screen):
+    from conftest import pick, ui
+    queue(("S1", "9"))
+    seen = {}
+
+    def menu_items(kw):
+        seen["items"] = [c.title for c in kw["choices"]]
+        return "back"
+    answers(pick("Edit or remove a queued item"), pick("S1"), menu_items, lambda kw: "quit")
+    ui.menu()
+    assert seen["items"] == ["Change the serial", "Change the caliber", "Change the overall length",
+                             "Remove it from the queue", "Back"]
+
+
+def test_manufacturer_search_starts_without_punctuation_or_company_suffix():
+    # 2026-11-25: "SIG SAUER INC." listed nothing, so the first search only cost a wait before "SIG SAUER" did
+    assert atf._mfr_queries("Sig Sauer Inc.") == ["SIG SAUER", "SIG"]
+    assert atf._mfr_queries("Aero Precision LLC") == ["AERO PRECISION", "AERO"]
+    assert atf._mfr_queries("Smith & Wesson") == ["SMITH WESSON", "SMITH"]
+    assert atf._mfr_queries("Daniel Defense, Inc.") == ["DANIEL DEFENSE", "DANIEL"]
+    assert atf._mfr_queries("LLC") == ["LLC"]                       # never searches for nothing
+
+
+def test_name_with_period_and_inc_is_found_on_the_first_search(mfr_page, monkeypatch):
+    mfr_page.evaluate("""() => { LIST['SIG SAUER INC'] = 'SS1'; LIST['SIG SAUER GMBH'] = 'SS2';
+      window.typed = []; const box = document.querySelector('#manufacturerName input');
+      box.addEventListener('focus', () => window.typed.push('')); box.addEventListener('keyup', () => {
+        window.typed[window.typed.length - 1] = box.value; }); }""")
+    monkeypatch.setattr(atf, "ask", lambda prompt: pytest.fail("an exact match needs no question"))
+    assert atf._pick_manufacturer(mfr_page, "", "SIG SAUER INC.") == {"mfr_code": "SS1", "mfr_atf_name": "SIG SAUER INC"}
+    assert mfr_page.evaluate("window.typed.filter(Boolean)") == ["SIG SAUER"]
+
+
 def test_cleo_copy_gets_items_4a_to_4c_and_still_no_serial(configured):
     import shutil
     from conftest import CLEO_FIXTURE

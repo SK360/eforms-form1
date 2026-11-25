@@ -358,10 +358,15 @@ def edit_queued_flow():
     if i in (None, "back"):
         return
     r = rows[i]
-    what = questionary.select(f"{r['serial_number']}:", choices=[
-        questionary.Choice("Change the serial", "serial_number"), questionary.Choice("Change the caliber", "caliber"),
-        questionary.Choice("Change the overall length", "overall_length"), questionary.Choice("Remove it from the queue", "remove"),
-        questionary.Choice("Back", "back")]).ask()
+    nfa = atf.is_nfa_row(r)
+    unit = "Gauge" if (r.get("unit") or "").upper() == "GAUGE" else "Caliber"
+    fields = [("serial_number", "the serial"), ("caliber", "the " + unit.lower()), ("overall_length", "the overall length")]
+    if nfa:  # an SBR etc.: everything typed from the receiver's markings can be corrected before filing
+        fields += [("mfr_name", "the manufacturer"), ("mfr_address", "the manufacturer's city and state"),
+                   ("mfr_country", "the manufacturer's country"), ("model", "the model"),
+                   ("barrel_length", "the barrel length"), ("description", "the description"), ("photo", "the markings photo")]
+    what = questionary.select(f"{r['serial_number']}:", choices=[questionary.Choice(f"Change {t}", k) for k, t in fields] + [
+        questionary.Choice("Remove it from the queue", "remove"), questionary.Choice("Back", "back")]).ask()
     if what in (None, "back"):
         return
     if what == "remove":
@@ -371,15 +376,35 @@ def edit_queued_flow():
             pause()
         return
     others = {x["serial_number"].upper() for j, x in enumerate(rows) if j != i}
+    need = lambda v: bool(v.strip()) or "Required"  # noqa: E731
     check = {"serial_number": lambda v: (bool(v.strip()) or "Enter a serial number") if v.strip().upper() not in others
              else "That serial is already in the list",
-             "caliber": lambda v: bool(v.strip()) or "Enter a caliber", "overall_length": _inches}[what]
-    label = {"serial_number": "Serial number:", "caliber": "Caliber:", "overall_length": "Overall length (inches):"}[what]
-    v = questionary.text(label, default=r[what], validate=check).ask()
+             "caliber": _one_caliber if nfa else (lambda v: bool(v.strip()) or "Enter a caliber"), "overall_length": _inches,
+             "mfr_name": need, "mfr_address": need, "mfr_country": need, "model": need, "barrel_length": _inches,
+             "description": lambda v: len(v.strip()) <= 120 or "120 characters max", "photo": lambda v: True}[what]
+    label = {"serial_number": "Serial number (exactly as engraved):" if nfa else "Serial number:",
+             "caliber": f"{unit} (one only):" if nfa else "Caliber:",
+             "overall_length": "Overall length in inches (stock fully extended):" if nfa else "Overall length (inches):",
+             "mfr_name": "Manufacturer's name as marked on the receiver:",
+             "mfr_address": "Manufacturer's city and state as marked:", "mfr_country": "Manufacturer's country:",
+             "model": "Model as engraved on the receiver (none marked: the maker's model name, or N/A):",
+             "barrel_length": "Barrel length in inches:",
+             "description": "Description (120 characters max; Enter on an empty line = none):",
+             "photo": "Photo of the receiver's markings (JPG/PDF up to 3 MB; drag it here; empty = none):"}[what]
+    v = questionary.text(label, default=r.get(what) or "", validate=check).ask()
     if v is None:
         return
-    atf.edit_queued(r["serial_number"], {what: v.strip()}, r.get("version"))
-    r[what] = v.strip()
+    v = v.strip()
+    if what == "photo":
+        v = _clean_path(v) if v else ""
+    elif nfa and what in ("mfr_name", "mfr_address", "mfr_country", "model", "description"):
+        v = v.upper()  # as add_nfa_flow saves them
+    probs = atf.nfa_row_problems(dict(r, **{what: v})) if nfa else []
+    if probs:
+        con.print("  [bold red]✖ " + escape("; ".join(probs)) + "[/]")
+        return pause()
+    atf.edit_queued(r["serial_number"], {what: v}, r.get("version"))
+    r[what] = v
     con.print(f"  [green]✔[/] Updated {escape(r['serial_number'])}")
     pause()
 
