@@ -144,21 +144,28 @@ portal:
     # --- line-item: add firearm, popup 1 (manufacturer) ---
     - {action: section, value: "Firearm: manufacturer"}
     - {selector: "#addFirearm", action: click}
-    - {selector: "#byCode", action: check}
-    - {selector: "#manufacturerCode", action: fill, value: "FMI"}   # always FMI for a Form 1 (maker = the applicant)
-    - {selector: "#verifyManufacturer", action: click}
-    - {action: wait, value: "1500"}
-    - {selector: "#closeVerifiedManufacturerModal", action: click}
-    - {selector: "#country", action: select, value: "UNITED STATES", skip_if_disabled: true}   # skipped if locked/prefilled
+    # FMI ("Form 1 registration": maker = the applicant) for a suppressor, by code. An SBR etc. made from an existing
+    # receiver uses the ORIGINAL manufacturer (the portal: "Only use ... FMI if serialized part is wholly manufactured
+    # by Registrant"): found with the popup's own name search from the name marked on the receiver, the code then kept
+    # with the row (mapped live 2026-11-19: "aero prec" -> AERO PRECISION INC / LLC; LLC verified = AP2). atf.py
+    # _pick_manufacturer does both, and clicks Verify Manufacturer.
+    - {action: pick_manufacturer}
+    - {selector: "#closeVerifiedManufacturerModal", action: click, optional: true}   # only after Verify; none when eForms opens with it verified (2026-11-24)
+    - {selector: "#country", action: select, value: "{mfr_country}", skip_if_disabled: true}   # skipped if locked/prefilled
     - {selector: "#nextButton", action: click}
     # --- firearm popup 2 ---
     - {action: section, value: "Firearm: details"}
-    - {selector: "#productType", action: select, value: "SILENCER"}
-    - {action: wait, value: "500"}          # form re-renders (caliber becomes free text, barrel length hidden)
-    - {selector: "#weaponModel", action: fill, value: "{model}"}
-    - {selector: "#weaponCaliber", action: fill, value: "{caliber}"}
+    - {selector: "#productType", action: select, value: "{product_type}"}
+    - {action: wait, value: "500"}          # form re-renders (SILENCER: caliber free text, barrel length hidden)
+    # Other types with a real manufacturer: Model is an ng-select of ATF's list for that maker and Caliber a select.
+    # Picked from those lists (AP2 lists "AERO PRECISION M4E1" for a lower engraved M4E1): a model typed in through
+    # "My item description is not in the list" puts a "not listed in the ATF reference tables" warning on the certify
+    # page (live 2026-11-20). atf.py _pick_model; it ticks not-listed and types only if the lists lack it. A silencer
+    # (FMI) has plain text inputs: typed. Barrel length only exists for these types.
+    - {action: pick_model}
     - {selector: "#serialNumber", action: fill, value: "{serial_number}"}
-    - {selector: "#unitOfMeasure", action: select, value: "CALIBER"}
+    - {selector: "#unitOfMeasure", action: select, value: "{unit}"}   # CALIBER; GAUGE for a shotgun
+    - {selector: "#barrelLength", action: fill, value: "{barrel_length}", if_set: nfa}
     - {selector: "#overallLength", action: fill, value: "{overall_length}"}
     - {selector: "#description", action: fill, value: "{description}"}
     # read back: what the box kept is what the form says (issue #7: a description cut short went unnoticed)
@@ -193,9 +200,11 @@ portal:
     - {action: wait, value: "1500"}
     - {selector: "#serialNumberMessage", action: expect, label: "Serial number", value: "{serial_number}"}
     - {selector: "#model", action: expect, label: "Model", value: "{model}"}
-    - {selector: "#weaponType", action: expect, label: "Type", value: "SILENCER"}
+    - {selector: "#weaponType", action: expect, label: "Type", value: "{product_type}"}
     - {selector: "#caliber", action: expect, label: "Caliber", value: "{caliber}"}
     - {selector: "#overallLength", action: expect, label: "Overall length", value: "{overall_length}"}
+    # verify page shows "Barrel Length" for these types; id not read live yet (assumed): a practice run confirms it
+    - {selector: "#barrelLength", action: expect, label: "Barrel length", value: "{barrel_length}", if_set: nfa}
     - {selector: "#businessName >> nth=0", action: expect, label: "Trust name", private: true, value: "{trust_name}", only: trust}
     - action: repeat
       over: answers

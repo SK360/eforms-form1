@@ -144,9 +144,9 @@ def open_select(msg, titles, at=0):
 def menu_titles(rows):
     queued = [r["serial_number"] for r in rows if r["status"] not in atf.SKIP]
     unbuilt = any(r["status"] == "approved" and not atf.is_built(r) for r in rows)
-    return ([f"File {len(queued)} queued suppressors ({', '.join(queued)})"] if queued else []) + [
-        "Inventory", "Add suppressors"] + (["Building one? Find the serial to use"] if unbuilt else []) + [
-        "Edit or remove a queued suppressor", "Check approvals on eForms", "Settings", "Advanced…", "Quit"]
+    return ([f"File {len(queued)} queued items ({', '.join(queued)})"] if queued else []) + [
+        "Inventory", "Add suppressors or an SBR"] + (["Building one? Find the serial to use"] if unbuilt else []) + [
+        "Edit or remove a queued item", "Check approvals on eForms", "Settings", "Advanced…", "Quit"]
 
 
 # ---------- the screens ----------
@@ -159,8 +159,8 @@ def shot_home():
 def shot_add():
     rows = atf.load_rows()
     ui.home(rows)
-    answered("What next?", "Add suppressors")
-    script("10", lambda kw: kw["default"], "9", lambda kw: kw["default"], True, False)
+    answered("What next?", "Add suppressors or an SBR")
+    script("silencer", "10", lambda kw: kw["default"], "9", lambda kw: kw["default"], True, False)
     ui.add_flow()
     atf.save_rows(rows)  # back to the shared starting point for the next screens
 
@@ -220,7 +220,7 @@ def shot_inventory():
     ui.con.print(f"  {ui.summary(rows)}")
     ui.con.print(f"  {ui.wait_line(rows)}")
     ui.con.print("  [yellow]⚠ approved with conditions: A101[/] [dim](conditions are in data/suppressors.csv)[/]")
-    open_select("Inventory:", ["Show another view…", "Edit or remove a queued suppressor", "Record builds",
+    open_select("Inventory:", ["Show another view…", "Edit or remove a queued item", "Record builds",
                                "Open an approved PDF", "Export to Excel", "Back"])
 
 

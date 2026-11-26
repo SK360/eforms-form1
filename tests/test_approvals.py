@@ -728,10 +728,10 @@ def test_menu_records_forms_filed_by_hand(configured, dashboard, answers, screen
     out = screen.getvalue()
     for shown in ("In process on eForms, not filed in your records (2)", "queued: filing it would file it twice", "not in your records",
                   "T403: pending here and in process on eForms", "1 other NFA item(s) in process",
-                  "serial DUP1 is on more than one submitted/in process Form 1", "2 suppressor(s) in process on eForms recorded as filed"):
+                  "serial DUP1 is on more than one submitted/in process Form 1", "2 item(s) in process on eForms recorded as filed"):
         assert shown in out, shown
     assert "4000004" not in out                                                                   # no eForm IDs on screen
-    q = next(k for k in answers.kw if k.startswith("Record the 2 suppressor(s)"))
+    q = next(k for k in answers.kw if k.startswith("Record the 2 item(s)"))
     assert "HAND1, T402" in q
     status = {r["serial_number"]: r["status"] for r in atf.load_rows()}
     assert status == {"HAND1": "filed", "T401": "filed", "T402": "filed", "T403": "pending", "T404": ""}

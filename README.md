@@ -208,7 +208,7 @@ and that the browser is installed. Run it again whenever something changes. (`./
 
 **Before your first real batch, do a practice run:** add a suppressor (a test serial like `TEST1` is fine), then
 Advanced > **Practice run**. It fills a whole Form 1 in eForms and shows the read-back table, then stops: it never
-signs or submits. Every row should have a ✔. Afterwards remove the test row (Edit or remove a queued suppressor) and
+signs or submits. Every row should have a ✔. Afterwards remove the test row (Edit or remove a queued item) and
 delete the draft in your eForms dashboard (drafts are also deleted after 90 days).
 
 ## Using it
@@ -220,11 +220,11 @@ of eForms first (eForms allows one session at a time).
 - **Add suppressors**: asks how many (Enter = 1), then the (first) serial, caliber and overall length, suggesting the
   next serial and your last caliber and length. For several, it numbers them in sequence (e.g. A101 … A110) with the
   same caliber and length, shows the range to confirm, and adds nothing if any of those serials already exist.
-- **Edit or remove a queued suppressor**: fix a serial, caliber or length, or take it out of the queue. Filed and
+- **Edit or remove a queued item**: fix a serial, caliber or length, or take it out of the queue. Filed and
   approved ones are your record of what was submitted, so they can't be changed here.
 
 ### Filing
-- **File N queued suppressors**: pick the rows and say whether you want to type your SSN on each form. Trusts: it
+- **File N queued items**: pick the rows and say whether you want to type your SSN on each form. Trusts: it
   makes each suppressor's 5320.23, dated today. One confirmation lists the batch and says whether you're filing as
   your trust or as an individual (with your saved answers to questions 11.A-11.M); confirming is your "I affirm" and
   your OK to Sign & Submit each one once every check passes. A browser opens: log in (MFA included), wait for the
@@ -246,7 +246,12 @@ of eForms first (eForms allows one session at a time).
   length, approval date); a form whose type can't be read gets a warning instead of being recorded. Approvals are
   recorded in your inventory, and it offers to add approved suppressors that aren't in it yet (e.g. ones you filed
   before using this tool). A suppressor with no filed date (filed before this tool) gets the date you signed it,
-  item 9 of the approval; a recorded filed date is never changed. The helper still only files suppressors.
+  item 9 of the approval; a recorded filed date is never changed.
+- **Forms still in process:** Check approvals also reads your submitted/in process Form 1s, so a form you finished by
+  hand on eForms is found by serial (suppressors, and SBRs and other items in your queue). A queued one is offered to
+  be recorded as filed (filed date and eForm ID from the form); a *pending* one is flagged so you can resolve it as
+  filed. eForms doesn't list the application number there: it's on the confirmation after you submit, so type it in
+  under **Resolve a pending row** if you want it recorded.
 - **Disapproved or returned forms:** while any suppressor is filed and waiting, Check approvals also looks for Form 1s
   that eForms lists as **disapproved** or **returned without action** (PDFs saved to `out/not-approved/`). Those
   suppressors are marked *disapproved*, and the home screen says so. Find out why (eForms has ATF's letter) and fix

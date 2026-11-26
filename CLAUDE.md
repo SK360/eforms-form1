@@ -85,6 +85,29 @@ plain CLI, kept for debugging/scripting:
   rounded half up like the phone page). Shown as the Days column of `inventory_table` and `build_table`, `wait_line`
   under the Inventory views (not on home), Excel "Days to approve" (approved only), phone page "ATF wait" + "median
   wait" in `#sum` (computed in JS from `filed`/`approved`; /api/inventory unchanged).
+- **Other NFA items being filed** (SBR/SBS/AOW from an existing receiver): queued in `data/suppressors.csv` too, so
+  filing/pending/resolve/CLEO work unchanged. `NFA_QUEUE_COLS` (type, mfr_code, mfr_name, mfr_address, mfr_country,
+  model, barrel_length, unit, description, photo) are written only when such a row exists (`save_rows` keeps a
+  suppressor-only file's old header). `is_nfa_row` (type set and not SILENCER). The user types only what's MARKED on the receiver (name, city/state
+  in `mfr_address`, model, serial); no ATF code: `pick_manufacturer` (mapping action -> `_pick_manufacturer`) uses
+  the row's code if it has one (FMI for suppressors), else eForms' own name search (PrimeNG autocomplete
+  `p-autocomplete#manufacturerName input`, real keystrokes, matches any part of a name; list
+  `.ui-autocomplete-panel li.ui-autocomplete-list-item`; nothing listed = no match; `_mfr_queries`: first search = the
+  name without punctuation and company suffix (INC, LLC...), then a word shorter: "SIG SAUER INC." listed nothing
+  live 2026-11-25 and cost an 8 s wait before "SIG SAUER"): an exact match (case and
+  punctuation ignored) is picked, else the list is shown in the terminal (`ask`: number, another spelling, q);
+  exact-text click (PALMETTO STATE ARMORY vs ... LLC); Verify; code read from `#manufacturerCodeFromName` and saved
+  to the row by `_file_one` (mapped live 2026-11-19 in a clean browser). `nfa_row_problems` (all markings,
+  ONE caliber: "MULTI" refused per Form 1 instruction K(3), description <= 120, optional markings photo exists and
+  <= 3 MB, local inventory only) is checked by the menu and by `file_rows` before the browser. `_row_context` adds
+  `nfa`, `product_type`, `mfr_code` (FMI for suppressors), `mfr_country`, `unit`, `barrel_length`, the row's model and
+  description, and the photo as an extra supporting doc ("PHOTO OF RECEIVER MARKINGS"). Mapping: `#productType`,
+  then (if_set: nfa) tick `#descriptionNotListed` so `#weaponModel`/`#weaponCaliber` are text inputs, `#barrelLength`,
+  read-back `#weaponType` = type and `#barrelLength` (assumed id). `stamp_5320` also stamps 4a type, 4b the ORIGINAL
+  manufacturer's name + address (two lines over the template's 1-3), 4c model (decided 2026-11-19: 4b matches Form 1
+  item 4a). `record_sbrs` drops a filed/pending NFA queue row once its approval is in sbrs.csv. Server mode: adding
+  is refused and `move_to_server` refuses while one is queued (the server's schema has no such columns yet). Menu:
+  Add > "An SBR, SBS or AOW..." (`add_nfa_flow`). Tests: `tests/test_sbr.py`.
 - **`data/sbrs.csv` = every approved non-suppressor** (`SBR_COLS`; the file, table and function names date from when
   it held only SBRs): `type` as the PDF and the portal's `#productType` print it (`NFA_TYPES`: SHORT BARRELED RIFLE,
   SHORT BARRELED SHOTGUN, ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN; live PDFs seen only for SILENCER and the
@@ -139,7 +162,8 @@ plain CLI, kept for debugging/scripting:
   code/PIN panel on `banner`).
 - `src/ui.py` menu: home table + `summary()`, `inventory_flow` (serial order, filters behind one "Show another view…"; `open_approved_flow` via
   `atf.approved_pdf_for`, `export_flow` -> `atf.export_inventory()` .xlsx (openpyxl), `edit_queued_flow`: queued rows
-  only; filed/approved are locked), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
+  only; filed/approved are locked; an SBR etc. also offers manufacturer, city/state, country, model, barrel length, description and photo (PR #5,
+  2026-11-25), checked with `nfa_row_problems`; `edit_queued` drops `mfr_code` when the name changes), `file_flow`, `add_flow` (how many -> first serial, caliber, length; `serial_run`
   counts up the last digit group; any clash = nothing added), `resolve_flow`, `approvals_flow`, `settings_flow`
   (wizard), `advanced_flow`. `open_file()` uses open / os.startfile / xdg-open. `settings_menu`: All settings, Other
   responsible persons (trust), Check my setup (`check_setup_flow`).
@@ -380,7 +404,9 @@ plain CLI, kept for debugging/scripting:
   Once every results page was read, files of forms no longer listed are deleted. `in_process_report(records, rows)`:
   unknown (not in records), queued (status "" or disapproved here = would be filed twice), pending (hint: Resolve as
   filed; never changed automatically), duplicates (serial on 2+ in-process forms; left out of the rest), other NFA
-  types (ignored until approved). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
+  types: matched by serial against NFA queue rows only (`is_nfa_row`; an SBR never matches a suppressor with the same
+  serial) into queued/pending the same way (PR #5, 2026-11-24: a tester's hand-submitted SBR stayed pending); one not
+  in the queue stays in "other" (recorded once approved, record_sbrs). `record_in_process(recs)` -> status filed, filed_date = item 9 else the results'
   submitted date, eform_id, no application number, caliber/length only fill gaps; new rows re-sorted. Server: op
   `record_in_process` (API 4; app checks /api/hello api >= 4, else ServerReadOnly "too old"; queued/disapproved only,
   all or nothing, `_loose_inches`). Menu `_in_process_lines` (asks before recording; declining warns that queued ones
@@ -522,7 +548,8 @@ SSN from a file; declined, same as passwords/codes/PINs.)
   The portal's country list isn't bundled (captures keep only the first 40 options): a spelling it doesn't offer fails
   at that step, and `_pick` then names the closest options (difflib) when there are more than 12. `read_template`
   reads 9c Country of Birth; a foreign one sets the country and drops the state.
-- **Manufacturer code is always `FMI`** for a Form 1 suppressor (fixed in config/mapping.yaml, not a setting).
+- **Manufacturer code is `FMI`** for a Form 1 suppressor (`{mfr_code}` defaults to it); an SBR etc. made from an
+  existing receiver uses the ORIGINAL manufacturer's code (the portal's own popup text says so).
   **Firearm description: at most `atf.DESCRIPTION_MAX` = 100 characters** (issue #7, 1.6.2). The portal's textarea
   takes more, but the Form 1 PDF eForms has made since about Oct 2026 (pdf-lib; earlier ones were OpenPDF and printed
   it whole) prints only the first 100: the old 102-character default came out "...IS APPROV" on every form from then
@@ -600,8 +627,12 @@ prints steps without a browser. `--capture` records screens after the automated 
 - CLEO packets: Advanced > Make CLEO packets worked live 2026-11-06 (15 in-process trust forms); the fetch at the end
   of a real batch (`file_rows` with `cleo`) worked live 2026-11-16. Not yet live: an individual's submitted PDF (assumed to carry the
   same "CLEO Copy" pages).
-- Files suppressors only (SILENCER, caliber free text); other NFA types have different firearm fields. They are only
-  inventoried, from Check approvals.
+- **SBR / SBS / AOW filing (branch `sbr-research`, 2026-11-19)**: a tester (PR #5) ran one through to the PIN on
+  2026-11-24 (af44fdf) and submitted it by hand; a second went through as a practice run. Model pick: no exact match =
+  closest entries (`_close_models`, difflib on the tail after the maker's name) + number / another spelling / "none"
+  (typed in as not listed) / q; Enter alone never falls back to not listed. see "Other NFA items" above and
+  docs/sbr-research.md. Popups mapped live on a throwaway draft; the verify page's barrel-length id is assumed
+  (`#barrelLength`): the first practice run must confirm it (Capture portal pages). Local inventory only.
 - Windows: filing proven live by multiple testers (user confirmed 2026-10-27), and install/launcher/tests run on
   GitHub's Windows runners. Ctrl-C logout is tested by simulating the interrupt, not by a real console Ctrl-C on Windows.
 - Ideas: Google Sheet as single source of truth (queue + write-back + status sync from the eForms dashboard);

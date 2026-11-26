@@ -18,7 +18,7 @@ def test_add_then_file_two(configured, portal, answers, screen):
     def serial(kw):
         checks["dup"], checks["blank"] = kw["validate"]("t102"), kw["validate"]("  ")
         return kw["default"]
-    answers(pick("Add suppressors"), "1", serial, lambda kw: kw["default"], "6.5", True, "1", lambda kw: kw["default"], "22",
+    answers(pick("Add suppressors"), pick("Suppressors"), "1", serial, lambda kw: kw["default"], "6.5", True, "1", lambda kw: kw["default"], "22",
             lambda kw: (checks.setdefault("len_default", kw["default"]), kw["default"])[1], False,
             pick("File 2 queued"), TICKED, False, True, QUIT)
     ui.menu()
@@ -246,7 +246,7 @@ def test_add_a_run_of_serials(configured, answers, screen):
     def first(kw):
         seen["default"], seen["letters"] = kw["default"], kw["validate"]("ABC")
         return kw["default"]
-    answers(pick("Add suppressors"), "10", first, "9", "12", True, False, QUIT)
+    answers(pick("Add suppressors"), pick("Suppressors"), "10", first, "9", "12", True, False, QUIT)
     ui.menu()
     rows = atf.load_rows()
     assert seen == {"default": "T055", "letters": "To add several, the serial needs a number to count up from"}
@@ -257,7 +257,7 @@ def test_add_a_run_of_serials(configured, answers, screen):
 
 def test_a_run_that_would_clash_adds_nothing(configured, answers, screen):
     queue(("T054", "9", "filed"), ("T057", "9"))
-    answers(pick("Add suppressors"), "5", "T055", "9", "12",          # T055..T059 would include T057
+    answers(pick("Add suppressors"), pick("Suppressors"), "5", "T055", "9", "12",          # T055..T059 would include T057
             "3", "T058", "9", "12", True, False, QUIT)                  # then a custom count that fits: T058..T060
     ui.menu()
     serials = [r["serial_number"] for r in atf.load_rows()]
