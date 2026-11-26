@@ -7,6 +7,57 @@ To update: from the next version on, the menu offers **⬆ Update to version …
 Git, `git pull` in the folder, then run `./install.sh` (Windows: `.\install.cmd`) again in case the requirements
 changed. Without Git, download the new release's ZIP and copy your `data`, `forms` and `out` folders into the new copy.
 
+## 1.7.0 (2026-11-26)
+
+### New
+- **File Form 1s for SBRs, SBSs and AOWs made from an existing receiver.** **Add suppressors or an SBR** > **An SBR, SBS or AOW made from an
+  existing receiver/firearm** queues one alongside your suppressors. The receiver was made and serialized by a
+  company (a commercial lower, a pistol you're turning into an SBR). You type only what's on the receiver: its serial,
+  the manufacturer's name, city/state and country as marked, the model as engraved, one caliber or gauge, the barrel
+  and overall length, and a description if needed (say, for a receiver marked MULTI). You can also add a photo of
+  the markings (optional, up to 3 MB). The prompts explain how to measure each length. Filing then works like a
+  suppressor: one confirmation, then the portal steps, the read-back, Sign & Submit, and the application number.
+  - **Manufacturer:** found with eForms' own name search, then verified. If eForms lists several close names, you
+    pick one in the terminal (or pick and verify it in the browser yourself). The code is kept with the row, so a
+    re-file uses it.
+  - **Model and caliber:** picked from eForms' lists for that manufacturer, preferring the exact spelling engraved
+    (STAG-15, not STAG 15). If nothing matches, it shows the closest models and asks. Typing it in as "not in the
+    list" (which makes ATF check it by hand) happens only if you say so.
+  - **5320.23:** items 4a to 4c are stamped with the type, the original manufacturer's name and address, and the
+    model, on every responsible person's copy and the CLEO copies.
+  - Each answer is read back from the portal (type, model, caliber, serial, barrel and overall length) before
+    anything is submitted.
+- **Approved SBRs move to your SBR list.** Once Check approvals finds the approval, the SBR leaves the queue and is
+  listed with your other approved NFA items.
+- **Check approvals finds SBRs filed by hand.** An SBR in your queue that you submitted on eForms yourself is now
+  matched by serial too (before, only suppressors were). A queued one is offered to be recorded as filed; a pending
+  one is flagged so you can resolve it as filed.
+- **Works with the inventory server.** If your inventory lives on the inventory server, update the server to 1.7.0
+  too (`atf-server update` on the server, or rebuild the Docker image): queuing and filing SBRs needs it, and the
+  helper says so if your server is older. Suppressors work as before either way.
+- The phone page lists a waiting SBR as an SBR (type, model and barrel length), counts it with your SBRs, and shows
+  no Built switch for it.
+- The menu says **queued item** instead of "queued suppressor" (Edit or remove a queued item, File N queued items).
+
+### Not yet supported
+- **SBRs made on a receiver you made yourself** (manufacturer code FMI, such as a lower finished from an 80%
+  receiver and serialized by you) aren't covered yet. We know this is a gap; it's coming in a future update. Until
+  then, file those by hand on eForms.
+- Destructive devices and machineguns aren't offered.
+
+### Thanks
+- ecrawshaw built SBR, SBS and AOW filing (#5), mapping the new eForms pages live. PooreH tested it on real Form 1s
+  and reported each problem, all fixed before this release.
+
+### Tested
+- SBRs: a tester filed one with the helper (it reached the PIN step; they finished it by hand) and practice-ran a
+  second up to Sign & Submit. That was before the inventory-server support. Filing an SBR with the inventory server
+  is tested against the real server code, not yet live on eForms.
+- Suppressors: a real trust filing went through on this code. The manufacturer and model steps were rewritten, so
+  that was checked live before this release.
+- Not yet live: a suppressor filed right after an SBR on the same eForms account, the barrel-length read-back on the
+  verify page, and an approved SBR leaving the queue.
+
 ## 1.6.3 (2026-11-22)
 
 ### Fixed
