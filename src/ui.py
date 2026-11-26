@@ -661,9 +661,9 @@ def _one_caliber(v):
 def add_nfa_flow():
     """Queue one SBR / SBS / AOW made from a receiver that already has a serial. Everything comes from the receiver's
     markings (ATF: model and serial must match the engraving) and ATF's licensee list (the manufacturer's code)."""
-    if atf.server_settings():
-        con.print("  [yellow]Filing SBRs and other NFA items works with this computer's inventory only for now "
-                  "(Settings > Where your inventory lives).[/]")
+    why = atf.nfa_server_problem()
+    if why:
+        con.print(f"  [yellow]Can't add an SBR or other NFA item: {escape(why)}.[/]")
         return pause()
     taken = {r["serial_number"].upper() for r in atf.load_rows()}
     con.print(Panel(

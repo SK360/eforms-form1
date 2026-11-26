@@ -99,15 +99,25 @@ plain CLI, kept for debugging/scripting:
   exact-text click (PALMETTO STATE ARMORY vs ... LLC); Verify; code read from `#manufacturerCodeFromName` and saved
   to the row by `_file_one` (mapped live 2026-11-19 in a clean browser). `nfa_row_problems` (all markings,
   ONE caliber: "MULTI" refused per Form 1 instruction K(3), description <= 120, optional markings photo exists and
-  <= 3 MB, local inventory only) is checked by the menu and by `file_rows` before the browser. `_row_context` adds
+  <= 3 MB, `nfa_server_problem()` in server mode) is checked by the menu and by `file_rows` before the browser. `_row_context` adds
   `nfa`, `product_type`, `mfr_code` (FMI for suppressors), `mfr_country`, `unit`, `barrel_length`, the row's model and
   description, and the photo as an extra supporting doc ("PHOTO OF RECEIVER MARKINGS"). Mapping: `#productType`,
   then (if_set: nfa) tick `#descriptionNotListed` so `#weaponModel`/`#weaponCaliber` are text inputs, `#barrelLength`,
   read-back `#weaponType` = type and `#barrelLength` (assumed id). `stamp_5320` also stamps 4a type, 4b the ORIGINAL
   manufacturer's name + address (two lines over the template's 1-3), 4c model (decided 2026-11-19: 4b matches Form 1
-  item 4a). `record_sbrs` drops a filed/pending NFA queue row once its approval is in sbrs.csv. Server mode: adding
-  is refused and `move_to_server` refuses while one is queued (the server's schema has no such columns yet). Menu:
-  Add > "An SBR, SBS or AOW..." (`add_nfa_flow`). Tests: `tests/test_sbr.py`.
+  item 4a). `record_sbrs` drops a filed/pending NFA queue row once its approval is in sbrs.csv. **Server mode**
+  (added 2026-11-25 before releasing it, the user's rule: no feature released that doesn't work with the server):
+  server schema 5 adds `db.NFA_QUEUE_COLS` to the suppressors table (empty = a suppressor; `db.is_nfa`), API 5
+  (`atf.NFA_SERVER_API`; `nfa_server_problem()` = too old / unreachable, then adding, filing and moving an SBR are
+  refused naming it; suppressors unaffected). add_queued / edit_queued / import / export / `/api/rows` carry them
+  (`_nfa_fields` checks type, unit, barrel inches, description 120); `mark_pending` takes `mfr_code` (an SBR's code
+  found on eForms during this filing; fills only an empty one: `_file_one` doesn't save it in server mode, since a
+  write there would change the row's version before mark_pending); server `record_sbrs` deletes a filed/pending NFA
+  queue row with that serial (history row, after = null). The markings photo stays a PATH on the PC that files
+  (the user's choice): another PC gets "markings photo not found" before the browser. Phone page (both): queued
+  NFA rows carry type/model/barrel, are counted with the SBRs (`isNfa`), tagged "SBR · ..." in the list, no Built
+  switch; server status counts them as "other". Menu: Add > "An SBR, SBS or AOW..." (`add_nfa_flow`). Tests:
+  `tests/test_sbr.py`, `tests/test_sbr_server.py` (real server), `server/tests/test_nfa_queue.py`.
 - **`data/sbrs.csv` = every approved non-suppressor** (`SBR_COLS`; the file, table and function names date from when
   it held only SBRs): `type` as the PDF and the portal's `#productType` print it (`NFA_TYPES`: SHORT BARRELED RIFLE,
   SHORT BARRELED SHOTGUN, ANY OTHER WEAPON, DESTRUCTIVE DEVICE, MACHINEGUN; live PDFs seen only for SILENCER and the
@@ -280,8 +290,8 @@ plain CLI, kept for debugging/scripting:
   server/requirements.txt BEFORE the merge, `git merge --ff-only <tag>`, `systemctl restart atf-inventory` if that
   unit is active. Docker (no .git in the image) = told how to rebuild. **No update button on the page** (decided
   2026-11-09: the service can't write its own code, ProtectSystem=strict; a paired phone mustn't either).
-  Tests: `server/tests/test_status.py`. Not yet live: `atf-server update` on the real container (it needs one
-  release newer than the commit that added it).
+  Tests: `server/tests/test_status.py`. Live 2026-11-25: the real container updated itself 1.5.0 -> 1.6.3 with
+  `atf-server update --yes` (backup, fetch, pip, merge, restart; same server id and CA).
 - **Updates** (`src/update.py`, stdlib; added 2026-11-08): `check()` = GitHub `releases/latest` of SK360/eforms-form1
   (drafts/pre-releases never count), at most every 20 h, answer in `out/update_check.json`; `menu()` starts it in a
   thread (`check_in_background`, only when due; joined up to 2 s before the first home screen), so `home()` only reads the file (`available()`: newer than `__version__`) and shows

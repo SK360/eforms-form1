@@ -32,7 +32,7 @@ def release(version=NEXT):
 def test_status_needs_a_paired_device_and_says_how_the_server_is(client, auth, filled, data_dir):
     assert client.get("/api/status").status_code == 401 and client.get("/api/backup").status_code == 401
     s = client.get("/api/status", headers=auth).json()
-    assert s["version"] == __version__ and s["api"] == 4 and s["update"] is None
+    assert s["version"] == __version__ and s["api"] == 5 and s["update"] is None
     assert s["counts"] == {"suppressors": 38, "other": 2, "pdfs": 27, "devices": 1}
     assert s["missing_pdfs"] == [] and s["storage"]["pdf_bytes"] > 0 and s["storage"]["free_bytes"] > 0
     assert s["certificate"] is None                                    # the test server has no tls/ in its data folder

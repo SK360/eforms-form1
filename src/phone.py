@@ -40,6 +40,7 @@ def inventory():
     sup = [{"serial": r["serial_number"], "caliber": r["caliber"], "length": r["overall_length"], "status": r["status"] or "queued",
             "filed": r["filed_date"], "approved": r["approved_date"], "application": _last4(r["application_number"]),
             "eform": _last4(r["eform_id"]), "conditions": r["conditions"], "built": atf.is_built(r), "design": r["design"],
+            "type": r["type"], "model": r["model"], "barrel": r["barrel_length"],  # a queued SBR etc. (type "" = suppressor)
             "pdf": r["status"] == "approved" and atf.approved_pdf_for(r) is not None}
            for r in sorted(atf.load_rows(), key=lambda r: atf.serial_key(r["serial_number"]))]
     sbrs = [{"serial": r["serial_number"], "type": r["type"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",

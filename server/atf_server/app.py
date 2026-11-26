@@ -24,7 +24,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import __version__, db, status, tls
 
-API_VERSION = 4  # 2: table sbrs keeps each row's type (SBR, SBS, ...); 3: record_approvals fills an empty filed_date; 4: record_in_process
+API_VERSION = 5  # 2: table sbrs keeps each row's type (SBR, SBS, ...); 3: record_approvals fills an empty filed_date; 4: record_in_process
+# 5: queued SBRs/SBSs/AOWs (schema 5: db.NFA_QUEUE_COLS in add_queued, edit_queued, import, /api/rows; mark_pending keeps
+# a found mfr_code; record_sbrs takes a filed one out of the queue)
 COOKIE = "atf_device"
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; "
        "frame-ancestors 'none'")
@@ -154,6 +156,7 @@ def create_app(data_dir, page=None, name="ATF inventory", ca=None):
                 "status": r["status"].lower() or "queued", "filed": r["filed_date"], "approved": r["approved_date"],
                 "application": _last4(r["application_number"]), "eform": _last4(r["eform_id"]),
                 "conditions": r["conditions"], "built": r["built"] == "yes", "design": r["design"], "version": r["version"],
+                "type": r["type"], "model": r["model"], "barrel": r["barrel_length"],
                 "pdf": r["status"] == "approved" and db.pdf_for(conn, r["serial_number"]) is not None}
                for r in db.rows(conn)]
         sbrs = [{"serial": r["serial_number"], "type": r["type"], "caliber": r["caliber"], "length": r["overall_length"], "status": "sbr",
