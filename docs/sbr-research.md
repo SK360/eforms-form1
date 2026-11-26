@@ -137,6 +137,7 @@ requires them there; Form 1 instruction K(1) asks for "name and location"), so n
 3. `src/ui.py`: "Add an SBR" flow (asks the fields above), queue/edit screens show type, and the "built" flow stays
    suppressor-only.
 4. `src/remote.py` / `src/phone.py`: the server inventory API (types already there since API 2) needs queued SBRs.
+   Done 2026-11-25: server schema 5 / API 5 holds them (see CLAUDE.md, "Other NFA items being filed").
 5. 5320.23 stamping (option A or B above).
 
 ## Open questions to answer live (practice run up to the read-back page, never submitting)

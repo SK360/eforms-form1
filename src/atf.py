@@ -90,10 +90,26 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
 # work the same; these columns stay empty for suppressors. type = the portal's #productType ("" = SILENCER).
 # mfr_* = the ORIGINAL manufacturer as ATF lists it (code verified in the portal; name + address go in 5320.23 item 4b),
 # model as engraved, barrel_length in inches, description (item 4h, 120 max), photo = optional markings photo.
-# Once approved they leave this file for data/sbrs.csv (record_sbrs). Filing them needs this computer's inventory.
+# Once approved they leave this file for data/sbrs.csv (record_sbrs). On an inventory server they're in its
+# suppressors table (schema 5, server API 5: NFA_SERVER_API), which takes them out of the queue the same way.
 NFA_QUEUE_COLS = ["type", "mfr_code", "mfr_name", "mfr_address", "mfr_country", "model", "barrel_length", "unit",
                   "description", "photo"]
 QUEUE_COLS = COLS + NFA_QUEUE_COLS
+NFA_SERVER_API = 5  # the first inventory-server API that holds queued SBRs etc.
+
+
+def nfa_server_problem():
+    """In server mode: why the server can't hold queued SBRs etc. (too old, or can't be reached), else None."""
+    import remote
+    if not server_settings():
+        return None
+    try:
+        api = _server().get("/api/hello").get("api") or 1
+    except remote.ServerError as e:
+        return f"your inventory server can't be reached ({e})"
+    if api < NFA_SERVER_API:
+        return "your inventory server is too old to hold SBRs and other NFA items: update it (atf-server update on the server)"
+    return None
 
 
 def is_nfa_row(row):
@@ -120,8 +136,9 @@ def nfa_row_problems(row):
         probs.append(f"{row['serial_number']}: markings photo not found ({Path(photo).name})")
     elif photo and Path(photo).stat().st_size > 3 * 1024 * 1024:
         probs.append(f"{row['serial_number']}: markings photo is over 3 MB (the portal's limit per file)")
-    if server_settings():
-        probs.append(f"{row['serial_number']}: SBRs can only be filed from this computer's inventory for now")
+    why = nfa_server_problem()
+    if why:
+        probs.append(f"{row['serial_number']}: {why}")
     return probs
 
 
@@ -195,13 +212,14 @@ def clear_build(serial):
 
 def add_queued(new_rows):
     """Add queued suppressors ({serial_number, caliber, overall_length}); the caller has checked the serials are new.
-    Other NFA items (is_nfa_row) carry NFA_QUEUE_COLS too and only work with this computer's inventory."""
-    if server_settings() and any(is_nfa_row(r) for r in new_rows):
-        raise ServerReadOnly("Filing SBRs and other NFA items works with this computer's inventory only for now "
-                             "(Settings > Where your inventory lives).")
+    Other NFA items (is_nfa_row) carry NFA_QUEUE_COLS too (on a server: one with API NFA_SERVER_API or newer)."""
     if server_settings():
-        _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in ("serial_number", "caliber", "overall_length")}
-                                           for r in new_rows]})
+        nfa = any(is_nfa_row(r) for r in new_rows)
+        why = nfa_server_problem() if nfa else None
+        if why:
+            raise ServerReadOnly(f"Not added: {why}.")
+        keys = ["serial_number", "caliber", "overall_length"] + (NFA_QUEUE_COLS if nfa else [])
+        _server_op("add_queued", {"rows": [{k: r.get(k, "") for k in keys} for r in new_rows]})
         return
     save_rows(load_rows() + [dict(r, status="") for r in new_rows])
 
@@ -642,7 +660,7 @@ def _move_aside(path, word):
 def local_for_move():
     """This computer's own inventory, read from its files whatever mode it's in: (suppressors, sbrs, pdfs), the PDFs
     as {eform_id, serial, path} (out/approved/index.csv, plus files named after a serial that aren't in it)."""
-    sup = [{c: (r.get(c) or "").strip() for c in COLS} for r in _read_csv(SUPP)]
+    sup = [{c: (r.get(c) or "").strip() for c in QUEUE_COLS} for r in _read_csv(SUPP)]
     sbrs = [{c: (r.get(c) or "").strip() for c in SBR_COLS} for r in _read_csv(_sbrs_path())]
     folder = OUT / "approved"
     by_eform = {r["eform_id"]: r["serial_number"] for r in sup + sbrs if r["eform_id"]}
@@ -673,7 +691,7 @@ def _norm(rows, cols):
                     v = datetime.strptime(v, "%m/%d/%Y").strftime("%m/%d/%Y")
                 except ValueError:
                     pass
-            n[c] = (v or NFA_DEFAULT_TYPE) if c == "type" else v
+            n[c] = (v or NFA_DEFAULT_TYPE) if c == "type" and cols is SBR_COLS else v
         out[(n["serial_number"].upper(), n["eform_id"] if cols is SBR_COLS else "")] = n
     return out
 
@@ -698,13 +716,14 @@ def move_to_server(try_only=False, progress=lambda text: None):
     request first (all of them in one request was too much for a small container), then the rows in one import that
     names them by checksum. progress(text) is told how far it got. Returns {suppressors, built, sbrs, pdfs, problems,
     moved, renamed}."""
-    if any(is_nfa_row(r) for r in _read_csv(SUPP)):
-        raise ServerReadOnly("Your queue has an SBR or other NFA item, which the server can't hold yet: "
-                             "file it (or remove it) first, then move.")
     import hashlib
     import remote
     if not server_settings():
         raise remote.ServerError("Connect to your server first (Settings > Where your inventory lives).")
+    if any(is_nfa_row(r) for r in _read_csv(SUPP)):
+        why = nfa_server_problem()
+        if why:
+            raise ServerReadOnly(f"Your queue has an SBR or other NFA item and {why}. Nothing was moved.")
     server = _server()
     sup, sbrs, pdfs = local_for_move()
     if not sup and not sbrs:
@@ -732,7 +751,7 @@ def move_to_server(try_only=False, progress=lambda text: None):
     progress("Checking every row and PDF on the server…")
     try:
         got_sup, got_sbrs = server.rows()
-        problems = _differences(sup, got_sup, COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "Other NFA item")
+        problems = _differences(sup, got_sup, QUEUE_COLS, "Suppressor") + _differences(sbrs, got_sbrs, SBR_COLS, "Other NFA item")
         if sorted((p["eform_id"] or "", d) for p, d in sent) != sorted((p["eform_id"], p["sha256"]) for p in server.get("/api/pdfs")["pdfs"]):
             problems.append("Approval PDFs: what the server stored isn't what was sent")
     except BaseException:
@@ -756,7 +775,8 @@ def copy_from_server():
     sup, sbrs = server.rows()
     listed = server.get("/api/pdfs")["pdfs"]
     renamed = []
-    for path, rows, cols in ((SUPP, sup, COLS), (_sbrs_path(), sbrs, SBR_COLS)):
+    sup_cols = QUEUE_COLS if any(is_nfa_row(r) for r in sup) else COLS  # suppressor-only files keep their old header
+    for path, rows, cols in ((SUPP, sup, sup_cols), (_sbrs_path(), sbrs, SBR_COLS)):
         if _read_csv(path):
             renamed.append(_move_aside(path, "replaced-by-server"))
         _write_csv(path, cols, rows)
@@ -779,7 +799,7 @@ def copy_from_server():
         have.add(p["sha256"])
         fetched += 1
     _save_approved_index(folder, index)
-    problems = (_differences(_read_csv(SUPP), sup, COLS, "Suppressor")
+    problems = (_differences(_read_csv(SUPP), sup, QUEUE_COLS, "Suppressor")
                 + _differences(_read_csv(_sbrs_path()), sbrs, SBR_COLS, "Other NFA item"))
     return {"suppressors": len(sup), "sbrs": len(sbrs), "nfa": nfa_counts(sbrs), "pdfs": fetched, "renamed": renamed, "problems": problems}
 
@@ -895,7 +915,8 @@ def record_sbrs(records):
         _server_op("record_sbrs", {"rows": send})
     elif changed:
         save_sbrs(rows)
-    if not server_settings() and SUPP.exists():  # filed by this tool: done once its approval is in data/sbrs.csv
+    # filed by this tool: done once its approval is in data/sbrs.csv (a server takes it out of its queue in record_sbrs)
+    if not server_settings() and SUPP.exists():
         approved = {r["serial_number"].upper() for r in rows}
         queue = load_rows()
         keep = [r for r in queue if not (is_nfa_row(r) and r["status"] in ("filed", "pending")
@@ -1720,9 +1741,9 @@ def _set_pending(rows, idx, length, force=False):
     doesn't come, and the caller then doesn't click Sign & Submit."""
     r, today = rows[idx], datetime.now().strftime("%m/%d/%Y")
     length = r.get("overall_length") or length
-    if server_settings():
+    if server_settings():  # mfr_code: an SBR's code found on eForms this time (the server keeps it for a re-file)
         _server_op("mark_pending", {"serial": r["serial_number"], "version": r.get("version"), "filed_date": today,
-                                    "overall_length": length, "force": bool(force)})
+                                    "overall_length": length, "force": bool(force), "mfr_code": r.get("mfr_code", "")})
         r.update(status="pending", filed_date=today, overall_length=length)
         return
     r.update(status="pending", filed_date=today, overall_length=length)
@@ -3935,9 +3956,9 @@ def _file_one(page, args, trust, steps, rows, idx):
         ask("Browser left open on the failing page. Look at it, then press Enter to log out and close... ")
         sys.exit(1)
     found = ctx_vals.get("_found") or {}
-    if found.get("mfr_code") and not item.get("mfr_code"):  # looked up by name: keep it, so a re-file uses the code
+    if found.get("mfr_code") and not item.get("mfr_code") and is_nfa_row(item):  # found by name: a re-file uses the code
         item.update(mfr_code=found["mfr_code"])
-        if not server_settings():
+        if not server_settings():  # a server gets it with mark_pending (saving it now would change the row's version)
             save_rows(rows)
     if bad:
         emit("error", f"\n*** {len(bad)} PROBLEM(S) (above): DO NOT tick the verification box. ***")

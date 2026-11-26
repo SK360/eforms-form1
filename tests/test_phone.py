@@ -239,3 +239,28 @@ def test_unmark_built_on_the_page(served, engine):
         assert page.get_attribute("#sw", "aria-checked") == "false"
         assert {r["serial_number"]: r["built"] for r in atf.load_rows()}["T1"] == ""
         browser.close()
+
+
+def test_a_queued_sbr_is_listed_as_an_sbr_not_a_suppressor(served):
+    """An SBR made from a receiver waits in the suppressor queue file (status filed here); the page names its type,
+    counts it with the SBRs and offers no Built switch for it."""
+    from playwright.sync_api import sync_playwright
+    from test_sbr import sbr
+    link, _ = served
+    atf.save_rows(atf.load_rows() + [dict({c: "" for c in atf.QUEUE_COLS}, **sbr(status="filed", filed_date="11/20/2026"))])
+    data = json.loads(call(link, "/api/inventory")[1])
+    mine = next(r for r in data["suppressors"] if r["serial"] == "XYZ123")
+    assert (mine["type"], mine["model"], mine["barrel"]) == ("SHORT BARRELED RIFLE", "M4E1", "10.3")
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page(viewport={"width": 390, "height": 844})
+        page.set_default_timeout(5000)
+        page.goto(link)
+        page.wait_for_selector(".row")
+        assert page.inner_text("#sum") == "5 suppressors · 1 built · 2 not built · 2 SBRs · median wait 86 days"
+        page.click(".chip[data-f='sbr']")
+        assert page.locator(".row .serial").all_inner_texts() == ["XYZ123", "R9"]
+        assert page.inner_text(".row[data-s='XYZ123'] .sub").startswith("SBR · 5.56")
+        page.click(".row[data-s='XYZ123']")
+        detail = page.inner_text("#detailView")
+        assert "SHORT BARRELED RIFLE" in detail and "Caliber/gauge 5.56" in detail and "Waiting" in detail
+        assert page.locator("#sw").count() == 0

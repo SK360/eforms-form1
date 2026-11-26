@@ -63,7 +63,8 @@ def status(data_dir, conn, version, api):
     latest = update.available(data_dir, version)
     out = {"version": version, "api": api, "schema": db.SCHEMA_VERSION, "install": update.kind(),
            "update": {"version": latest["version"], "url": latest["url"]} if latest else None,
-           "counts": {"suppressors": len(db.rows(conn)), "other": len(db.sbrs(conn)), "pdfs": len(listed),
+           "counts": {"suppressors": sum(1 for r in db.rows(conn) if not db.is_nfa(r)),
+                      "other": len(db.sbrs(conn)) + sum(1 for r in db.rows(conn) if db.is_nfa(r)), "pdfs": len(listed),
                       "devices": sum(1 for d in db.devices(conn) if not d["revoked_at"])},
            "backups": backups, "certificate": cert,
            "storage": {"database_bytes": db_bytes, "pdf_bytes": sum(p.stat().st_size for p in on_disk),

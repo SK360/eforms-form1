@@ -27,6 +27,14 @@ COLS = ["caliber", "serial_number", "overall_length", "status", "application_num
         "eform_id", "control_number", "conditions", "built", "design"]
 SBR_COLS = ["serial_number", "type", "caliber", "model", "barrel_length", "overall_length", "approved_date", "eform_id",
             "control_number", "conditions"]
+# Schema 5: an SBR, SBS or AOW made from an existing receiver queues in the same table as suppressors (so filing,
+# pending and resolving work the same) with these columns, empty for a suppressor (src/atf.py NFA_QUEUE_COLS). type =
+# the portal's #productType ("" = SILENCER); mfr_* = the receiver's ORIGINAL maker (code verified on eForms); photo =
+# the markings photo's path on the PC that files it (not stored here). Once approved, the row leaves this table for
+# sbrs (record_sbrs).
+NFA_QUEUE_COLS = ["type", "mfr_code", "mfr_name", "mfr_address", "mfr_country", "model", "barrel_length", "unit",
+                  "description", "photo"]
+NFA_TYPES = ("SHORT BARRELED RIFLE", "SHORT BARRELED SHOTGUN", "ANY OTHER WEAPON", "DESTRUCTIVE DEVICE", "MACHINEGUN")
 STATUSES = ("queued", "pending", "filed", "approved", "disapproved", "skip")  # "" in the app's CSV = queued
 NFA_DEFAULT_TYPE = "SHORT BARRELED RIFLE"  # table sbrs holds every non-suppressor type; before schema 4, only SBRs
 PAIR_MINUTES, PAIR_TRIES = 5, 5
@@ -104,7 +112,7 @@ CREATE TRIGGER history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABO
 DELETE FROM requests WHERE operation IN ('set_built', 'clear_built');
 """, 4: f"""
 ALTER TABLE sbrs ADD COLUMN type TEXT NOT NULL DEFAULT '{NFA_DEFAULT_TYPE}';
-"""}
+""", 5: "".join(f"ALTER TABLE suppressors ADD COLUMN {c} TEXT NOT NULL DEFAULT '';\n" for c in NFA_QUEUE_COLS)}
 PRIVATE_OPS = ("set_built", "clear_built")  # leave no record of when (see above); migration 3 removed earlier ones
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -231,7 +239,12 @@ def _app_row(r):
             "application_number": r["application_number"] or "", "filed_date": to_us(r["filed_date"]),
             "approved_date": to_us(r["approved_date"]), "eform_id": r["eform_id"], "control_number": r["control_number"],
             "conditions": r["conditions"], "built": "yes" if r["built"] else "", "design": r["design"],
-            "version": r["version"]}
+            **{c: r[c] for c in NFA_QUEUE_COLS}, "version": r["version"]}
+
+
+def is_nfa(r):
+    """A row of the suppressors table that is an SBR, SBS, AOW... (schema 5), not a suppressor."""
+    return bool(r["type"]) and r["type"] != "SILENCER"
 
 
 def _app_sbr(r):
@@ -280,9 +293,11 @@ def history(conn, serial):
 def export_csv(conn):
     """The inventory as the app's suppressors.csv (serial order)."""
     out = io.StringIO()
-    w = csv.DictWriter(out, fieldnames=COLS, extrasaction="ignore", lineterminator="\n")
+    all_rows = rows(conn)
+    cols = COLS + NFA_QUEUE_COLS if any(is_nfa(r) for r in all_rows) else COLS  # as the app writes its file
+    w = csv.DictWriter(out, fieldnames=cols, extrasaction="ignore", lineterminator="\n")
     w.writeheader()
-    w.writerows(rows(conn))
+    w.writerows(all_rows)
     return out.getvalue()
 
 
@@ -303,6 +318,7 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
         if not is_empty(conn):
             raise Refused("The server already holds an inventory; import only goes into an empty server.")
         for r in suppressors:
+            nfa = _nfa_fields(r, r.get("serial_number") or "(no serial)")
             r = {c: (r.get(c) or "").strip() for c in COLS}
             status = r["status"].lower() or "queued"
             if status not in STATUSES:
@@ -316,7 +332,8 @@ def import_inventory(conn, pdf_dir, suppressors, sbr_rows=(), pdfs=(), device="i
             try:
                 conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, application_number, "
                              "filed_date, approved_date, eform_id, control_number, conditions, built, design, updated_at, "
-                             "updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                             f"updated_by, {', '.join(nfa)}) VALUES ({', '.join('?' * (14 + len(nfa)))})",
+                             values + tuple(nfa.values()))
             except sqlite3.IntegrityError as e:
                 raise Refused(f"{r['serial_number'] or '(no serial)'}: {_why(e)}")
             _log(conn, at, device, "import", r["serial_number"], None, row(conn, r["serial_number"]))
@@ -455,10 +472,10 @@ def _why(error):
 
 # ---------- Operations (the only writes besides import) ----------
 
-def _inches(value, serial):
+def _inches(value, serial, what="overall length"):
     v = str(value or "").strip()
     if not re.fullmatch(r"\d+(\.\d+)?", v):
-        raise Refused(f"{serial}: overall length must be a number of inches, like 12 or 6.5")
+        raise Refused(f"{serial}: {what} must be a number of inches, like 12 or 6.5")
     return v
 
 
@@ -469,6 +486,29 @@ def _text(value, what, serial, required=True, limit=200):
     if len(v) > limit:
         raise Refused(f"{serial}: {what} is too long")
     return v
+
+
+def _nfa_fields(n, serial, have=None):
+    """The NFA_QUEUE_COLS given in `n` (all of them, or with `have` = the row as it is, only those given), checked."""
+    out = {}
+    for c in NFA_QUEUE_COLS:
+        if c not in n and have is not None:
+            continue
+        v = re.sub(r"\s+", " ", str(n.get(c) or "")).strip()
+        if c == "type":
+            v = "" if v.upper() == "SILENCER" else v.upper()
+            if v and v not in NFA_TYPES:
+                raise Refused(f"{serial}: unknown firearm type {v!r}")
+        elif c == "unit":
+            v = v.upper()
+            if v not in ("", "CALIBER", "GAUGE"):
+                raise Refused(f"{serial}: unit must be CALIBER or GAUGE")
+        elif c == "barrel_length" and v:
+            v = _inches(v, serial, "barrel length")
+        elif len(v) > (120 if c == "description" else 1000 if c == "photo" else 200):
+            raise Refused(f"{serial}: {c.replace('_', ' ')} is too long")
+        out[c] = v
+    return out
 
 
 def _current(conn, serial):
@@ -519,10 +559,11 @@ def _add_queued(conn, body, device, at, rid):
         if serial.upper() in seen or conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
             raise Refused(f"{serial} is already in the inventory. Nothing was added.")
         seen.add(serial.upper())
-        conn.execute("INSERT INTO suppressors (serial, caliber, overall_length, status, updated_at, updated_by) "
-                     "VALUES (?, ?, ?, 'queued', ?, ?)",
+        nfa = _nfa_fields(n, serial)
+        conn.execute(f"INSERT INTO suppressors (serial, caliber, overall_length, status, updated_at, updated_by, {', '.join(nfa)}) "
+                     f"VALUES (?, ?, ?, 'queued', ?, ?, {', '.join('?' * len(nfa))})",
                      (serial, _text(n.get("caliber"), "caliber", serial, limit=40), _inches(n.get("overall_length"), serial),
-                      at, device))
+                      at, device, *nfa.values()))
         _log(conn, at, device, "add_queued", serial, None, row(conn, serial), rid)
         out.append(row(conn, serial))
     return out
@@ -534,16 +575,19 @@ def _edit_queued(conn, body, device, at, rid):
     if r["status"] != "queued":
         raise Refused(f"{r['serial']} isn't queued: only queued suppressors can be changed.")
     changes = body.get("changes") or {}
-    unknown = set(changes) - {"serial_number", "caliber", "overall_length"}
+    unknown = set(changes) - {"serial_number", "caliber", "overall_length", *NFA_QUEUE_COLS}
     if unknown or not changes:
         raise Refused(f"Can't change {', '.join(sorted(unknown)) or 'nothing'}.")
+    nfa = _nfa_fields(changes, r["serial"], have=r)
+    nfa_sql = "".join(f", {c} = ?" for c in nfa)
     serial = _text(changes.get("serial_number", r["serial"]), "serial number", r["serial"], limit=40)
     if serial.upper() != r["serial"].upper() and conn.execute("SELECT 1 FROM suppressors WHERE serial = ?", (serial,)).fetchone():
         raise Refused(f"{serial} is already in the inventory.")
     before = row(conn, r["serial"])
-    conn.execute("UPDATE suppressors SET serial = ?, caliber = ?, overall_length = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+    conn.execute(f"UPDATE suppressors SET serial = ?, caliber = ?, overall_length = ?{nfa_sql}, updated_at = ?, updated_by = ? "
+                 "WHERE id = ?",
                  (serial, _text(changes.get("caliber", r["caliber"]), "caliber", serial, limit=40),
-                  _inches(changes.get("overall_length", r["overall_length"]), serial), at, device, r["id"]))
+                  _inches(changes.get("overall_length", r["overall_length"]), serial), *nfa.values(), at, device, r["id"]))
     _log(conn, at, device, "edit_queued", serial, before, row(conn, serial), rid)
     return [row(conn, serial)]
 
@@ -563,7 +607,8 @@ def _remove_queued(conn, body, device, at, rid):
 
 def _mark_pending(conn, body, device, at, rid):
     """Just before Sign & Submit: the app clicks it only once this is saved (fail-closed). Queued rows only (force:
-    a deliberate re-file of a filed/pending/never-file/disapproved row)."""
+    a deliberate re-file of a filed/pending/never-file/disapproved row). mfr_code: an SBR's manufacturer code found
+    on eForms during this filing, kept (only into an empty one) so a re-file uses it."""
     r = _current(conn, body.get("serial"))
     _check_version(conn, r, body.get("version"))
     allowed = ("queued",) + (("filed", "pending", "skip", "disapproved") if body.get("force") else ())
@@ -571,8 +616,10 @@ def _mark_pending(conn, body, device, at, rid):
         raise Refused(f"{r['serial']} isn't queued on your server (it's {r['status']}): not filing it.")
     length = r["overall_length"] or (_inches(body.get("overall_length"), r["serial"]) if body.get("overall_length") else "")
     before = row(conn, r["serial"])
-    conn.execute("UPDATE suppressors SET status = 'pending', filed_date = ?, overall_length = ?, updated_at = ?, updated_by = ? "
-                 "WHERE id = ?", (to_iso(body.get("filed_date")) or at[:10], length, at, device, r["id"]))
+    code = r["mfr_code"] or (_text(body.get("mfr_code"), "manufacturer code", r["serial"], required=False, limit=40)
+                             if is_nfa(r) else "")
+    conn.execute("UPDATE suppressors SET status = 'pending', filed_date = ?, overall_length = ?, mfr_code = ?, updated_at = ?, "
+                 "updated_by = ? WHERE id = ?", (to_iso(body.get("filed_date")) or at[:10], length, code, at, device, r["id"]))
     _log(conn, at, device, "mark_pending", r["serial"], before, row(conn, r["serial"]), rid)
     return [row(conn, r["serial"])]
 
@@ -698,7 +745,9 @@ def _record_in_process(conn, body, device, at, rid):
 
 def _record_sbrs(conn, body, device, at, rid):
     """Check approvals: approved non-suppressors, added or (by eForm ID) filled in with the details given. Rows from
-    an app that doesn't send a type are SBRs (all it could record)."""
+    an app that doesn't send a type are SBRs (all it could record). An SBR etc. filed from the queue (a filed or
+    pending NFA row of the suppressors table with that serial) is done once approved: it leaves the queue, as in
+    the app's own files."""
     for s in body.get("rows") or []:
         s = {c: str(s.get(c) or "").strip() for c in SBR_COLS}
         if not s["serial_number"]:
@@ -717,6 +766,11 @@ def _record_sbrs(conn, body, device, at, rid):
             if keep:
                 conn.execute(f"UPDATE sbrs SET {', '.join(f'{c} = ?' for c, _ in keep)} WHERE id = ?", (*[v for _, v in keep], have["id"]))
         _log(conn, at, device, "record_sbrs", s["serial_number"], None, s, rid)
+        q = conn.execute("SELECT * FROM suppressors WHERE serial = ? COLLATE NOCASE", (s["serial_number"],)).fetchone()
+        if q is not None and is_nfa(q) and q["status"] in ("filed", "pending"):
+            before = row(conn, q["serial"])
+            conn.execute("DELETE FROM suppressors WHERE id = ?", (q["id"],))
+            _log(conn, at, device, "record_sbrs", q["serial"], before, None, rid)
     return []
 
 
